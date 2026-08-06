@@ -1,0 +1,1804 @@
+{
+  "graph": {
+    "nodes": [
+      {
+        "id": "varanasi",
+        "lat": 25.33333,
+        "lon": 83.0
+      },
+      {
+        "id": "udaipur",
+        "lat": 24.57117,
+        "lon": 73.69183
+      },
+      {
+        "id": "hadiagarh",
+        "lat": 26.61667,
+        "lon": 81.36667
+      },
+      {
+        "id": "sitapur",
+        "lat": 27.56667,
+        "lon": 80.68333
+      },
+      {
+        "id": "dehradun",
+        "lat": 30.32295,
+        "lon": 78.03168
+      },
+      {
+        "id": "lucknow",
+        "lat": 26.85,
+        "lon": 80.91667
+      },
+      {
+        "id": "kanpur",
+        "lat": 26.46667,
+        "lon": 80.35
+      },
+      {
+        "id": "fatehpur",
+        "lat": 25.93333,
+        "lon": 80.8
+      },
+      {
+        "id": "jaunpur",
+        "lat": 25.73333,
+        "lon": 82.68333
+      },
+      {
+        "id": "allahabad",
+        "lat": 25.45,
+        "lon": 81.85
+      },
+      {
+        "id": "patna",
+        "lat": 25.6,
+        "lon": 85.11667
+      },
+      {
+        "id": "bokaro",
+        "lat": 23.78333,
+        "lon": 85.96667
+      },
+      {
+        "id": "hazaribagh",
+        "lat": 23.98333,
+        "lon": 85.35
+      },
+      {
+        "id": "gaya",
+        "lat": 24.7,
+        "lon": 84.98333
+      },
+      {
+        "id": "kolkata",
+        "lat": 22.56972,
+        "lon": 88.36972
+      },
+      {
+        "id": "satna",
+        "lat": 24.58333,
+        "lon": 80.83333
+      },
+      {
+        "id": "dhanbad",
+        "lat": 23.8,
+        "lon": 86.45
+      },
+      {
+        "id": "asansol",
+        "lat": 23.68333,
+        "lon": 86.98333
+      },
+      {
+        "id": "rewa",
+        "lat": 24.53333,
+        "lon": 81.3
+      },
+      {
+        "id": "jhansi",
+        "lat": 25.43333,
+        "lon": 78.58333
+      },
+      {
+        "id": "torangallu",
+        "lat": 15.2,
+        "lon": 76.68333
+      },
+      {
+        "id": "bellary",
+        "lat": 15.15,
+        "lon": 76.93333
+      },
+      {
+        "id": "goa",
+        "lat": 15.48333,
+        "lon": 73.83333
+      },
+      {
+        "id": "hubli",
+        "lat": 15.35,
+        "lon": 75.16667
+      },
+      {
+        "id": "solapur",
+        "lat": 17.68333,
+        "lon": 75.91667
+      },
+      {
+        "id": "belgaum",
+        "lat": 15.86667,
+        "lon": 74.5
+      },
+      {
+        "id": "raichur",
+        "lat": 16.2,
+        "lon": 77.36667
+      },
+      {
+        "id": "gulbarga",
+        "lat": 17.33333,
+        "lon": 76.83333
+      },
+      {
+        "id": "chitradurg",
+        "lat": 14.23333,
+        "lon": 76.4
+      },
+      {
+        "id": "panjim",
+        "lat": 15.48333,
+        "lon": 73.83333
+      },
+      {
+        "id": "ranchi",
+        "lat": 23.35,
+        "lon": 85.33333
+      },
+      {
+        "id": "jamshedpur",
+        "lat": 22.8,
+        "lon": 86.18333
+      },
+      {
+        "id": "coimbatore",
+        "lat": 11.0,
+        "lon": 76.96667
+      },
+      {
+        "id": "thirussur",
+        "lat": 10.51667,
+        "lon": 76.21667
+      },
+      {
+        "id": "rourkela",
+        "lat": 22.2,
+        "lon": 84.88333
+      },
+      {
+        "id": "kharagpur",
+        "lat": 22.33333,
+        "lon": 87.33333
+      },
+      {
+        "id": "cannonore",
+        "lat": 11.86752,
+        "lon": 75.35763
+      },
+      {
+        "id": "mangalore",
+        "lat": 12.86667,
+        "lon": 74.88333
+      },
+      {
+        "id": "palghat",
+        "lat": 10.78333,
+        "lon": 76.65
+      },
+      {
+        "id": "kozhikode",
+        "lat": 11.25,
+        "lon": 75.76667
+      },
+      {
+        "id": "rohtak",
+        "lat": 28.9,
+        "lon": 76.56667
+      },
+      {
+        "id": "gurgaon",
+        "lat": 28.46667,
+        "lon": 77.03333
+      },
+      {
+        "id": "bhatinda",
+        "lat": 30.2,
+        "lon": 74.95
+      },
+      {
+        "id": "kot_kapura",
+        "lat": 30.58333,
+        "lon": 74.9
+      },
+      {
+        "id": "noida",
+        "lat": 28.58,
+        "lon": 77.33
+      },
+      {
+        "id": "meerut",
+        "lat": 28.98333,
+        "lon": 77.7
+      },
+      {
+        "id": "delhi",
+        "lat": 28.63576,
+        "lon": 77.22445
+      },
+      {
+        "id": "sonipat",
+        "lat": 28.98333,
+        "lon": 77.01667
+      },
+      {
+        "id": "moradabad",
+        "lat": 28.83333,
+        "lon": 78.78333
+      },
+      {
+        "id": "bareilly",
+        "lat": 28.35,
+        "lon": 79.41667
+      },
+      {
+        "id": "chennai",
+        "lat": 13.08784,
+        "lon": 80.27847
+      },
+      {
+        "id": "kanchipuram",
+        "lat": 12.83333,
+        "lon": 79.71667
+      },
+      {
+        "id": "bangalore",
+        "lat": 12.97623,
+        "lon": 77.60329
+      },
+      {
+        "id": "kolar",
+        "lat": 13.13333,
+        "lon": 78.13333
+      },
+      {
+        "id": "hassan",
+        "lat": 13.00056,
+        "lon": 76.09944
+      },
+      {
+        "id": "mysore",
+        "lat": 12.30722,
+        "lon": 76.64972
+      },
+      {
+        "id": "ongole",
+        "lat": 15.5,
+        "lon": 80.05
+      },
+      {
+        "id": "vijayavada",
+        "lat": 16.51667,
+        "lon": 80.61667
+      },
+      {
+        "id": "tirupati",
+        "lat": 13.65,
+        "lon": 79.41667
+      },
+      {
+        "id": "nellore",
+        "lat": 14.43333,
+        "lon": 79.96667
+      },
+      {
+        "id": "raipur",
+        "lat": 21.23333,
+        "lon": 81.63333
+      },
+      {
+        "id": "bhandara",
+        "lat": 21.16667,
+        "lon": 79.65
+      },
+      {
+        "id": "nagpur",
+        "lat": 21.15,
+        "lon": 79.1
+      },
+      {
+        "id": "wardha",
+        "lat": 20.75,
+        "lon": 78.61667
+      },
+      {
+        "id": "amravati",
+        "lat": 20.93333,
+        "lon": 77.75
+      },
+      {
+        "id": "buldhana",
+        "lat": 20.53333,
+        "lon": 76.18333
+      },
+      {
+        "id": "akola",
+        "lat": 20.73333,
+        "lon": 77.0
+      },
+      {
+        "id": "khandwa",
+        "lat": 21.83333,
+        "lon": 76.33333
+      },
+      {
+        "id": "bhubaneshwar",
+        "lat": 20.23333,
+        "lon": 85.83333
+      },
+      {
+        "id": "dhenkanal",
+        "lat": 20.66667,
+        "lon": 85.6
+      },
+      {
+        "id": "jabalpur",
+        "lat": 23.16697,
+        "lon": 79.95006
+      },
+      {
+        "id": "damoh",
+        "lat": 23.83333,
+        "lon": 79.45
+      },
+      {
+        "id": "sagar",
+        "lat": 23.83333,
+        "lon": 78.71667
+      },
+      {
+        "id": "callicut",
+        "lat": 11.25,
+        "lon": 75.76667
+      },
+      {
+        "id": "nanded",
+        "lat": 19.15,
+        "lon": 77.33333
+      },
+      {
+        "id": "ahmednagar",
+        "lat": 19.08333,
+        "lon": 74.73333
+      },
+      {
+        "id": "pune",
+        "lat": 18.51957,
+        "lon": 73.85535
+      },
+      {
+        "id": "satara",
+        "lat": 17.68333,
+        "lon": 73.98333
+      },
+      {
+        "id": "visakhapatnam",
+        "lat": 17.7,
+        "lon": 83.3
+      },
+      {
+        "id": "chandrapur",
+        "lat": 19.95,
+        "lon": 79.3
+      },
+      {
+        "id": "hyderabad",
+        "lat": 17.37528,
+        "lon": 78.47444
+      },
+      {
+        "id": "sangareddy",
+        "lat": 17.62944,
+        "lon": 78.09167
+      },
+      {
+        "id": "chandigarh",
+        "lat": 30.7343,
+        "lon": 76.7933
+      },
+      {
+        "id": "kolhapur",
+        "lat": 16.7,
+        "lon": 74.21667
+      },
+      {
+        "id": "sangli",
+        "lat": 16.85438,
+        "lon": 74.56417
+      },
+      {
+        "id": "ambala",
+        "lat": 30.37833,
+        "lon": 76.78083
+      },
+      {
+        "id": "dhar",
+        "lat": 22.6,
+        "lon": 75.3
+      },
+      {
+        "id": "ujjain",
+        "lat": 23.18333,
+        "lon": 75.76667
+      },
+      {
+        "id": "gandhinagar",
+        "lat": 23.21667,
+        "lon": 72.68333
+      },
+      {
+        "id": "himmatnagar",
+        "lat": 23.6,
+        "lon": 72.95
+      },
+      {
+        "id": "ahmedabad",
+        "lat": 23.03333,
+        "lon": 72.61667
+      },
+      {
+        "id": "anand",
+        "lat": 22.56667,
+        "lon": 72.93333
+      },
+      {
+        "id": "bhopal",
+        "lat": 23.26667,
+        "lon": 77.4
+      },
+      {
+        "id": "ratlam",
+        "lat": 23.31667,
+        "lon": 75.06667
+      },
+      {
+        "id": "indore",
+        "lat": 22.71792,
+        "lon": 75.8333
+      },
+      {
+        "id": "vidisha",
+        "lat": 23.53333,
+        "lon": 77.81667
+      },
+      {
+        "id": "aurangabad",
+        "lat": 19.88333,
+        "lon": 75.33333
+      },
+      {
+        "id": "jalgaon",
+        "lat": 21.01667,
+        "lon": 75.56667
+      },
+      {
+        "id": "nasik",
+        "lat": 19.98333,
+        "lon": 73.8
+      },
+      {
+        "id": "dhulia",
+        "lat": 20.9,
+        "lon": 74.78333
+      },
+      {
+        "id": "valsad",
+        "lat": 20.63333,
+        "lon": 72.93333
+      },
+      {
+        "id": "mumbai",
+        "lat": 19.01441,
+        "lon": 72.84794
+      },
+      {
+        "id": "bharuch",
+        "lat": 21.7,
+        "lon": 72.96667
+      },
+      {
+        "id": "surat",
+        "lat": 21.16667,
+        "lon": 72.83333
+      },
+      {
+        "id": "godhra",
+        "lat": 22.75,
+        "lon": 73.63333
+      },
+      {
+        "id": "baroda",
+        "lat": 22.3,
+        "lon": 73.2
+      },
+      {
+        "id": "karnal",
+        "lat": 29.68333,
+        "lon": 76.98333
+      },
+      {
+        "id": "talwandi_bahi",
+        "lat": 30.85,
+        "lon": 74.93333
+      },
+      {
+        "id": "kollam",
+        "lat": 8.88333,
+        "lon": 76.6
+      },
+      {
+        "id": "ernakulam",
+        "lat": 9.98333,
+        "lon": 76.28333
+      },
+      {
+        "id": "thiruvalla",
+        "lat": 9.38333,
+        "lon": 76.56667
+      },
+      {
+        "id": "kottayem",
+        "lat": 9.58333,
+        "lon": 76.51667
+      },
+      {
+        "id": "tirunelveli",
+        "lat": 8.73333,
+        "lon": 77.7
+      },
+      {
+        "id": "tiruchendur",
+        "lat": 8.48333,
+        "lon": 78.11667
+      },
+      {
+        "id": "kanyakumari",
+        "lat": 8.08333,
+        "lon": 77.56667
+      },
+      {
+        "id": "trivandrum",
+        "lat": 8.48333,
+        "lon": 76.91667
+      },
+      {
+        "id": "allepey",
+        "lat": 9.48333,
+        "lon": 76.31667
+      },
+      {
+        "id": "gwalior",
+        "lat": 26.22361,
+        "lon": 78.17917
+      },
+      {
+        "id": "rajgarh",
+        "lat": 24.0,
+        "lon": 76.71667
+      },
+      {
+        "id": "ajmer",
+        "lat": 26.45,
+        "lon": 74.63333
+      },
+      {
+        "id": "agra",
+        "lat": 27.18333,
+        "lon": 78.01667
+      },
+      {
+        "id": "mathura",
+        "lat": 27.5,
+        "lon": 77.68333
+      },
+      {
+        "id": "ghaziabad",
+        "lat": 28.66667,
+        "lon": 77.43333
+      },
+      {
+        "id": "kota",
+        "lat": 25.18333,
+        "lon": 75.83333
+      },
+      {
+        "id": "bhilwara",
+        "lat": 25.35,
+        "lon": 74.63333
+      },
+      {
+        "id": "tonk",
+        "lat": 26.16667,
+        "lon": 75.78333
+      },
+      {
+        "id": "jaipur",
+        "lat": 26.91667,
+        "lon": 75.81667
+      },
+      {
+        "id": "sivakasi",
+        "lat": 9.45,
+        "lon": 77.81667
+      },
+      {
+        "id": "trichy",
+        "lat": 10.80289,
+        "lon": 78.69875
+      },
+      {
+        "id": "tirupur",
+        "lat": 11.1,
+        "lon": 77.35
+      },
+      {
+        "id": "erode",
+        "lat": 11.35,
+        "lon": 77.73333
+      },
+      {
+        "id": "salem",
+        "lat": 11.65,
+        "lon": 78.16667
+      },
+      {
+        "id": "palladam",
+        "lat": 10.98333,
+        "lon": 77.3
+      },
+      {
+        "id": "chidambaram",
+        "lat": 11.4,
+        "lon": 79.7
+      },
+      {
+        "id": "pondicherry",
+        "lat": 11.93,
+        "lon": 79.83
+      },
+      {
+        "id": "pathankot",
+        "lat": 32.28333,
+        "lon": 75.65
+      },
+      {
+        "id": "hoshiarpur",
+        "lat": 31.53222,
+        "lon": 75.91722
+      },
+      {
+        "id": "amritsar",
+        "lat": 31.63306,
+        "lon": 74.86556
+      },
+      {
+        "id": "jalandhar",
+        "lat": 31.32556,
+        "lon": 75.57917
+      },
+      {
+        "id": "ludhiana",
+        "lat": 30.9,
+        "lon": 75.85
+      },
+      {
+        "id": "patiala",
+        "lat": 30.32667,
+        "lon": 76.40028
+      },
+      {
+        "id": "ramanathapuram",
+        "lat": 9.38333,
+        "lon": 78.83333
+      },
+      {
+        "id": "madural",
+        "lat": 9.93333,
+        "lon": 78.11667
+      }
+    ],
+    "edges": [
+      {
+        "src": "varanasi",
+        "dst": "jaunpur",
+        "length_km": 54.66,
+        "mount_type": "buried"
+      },
+      {
+        "src": "varanasi",
+        "dst": "patna",
+        "length_km": 214.55,
+        "mount_type": "buried"
+      },
+      {
+        "src": "udaipur",
+        "dst": "ahmedabad",
+        "length_km": 202.99,
+        "mount_type": "buried"
+      },
+      {
+        "src": "udaipur",
+        "dst": "bhilwara",
+        "length_km": 128.48,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "hadiagarh",
+        "dst": "sitapur",
+        "length_km": 125.44,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "hadiagarh",
+        "dst": "lucknow",
+        "length_km": 51.67,
+        "mount_type": "buried"
+      },
+      {
+        "src": "sitapur",
+        "dst": "bareilly",
+        "length_km": 151.87,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "dehradun",
+        "dst": "lucknow",
+        "length_km": 477.94,
+        "mount_type": "buried"
+      },
+      {
+        "src": "lucknow",
+        "dst": "jaunpur",
+        "length_km": 215.49,
+        "mount_type": "buried"
+      },
+      {
+        "src": "lucknow",
+        "dst": "kanpur",
+        "length_km": 70.63,
+        "mount_type": "buried"
+      },
+      {
+        "src": "kanpur",
+        "dst": "fatehpur",
+        "length_km": 74.38,
+        "mount_type": "buried"
+      },
+      {
+        "src": "fatehpur",
+        "dst": "allahabad",
+        "length_km": 118.14,
+        "mount_type": "buried"
+      },
+      {
+        "src": "allahabad",
+        "dst": "rewa",
+        "length_km": 116.03,
+        "mount_type": "buried"
+      },
+      {
+        "src": "allahabad",
+        "dst": "jhansi",
+        "length_km": 328.01,
+        "mount_type": "buried"
+      },
+      {
+        "src": "patna",
+        "dst": "gaya",
+        "length_km": 100.97,
+        "mount_type": "buried"
+      },
+      {
+        "src": "bokaro",
+        "dst": "dhanbad",
+        "length_km": 49.21,
+        "mount_type": "buried"
+      },
+      {
+        "src": "bokaro",
+        "dst": "asansol",
+        "length_km": 104.08,
+        "mount_type": "buried"
+      },
+      {
+        "src": "bokaro",
+        "dst": "hazaribagh",
+        "length_km": 66.53,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "bokaro",
+        "dst": "jamshedpur",
+        "length_km": 111.56,
+        "mount_type": "buried"
+      },
+      {
+        "src": "hazaribagh",
+        "dst": "gaya",
+        "length_km": 87.92,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "hazaribagh",
+        "dst": "ranchi",
+        "length_km": 70.44,
+        "mount_type": "buried"
+      },
+      {
+        "src": "kolkata",
+        "dst": "kharagpur",
+        "length_km": 109.7,
+        "mount_type": "buried"
+      },
+      {
+        "src": "kolkata",
+        "dst": "ranchi",
+        "length_km": 322.75,
+        "mount_type": "buried"
+      },
+      {
+        "src": "satna",
+        "dst": "rewa",
+        "length_km": 47.52,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "satna",
+        "dst": "jhansi",
+        "length_km": 245.64,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "satna",
+        "dst": "jabalpur",
+        "length_km": 181.3,
+        "mount_type": "buried"
+      },
+      {
+        "src": "dhanbad",
+        "dst": "asansol",
+        "length_km": 55.81,
+        "mount_type": "buried"
+      },
+      {
+        "src": "jhansi",
+        "dst": "gwalior",
+        "length_km": 96.74,
+        "mount_type": "buried"
+      },
+      {
+        "src": "torangallu",
+        "dst": "raichur",
+        "length_km": 133.1,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "torangallu",
+        "dst": "bangalore",
+        "length_km": 266.43,
+        "mount_type": "buried"
+      },
+      {
+        "src": "torangallu",
+        "dst": "bellary",
+        "length_km": 27.4,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "bellary",
+        "dst": "belgaum",
+        "length_km": 272.63,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "goa",
+        "dst": "mangalore",
+        "length_km": 312.2,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "goa",
+        "dst": "hubli",
+        "length_km": 143.69,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "hubli",
+        "dst": "belgaum",
+        "length_km": 91.64,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "hubli",
+        "dst": "hassan",
+        "length_km": 279.93,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "solapur",
+        "dst": "belgaum",
+        "length_km": 252.09,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "solapur",
+        "dst": "gulbarga",
+        "length_km": 104.71,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "solapur",
+        "dst": "ahmednagar",
+        "length_km": 199.56,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "belgaum",
+        "dst": "kolhapur",
+        "length_km": 97.47,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "belgaum",
+        "dst": "panjim",
+        "length_km": 83.13,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "raichur",
+        "dst": "hyderabad",
+        "length_km": 176.03,
+        "mount_type": "buried"
+      },
+      {
+        "src": "gulbarga",
+        "dst": "hyderabad",
+        "length_km": 174.24,
+        "mount_type": "buried"
+      },
+      {
+        "src": "chitradurg",
+        "dst": "mangalore",
+        "length_km": 223.54,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "jamshedpur",
+        "dst": "rourkela",
+        "length_km": 149.29,
+        "mount_type": "buried"
+      },
+      {
+        "src": "coimbatore",
+        "dst": "sivakasi",
+        "length_km": 195.85,
+        "mount_type": "buried"
+      },
+      {
+        "src": "coimbatore",
+        "dst": "trichy",
+        "length_km": 190.39,
+        "mount_type": "buried"
+      },
+      {
+        "src": "coimbatore",
+        "dst": "tirupur",
+        "length_km": 43.29,
+        "mount_type": "buried"
+      },
+      {
+        "src": "coimbatore",
+        "dst": "allepey",
+        "length_km": 183.03,
+        "mount_type": "buried"
+      },
+      {
+        "src": "thirussur",
+        "dst": "allepey",
+        "length_km": 115.42,
+        "mount_type": "buried"
+      },
+      {
+        "src": "thirussur",
+        "dst": "palghat",
+        "length_km": 55.87,
+        "mount_type": "buried"
+      },
+      {
+        "src": "rourkela",
+        "dst": "raipur",
+        "length_km": 352.51,
+        "mount_type": "buried"
+      },
+      {
+        "src": "kharagpur",
+        "dst": "bhubaneshwar",
+        "length_km": 280.49,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "cannonore",
+        "dst": "mangalore",
+        "length_km": 122.46,
+        "mount_type": "buried"
+      },
+      {
+        "src": "cannonore",
+        "dst": "kozhikode",
+        "length_km": 81.86,
+        "mount_type": "buried"
+      },
+      {
+        "src": "mangalore",
+        "dst": "callicut",
+        "length_km": 203.82,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "palghat",
+        "dst": "kozhikode",
+        "length_km": 109.49,
+        "mount_type": "buried"
+      },
+      {
+        "src": "rohtak",
+        "dst": "gurgaon",
+        "length_km": 66.29,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "rohtak",
+        "dst": "patiala",
+        "length_km": 159.45,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "rohtak",
+        "dst": "sonipat",
+        "length_km": 44.76,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "gurgaon",
+        "dst": "delhi",
+        "length_km": 26.49,
+        "mount_type": "buried"
+      },
+      {
+        "src": "bhatinda",
+        "dst": "talwandi_bahi",
+        "length_km": 72.29,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "kot_kapura",
+        "dst": "amritsar",
+        "length_km": 116.77,
+        "mount_type": "buried"
+      },
+      {
+        "src": "kot_kapura",
+        "dst": "talwandi_bahi",
+        "length_km": 29.82,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "noida",
+        "dst": "delhi",
+        "length_km": 12.03,
+        "mount_type": "buried"
+      },
+      {
+        "src": "meerut",
+        "dst": "moradabad",
+        "length_km": 106.76,
+        "mount_type": "buried"
+      },
+      {
+        "src": "meerut",
+        "dst": "ghaziabad",
+        "length_km": 43.76,
+        "mount_type": "buried"
+      },
+      {
+        "src": "delhi",
+        "dst": "jaipur",
+        "length_km": 236.05,
+        "mount_type": "buried"
+      },
+      {
+        "src": "delhi",
+        "dst": "sonipat",
+        "length_km": 43.63,
+        "mount_type": "buried"
+      },
+      {
+        "src": "delhi",
+        "dst": "mathura",
+        "length_km": 134.08,
+        "mount_type": "buried"
+      },
+      {
+        "src": "delhi",
+        "dst": "ghaziabad",
+        "length_km": 20.67,
+        "mount_type": "buried"
+      },
+      {
+        "src": "sonipat",
+        "dst": "karnal",
+        "length_km": 77.9,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "moradabad",
+        "dst": "bareilly",
+        "length_km": 81.93,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "chennai",
+        "dst": "tirupati",
+        "length_km": 112.25,
+        "mount_type": "buried"
+      },
+      {
+        "src": "kanchipuram",
+        "dst": "pondicherry",
+        "length_km": 101.2,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "kanchipuram",
+        "dst": "tirupati",
+        "length_km": 96.44,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "bangalore",
+        "dst": "erode",
+        "length_km": 181.38,
+        "mount_type": "buried"
+      },
+      {
+        "src": "bangalore",
+        "dst": "salem",
+        "length_km": 159.67,
+        "mount_type": "buried"
+      },
+      {
+        "src": "bangalore",
+        "dst": "kolar",
+        "length_km": 60.01,
+        "mount_type": "buried"
+      },
+      {
+        "src": "bangalore",
+        "dst": "mysore",
+        "length_km": 127.43,
+        "mount_type": "buried"
+      },
+      {
+        "src": "kolar",
+        "dst": "tirupati",
+        "length_km": 150.24,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "mysore",
+        "dst": "callicut",
+        "length_km": 151.85,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "ongole",
+        "dst": "vijayavada",
+        "length_km": 128.25,
+        "mount_type": "buried"
+      },
+      {
+        "src": "ongole",
+        "dst": "nellore",
+        "length_km": 118.95,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "ongole",
+        "dst": "visakhapatnam",
+        "length_km": 423.98,
+        "mount_type": "buried"
+      },
+      {
+        "src": "vijayavada",
+        "dst": "hyderabad",
+        "length_km": 247.05,
+        "mount_type": "buried"
+      },
+      {
+        "src": "tirupati",
+        "dst": "nellore",
+        "length_km": 105.39,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "raipur",
+        "dst": "bhandara",
+        "length_km": 205.74,
+        "mount_type": "buried"
+      },
+      {
+        "src": "raipur",
+        "dst": "dhenkanal",
+        "length_km": 416.69,
+        "mount_type": "buried"
+      },
+      {
+        "src": "raipur",
+        "dst": "jabalpur",
+        "length_km": 276.15,
+        "mount_type": "buried"
+      },
+      {
+        "src": "bhandara",
+        "dst": "nagpur",
+        "length_km": 57.06,
+        "mount_type": "buried"
+      },
+      {
+        "src": "nagpur",
+        "dst": "amravati",
+        "length_km": 142.16,
+        "mount_type": "buried"
+      },
+      {
+        "src": "nagpur",
+        "dst": "wardha",
+        "length_km": 67.06,
+        "mount_type": "buried"
+      },
+      {
+        "src": "wardha",
+        "dst": "chandrapur",
+        "length_km": 113.97,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "amravati",
+        "dst": "buldhana",
+        "length_km": 168.88,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "buldhana",
+        "dst": "jalgaon",
+        "length_km": 83.66,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "akola",
+        "dst": "jalgaon",
+        "length_km": 152.21,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "khandwa",
+        "dst": "jalgaon",
+        "length_km": 120.6,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "khandwa",
+        "dst": "dhar",
+        "length_km": 136.32,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "bhubaneshwar",
+        "dst": "dhenkanal",
+        "length_km": 53.97,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "dhenkanal",
+        "dst": "visakhapatnam",
+        "length_km": 408.84,
+        "mount_type": "buried"
+      },
+      {
+        "src": "jabalpur",
+        "dst": "damoh",
+        "length_km": 89.95,
+        "mount_type": "buried"
+      },
+      {
+        "src": "jabalpur",
+        "dst": "indore",
+        "length_km": 424.48,
+        "mount_type": "buried"
+      },
+      {
+        "src": "damoh",
+        "dst": "sagar",
+        "length_km": 74.59,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "sagar",
+        "dst": "rajgarh",
+        "length_km": 204.14,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "sagar",
+        "dst": "vidisha",
+        "length_km": 97.53,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "nanded",
+        "dst": "aurangabad",
+        "length_km": 224.91,
+        "mount_type": "buried"
+      },
+      {
+        "src": "nanded",
+        "dst": "sangareddy",
+        "length_km": 187.06,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "ahmednagar",
+        "dst": "aurangabad",
+        "length_km": 108.95,
+        "mount_type": "buried"
+      },
+      {
+        "src": "ahmednagar",
+        "dst": "nasik",
+        "length_km": 139.93,
+        "mount_type": "buried"
+      },
+      {
+        "src": "ahmednagar",
+        "dst": "pune",
+        "length_km": 111.67,
+        "mount_type": "buried"
+      },
+      {
+        "src": "pune",
+        "dst": "mumbai",
+        "length_km": 119.49,
+        "mount_type": "buried"
+      },
+      {
+        "src": "pune",
+        "dst": "satara",
+        "length_km": 93.96,
+        "mount_type": "buried"
+      },
+      {
+        "src": "satara",
+        "dst": "kolhapur",
+        "length_km": 112.12,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "satara",
+        "dst": "sangli",
+        "length_km": 110.91,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "chandrapur",
+        "dst": "hyderabad",
+        "length_km": 299.21,
+        "mount_type": "buried"
+      },
+      {
+        "src": "hyderabad",
+        "dst": "sangareddy",
+        "length_km": 49.46,
+        "mount_type": "buried"
+      },
+      {
+        "src": "chandigarh",
+        "dst": "ludhiana",
+        "length_km": 91.95,
+        "mount_type": "buried"
+      },
+      {
+        "src": "chandigarh",
+        "dst": "ambala",
+        "length_km": 39.6,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "kolhapur",
+        "dst": "sangli",
+        "length_km": 40.78,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "ambala",
+        "dst": "karnal",
+        "length_km": 79.7,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "dhar",
+        "dst": "ujjain",
+        "length_km": 80.58,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "dhar",
+        "dst": "indore",
+        "length_km": 56.27,
+        "mount_type": "buried"
+      },
+      {
+        "src": "ujjain",
+        "dst": "bhopal",
+        "length_km": 167.16,
+        "mount_type": "buried"
+      },
+      {
+        "src": "ujjain",
+        "dst": "ratlam",
+        "length_km": 73.04,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "ujjain",
+        "dst": "indore",
+        "length_km": 52.2,
+        "mount_type": "buried"
+      },
+      {
+        "src": "gandhinagar",
+        "dst": "himmatnagar",
+        "length_km": 50.57,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "gandhinagar",
+        "dst": "anand",
+        "length_km": 76.68,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "himmatnagar",
+        "dst": "ahmedabad",
+        "length_km": 71.62,
+        "mount_type": "buried"
+      },
+      {
+        "src": "ahmedabad",
+        "dst": "anand",
+        "length_km": 61.21,
+        "mount_type": "buried"
+      },
+      {
+        "src": "ahmedabad",
+        "dst": "ratlam",
+        "length_km": 252.42,
+        "mount_type": "buried"
+      },
+      {
+        "src": "ahmedabad",
+        "dst": "godhra",
+        "length_km": 108.8,
+        "mount_type": "buried"
+      },
+      {
+        "src": "bhopal",
+        "dst": "rajgarh",
+        "length_km": 107.21,
+        "mount_type": "buried"
+      },
+      {
+        "src": "ratlam",
+        "dst": "bhilwara",
+        "length_km": 230.32,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "indore",
+        "dst": "vidisha",
+        "length_km": 222.16,
+        "mount_type": "buried"
+      },
+      {
+        "src": "indore",
+        "dst": "rajgarh",
+        "length_km": 168.69,
+        "mount_type": "buried"
+      },
+      {
+        "src": "aurangabad",
+        "dst": "jalgaon",
+        "length_km": 128.35,
+        "mount_type": "buried"
+      },
+      {
+        "src": "jalgaon",
+        "dst": "dhulia",
+        "length_km": 82.37,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "jalgaon",
+        "dst": "surat",
+        "length_km": 284.06,
+        "mount_type": "buried"
+      },
+      {
+        "src": "nasik",
+        "dst": "dhulia",
+        "length_km": 144.52,
+        "mount_type": "buried"
+      },
+      {
+        "src": "nasik",
+        "dst": "mumbai",
+        "length_km": 146.85,
+        "mount_type": "buried"
+      },
+      {
+        "src": "valsad",
+        "dst": "surat",
+        "length_km": 60.21,
+        "mount_type": "buried"
+      },
+      {
+        "src": "valsad",
+        "dst": "mumbai",
+        "length_km": 180.24,
+        "mount_type": "buried"
+      },
+      {
+        "src": "bharuch",
+        "dst": "surat",
+        "length_km": 60.89,
+        "mount_type": "buried"
+      },
+      {
+        "src": "bharuch",
+        "dst": "baroda",
+        "length_km": 70.92,
+        "mount_type": "buried"
+      },
+      {
+        "src": "godhra",
+        "dst": "baroda",
+        "length_km": 66.97,
+        "mount_type": "buried"
+      },
+      {
+        "src": "talwandi_bahi",
+        "dst": "ludhiana",
+        "length_km": 87.66,
+        "mount_type": "buried"
+      },
+      {
+        "src": "kollam",
+        "dst": "trivandrum",
+        "length_km": 56.48,
+        "mount_type": "buried"
+      },
+      {
+        "src": "kollam",
+        "dst": "ernakulam",
+        "length_km": 127.15,
+        "mount_type": "buried"
+      },
+      {
+        "src": "ernakulam",
+        "dst": "kottayem",
+        "length_km": 51.3,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "ernakulam",
+        "dst": "thiruvalla",
+        "length_km": 73.59,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "kottayem",
+        "dst": "allepey",
+        "length_km": 24.59,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "tirunelveli",
+        "dst": "madural",
+        "length_km": 141.05,
+        "mount_type": "buried"
+      },
+      {
+        "src": "tirunelveli",
+        "dst": "sivakasi",
+        "length_km": 80.71,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "tirunelveli",
+        "dst": "tiruchendur",
+        "length_km": 53.58,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "tirunelveli",
+        "dst": "kanyakumari",
+        "length_km": 73.75,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "tiruchendur",
+        "dst": "kanyakumari",
+        "length_km": 75.11,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "kanyakumari",
+        "dst": "trivandrum",
+        "length_km": 84.22,
+        "mount_type": "buried"
+      },
+      {
+        "src": "gwalior",
+        "dst": "rajgarh",
+        "length_km": 287.77,
+        "mount_type": "buried"
+      },
+      {
+        "src": "gwalior",
+        "dst": "agra",
+        "length_km": 107.93,
+        "mount_type": "buried"
+      },
+      {
+        "src": "rajgarh",
+        "dst": "kota",
+        "length_km": 159.03,
+        "mount_type": "buried"
+      },
+      {
+        "src": "ajmer",
+        "dst": "jaipur",
+        "length_km": 128.51,
+        "mount_type": "buried"
+      },
+      {
+        "src": "agra",
+        "dst": "mathura",
+        "length_km": 48.21,
+        "mount_type": "buried"
+      },
+      {
+        "src": "kota",
+        "dst": "tonk",
+        "length_km": 109.46,
+        "mount_type": "buried"
+      },
+      {
+        "src": "bhilwara",
+        "dst": "jaipur",
+        "length_km": 210.48,
+        "mount_type": "buried"
+      },
+      {
+        "src": "bhilwara",
+        "dst": "tonk",
+        "length_km": 146.66,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "tonk",
+        "dst": "jaipur",
+        "length_km": 83.46,
+        "mount_type": "buried"
+      },
+      {
+        "src": "sivakasi",
+        "dst": "trichy",
+        "length_km": 178.75,
+        "mount_type": "buried"
+      },
+      {
+        "src": "sivakasi",
+        "dst": "madural",
+        "length_km": 63.01,
+        "mount_type": "buried"
+      },
+      {
+        "src": "sivakasi",
+        "dst": "ramanathapuram",
+        "length_km": 111.77,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "trichy",
+        "dst": "palladam",
+        "length_km": 154.04,
+        "mount_type": "buried"
+      },
+      {
+        "src": "tirupur",
+        "dst": "erode",
+        "length_km": 50.21,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "salem",
+        "dst": "pondicherry",
+        "length_km": 183.71,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "palladam",
+        "dst": "chidambaram",
+        "length_km": 265.86,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "chidambaram",
+        "dst": "pondicherry",
+        "length_km": 60.61,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "pathankot",
+        "dst": "hoshiarpur",
+        "length_km": 87.25,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "pathankot",
+        "dst": "amritsar",
+        "length_km": 103.46,
+        "mount_type": "buried"
+      },
+      {
+        "src": "hoshiarpur",
+        "dst": "jalandhar",
+        "length_km": 39.46,
+        "mount_type": "aerial"
+      },
+      {
+        "src": "jalandhar",
+        "dst": "ludhiana",
+        "length_km": 53.89,
+        "mount_type": "buried"
+      },
+      {
+        "src": "ludhiana",
+        "dst": "patiala",
+        "length_km": 82.69,
+        "mount_type": "buried"
+      }
+    ]
+  },
+  "srlgs": []
+}
