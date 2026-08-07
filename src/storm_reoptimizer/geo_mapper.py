@@ -47,4 +47,9 @@ def load_edges(path: str | Path) -> list[Edge]:
 def map_geo_event_to_assets(
     geometry: dict, edges: list[Edge], filter_fn: Callable[[Edge], bool],
 ) -> list[Edge]:
-    raise NotImplementedError  # implemented in Task 4
+    """Return the edges that both intersect the hazard `geometry` (a
+    GeoJSON geometry dict, e.g. a storm cone polygon) and satisfy
+    `filter_fn` (a physical-vulnerability predicate, e.g. "is this edge
+    aerial" for a storm -- see events/filters.py)."""
+    hazard = shape(geometry)
+    return [e for e in edges if hazard.intersects(e.geometry) and filter_fn(e)]
