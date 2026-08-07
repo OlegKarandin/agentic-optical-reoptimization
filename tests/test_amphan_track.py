@@ -87,7 +87,11 @@ def test_landfall_radius_reflects_gale_wind_extent_not_just_rmw_core():
     # broader damaging-wind extent.
     events = amphan_track(interval_hours=1.0)
     landfall = events[-1]
-    assert landfall.attributes["radius_km"] >= 125.0
+    assert landfall.attributes["radius_km"] >= 128.0  # 125.5km is the real threshold at which
+    # kharagpur-bhubaneshwar enters the hazard footprint (see test_geo_mapper.py's
+    # test_amphan_landfall_exposes_the_real_aerial_edge_near_kolkata) -- keep headroom above it
+    # so this guard actually protects that integration test rather than permitting a value
+    # that would silently break it.
 
 
 def test_interval_hours_must_be_positive():

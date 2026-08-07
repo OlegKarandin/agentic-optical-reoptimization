@@ -53,6 +53,33 @@ def test_map_geo_event_to_assets_requires_both_intersection_and_filter_match():
     assert result == [intersecting_aerial]
 
 
+def test_edge_crossing_clean_through_the_hazard_is_exposed():
+    # Both ROADMs outside the footprint, cable passes straight through --
+    # the case an endpoint-containment check would miss.
+    crossing = Edge(src="x", dst="y", mount_type="aerial",
+                     geometry=LineString([(-5.0, 0.0), (5.0, 0.0)]))
+    hazard_geometry = {
+        "type": "Polygon",
+        "coordinates": [[[-1, -1], [1, -1], [1, 1], [-1, 1], [-1, -1]]],
+    }
+    result = map_geo_event_to_assets(hazard_geometry, [crossing], lambda e: True)
+    assert result == [crossing]
+
+
+def test_edge_exactly_on_the_hazard_boundary_counts_as_exposed():
+    # An edge lying exactly on the polygon's boundary (not crossing the interior)
+    # still counts as exposed -- boundary contact is real physical exposure for a
+    # storm, and Shapely's `intersects` (unlike `within`) includes boundary touching.
+    on_boundary = Edge(src="p", dst="q", mount_type="aerial",
+                        geometry=LineString([(-1.0, -1.0), (1.0, -1.0)]))
+    hazard_geometry = {
+        "type": "Polygon",
+        "coordinates": [[[-1, -1], [1, -1], [1, 1], [-1, 1], [-1, -1]]],
+    }
+    result = map_geo_event_to_assets(hazard_geometry, [on_boundary], lambda e: True)
+    assert result == [on_boundary]
+
+
 def test_amphan_landfall_exposes_the_real_aerial_edge_near_kolkata():
     edges = load_edges(TOPOLOGY_PATH)
     landfall = amphan_track(interval_hours=1.0)[-1]

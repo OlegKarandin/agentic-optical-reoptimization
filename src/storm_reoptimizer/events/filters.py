@@ -7,9 +7,10 @@ closures, low-lying crossings -- are exposed; aerial is safe) is step 7's
 job and needs topology attributes this toy dataset doesn't carry yet."""
 from __future__ import annotations
 
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
-from ..geo_mapper import Edge
+if TYPE_CHECKING:
+    from ..geo_mapper import Edge
 
 FILTERS: dict[str, Callable[[Edge], bool]] = {
     "storm": lambda edge: edge.mount_type == "aerial",
