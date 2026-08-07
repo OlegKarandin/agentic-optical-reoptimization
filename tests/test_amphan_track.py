@@ -78,6 +78,18 @@ def test_track_passes_near_kolkata():
     assert min_dist < 150.0
 
 
+def test_landfall_radius_reflects_gale_wind_extent_not_just_rmw_core():
+    # IMD landfall advisory (via PIB, 20 May 2020): gale winds of 110-120
+    # kmph gusting to 130 kmph forecast over Kolkata, Hoogli, Howrah and
+    # West Medinipur districts during landfall -- West Medinipur contains
+    # Kharagpur, ~125km from the landfall point. A radius-of-maximum-wind
+    # figure (the storm's tightest high-wind core) undercounts this real,
+    # broader damaging-wind extent.
+    events = amphan_track(interval_hours=1.0)
+    landfall = events[-1]
+    assert landfall.attributes["radius_km"] >= 125.0
+
+
 def test_interval_hours_must_be_positive():
     import pytest
     with pytest.raises(ValueError):

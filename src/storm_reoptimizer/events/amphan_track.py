@@ -16,7 +16,12 @@ May, 37km on 19 May -- a real, large contraction consistent with news
 reports of an eyewall replacement cycle near peak intensity) plus reasoned
 bounds from IMD's reported ~74km damaging-wind radius and >1,110km
 cloud-shield extent for the depression/cyclonic-storm-stage anchors, where
-no storm-specific radius figure was found.
+no storm-specific radius figure was found. The landfall anchor's radius was
+later widened from an initial radius-of-maximum-wind-only figure (90km) to
+130km to reflect the storm's broader damaging-wind extent (see that anchor's
+`source` for the specific district-level advisory and observatory readings
+behind the number) -- RMW alone is the storm's tightest high-wind core, not
+the full extent of winds strong enough to threaten aerial fiber.
 
 The track ends at landfall (20 May, Sundarbans near Bakkhali, West Bengal).
 Amphan's documented post-landfall decay ("degenerated into a well-marked
@@ -66,9 +71,19 @@ ANCHORS = [
                 "maximum wind ~20nm/37km per IMD's 19 May report "
                 "(post-eyewall-replacement contraction)"),
     dict(time="2020-05-20T10:00:00+00:00", lat=21.65, lon=88.3,
-         category="very_severe_cyclonic_storm", wind_kmh=155, radius_km=90,
-         source="IMD landfall report, near Bakkhali/Sundarbans, West "
-                "Bengal, 20 May 2020"),
+         category="very_severe_cyclonic_storm", wind_kmh=155, radius_km=130,
+         source="IMD landfall advisory via PIB, 20 May 2020: gale winds "
+                "of 110-120 kmph gusting to 130 kmph forecast over "
+                "Kolkata, Hoogli, Howrah and West Medinipur districts "
+                "(the last containing Kharagpur, ~125km from the "
+                "landfall point) during landfall; corroborated by "
+                "Kolkata's Alipore Observatory directly recording 112 "
+                "km/h sustained winds (gusts to 190 km/h) at landfall, "
+                "~98km out (per Wikipedia's Cyclone Amphan article, "
+                "citing IMD/media landfall reports). Widened from an "
+                "earlier radius-of-maximum-wind-only figure (90km): RMW "
+                "is the storm's tightest high-wind core, not its full "
+                "damaging-wind extent."),
 ]
 
 
