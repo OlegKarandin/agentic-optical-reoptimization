@@ -8,6 +8,7 @@ imports, per CLAUDE.md's hard seam between the two repos. See
 docs/superpowers/specs/2026-08-07-storm-scenario-design.md."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Callable
 
 from mcp.client import Client
@@ -134,4 +135,68 @@ async def validate_storm_plan(client: Client) -> dict:
     return await call_tool_json(
         client, "validate_plan",
         {"plan": {"ops": []}, "basis": "risk_group", "level": "link"},
+    )
+
+
+@dataclass(frozen=True)
+class ScenarioResult:
+    newly_exposed_by_hour: dict[str, list[tuple[str, str]]]
+    risk_group: dict
+    audited_services: list[dict]
+    exposed_services: list[dict]
+    replans: dict[str, dict]
+    qot_checks: dict[str, dict]
+    validation: dict
+
+
+async def run_storm_scenario(
+    client: Client,
+    hourly_events: list[HazardEvent],
+    edges: list[Edge],
+    filter_fn: Callable[[Edge], bool],
+    rg_id: str,
+) -> ScenarioResult:
+    """The full step-4 pipeline. Per CLAUDE.md's "reroute clear of the full
+    forecast cone" requirement, the risk group is built ONCE from the union
+    of every windowed hour's real exposed assets -- not a per-hour moving
+    target a reroute could still be caught by three hours later. Per-hour
+    detail (newly_exposed_by_hour) is kept for step 5's GUI to animate the
+    approach, but does not drive a second risk-group definition."""
+    newly_exposed_by_hour: dict[str, list[tuple[str, str]]] = {}
+    all_exposed_edges: dict[tuple[str, str], Edge] = {}
+    for event in hourly_events:
+        exposed = resolve_exposed_assets(edges, event, filter_fn)
+        newly_exposed_by_hour[event.valid_at] = [(e.src, e.dst) for e in exposed]
+        for e in exposed:
+            all_exposed_edges[(e.src, e.dst)] = e
+
+    fiber_ids = await edges_to_fiber_ids(client, list(all_exposed_edges.values()))
+    risk_group = await define_storm_risk_group(client, rg_id, fiber_ids)
+
+    audited = await audit_exposed_services(client, rg_id)
+    exposed_services = [a for a in audited if a["exposure"]["both_intersect"]]
+
+    replans: dict[str, dict] = {}
+    qot_checks: dict[str, dict] = {}
+    for entry in exposed_services:
+        svc = entry["service"]
+        src = svc["src_router"].removeprefix("router_")
+        dst = svc["dst_router"].removeprefix("router_")
+        replan = await replan_exposed_service(client, rg_id, src, dst)
+        replans[svc["id"]] = replan
+        if replan.get("path_a") is not None:
+            qot_checks[svc["id"]] = await verify_qot(
+                client, replan["path_a"]["oms_sequence"], "300G@4.8dB",
+            )
+
+    validation = await validate_storm_plan(client)
+
+    return ScenarioResult(
+        newly_exposed_by_hour=newly_exposed_by_hour,
+        risk_group=risk_group,
+        audited_services=audited,
+        exposed_services=exposed_services,
+        replans=replans,
+        qot_checks=qot_checks,
+        validation=validation,
     )
