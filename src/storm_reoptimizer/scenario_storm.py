@@ -94,7 +94,8 @@ async def replan_exposed_service(
     don't share risk-group membership with EACH OTHER -- constraints is what
     actually excludes rg_id's assets from the search graph entirely (see
     docs/superpowers/specs/2026-08-07-storm-scenario-design.md's second
-    2026-08-18 addendum: this needed a one-parameter fix upstream, in
+    2026-08-18 addendum ("compute_disjoint_paths silently dropped
+    constraints"): this needed a one-parameter fix upstream, in
     multilayer-optical-mcp-server's compute_disjoint_paths tool wrapper,
     which didn't thread constraints through until now)."""
     return await call_tool_json(
@@ -140,12 +141,12 @@ async def validate_storm_plan(client: Client) -> dict:
 
 @dataclass(frozen=True)
 class ScenarioResult:
-    newly_exposed_by_hour: dict[str, list[tuple[str, str]]]
+    exposed_by_hour: dict[str, list[tuple[str, str]]]
     risk_group: dict
     audited_services: list[dict]
     exposed_services: list[dict]
     replans: dict[str, dict]
-    qot_checks: dict[str, dict]
+    qot_checks: dict[str, dict[str, dict]]
     validation: dict
 
 
@@ -160,13 +161,22 @@ async def run_storm_scenario(
     forecast cone" requirement, the risk group is built ONCE from the union
     of every windowed hour's real exposed assets -- not a per-hour moving
     target a reroute could still be caught by three hours later. Per-hour
-    detail (newly_exposed_by_hour) is kept for step 5's GUI to animate the
-    approach, but does not drive a second risk-group definition."""
-    newly_exposed_by_hour: dict[str, list[tuple[str, str]]] = {}
+    detail (exposed_by_hour) is kept for step 5's GUI to animate the
+    approach, but does not drive a second risk-group definition.
+
+    Single-shot per (rg_id, connection): define_storm_risk_group wraps the
+    server's define_risk_group, which rejects a duplicate rg_id -- it
+    raises, surfacing as a RuntimeError through call_tool_json. Calling
+    run_storm_scenario twice with the same rg_id on the same client
+    connection will therefore raise on the second call. Callers needing to
+    re-run the pipeline (step 5's GUI re-running per frame, step 6's agent
+    loop replanning) must either pass a fresh rg_id or open a fresh server
+    connection -- this function does not auto-unique rg_id."""
+    exposed_by_hour: dict[str, list[tuple[str, str]]] = {}
     all_exposed_edges: dict[tuple[str, str], Edge] = {}
     for event in hourly_events:
         exposed = resolve_exposed_assets(edges, event, filter_fn)
-        newly_exposed_by_hour[event.valid_at] = [(e.src, e.dst) for e in exposed]
+        exposed_by_hour[event.valid_at] = [(e.src, e.dst) for e in exposed]
         for e in exposed:
             all_exposed_edges[(e.src, e.dst)] = e
 
@@ -177,22 +187,29 @@ async def run_storm_scenario(
     exposed_services = [a for a in audited if a["exposure"]["both_intersect"]]
 
     replans: dict[str, dict] = {}
-    qot_checks: dict[str, dict] = {}
+    qot_checks: dict[str, dict[str, dict]] = {}
     for entry in exposed_services:
         svc = entry["service"]
         src = svc["src_router"].removeprefix("router_")
         dst = svc["dst_router"].removeprefix("router_")
         replan = await replan_exposed_service(client, rg_id, src, dst)
         replans[svc["id"]] = replan
+        leg_checks: dict[str, dict] = {}
         if replan.get("path_a") is not None:
-            qot_checks[svc["id"]] = await verify_qot(
+            leg_checks["path_a"] = await verify_qot(
                 client, replan["path_a"]["oms_sequence"], "300G@4.8dB",
             )
+        if replan.get("path_b") is not None:
+            leg_checks["path_b"] = await verify_qot(
+                client, replan["path_b"]["oms_sequence"], "300G@4.8dB",
+            )
+        if leg_checks:
+            qot_checks[svc["id"]] = leg_checks
 
     validation = await validate_storm_plan(client)
 
     return ScenarioResult(
-        newly_exposed_by_hour=newly_exposed_by_hour,
+        exposed_by_hour=exposed_by_hour,
         risk_group=risk_group,
         audited_services=audited,
         exposed_services=exposed_services,

@@ -1,5 +1,4 @@
 """Shared fixtures land here as the suite grows."""
-import json
 import os
 import subprocess
 from pathlib import Path
@@ -68,9 +67,8 @@ def storm_state_path(tmp_path_factory, local_server_command, local_server_env):
     (~2-3s real solve against the real 143-node toy topology -- see
     tools/build_storm_state.py). Cached at module level for the same
     ScopeMismatch reason test_state_file_roundtrip.py's built_state fixture
-    documents. Returns the state file's Path; pair with
-    TOY_INDIA_TOPOLOGY_PATH and connect_server(..., extra_args=["--state",
-    str(path)])."""
+    documents. Returns the state file's Path, for use with
+    connect_server(..., extra_args=["--state", str(path)])."""
     if "path" in _STORM_STATE_CACHE:
         return _STORM_STATE_CACHE["path"]
     tmp_path = tmp_path_factory.mktemp("storm_state")

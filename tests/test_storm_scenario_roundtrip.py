@@ -51,7 +51,7 @@ def test_full_storm_pipeline_finds_and_replans_the_forced_service(
     # graph.edges array, which lists satna->rewa before satna->jhansi; the
     # brief's inline comment claiming the reverse was a documentation slip,
     # not a code issue -- see task-7-report.md).
-    assert result.newly_exposed_by_hour["2014-10-13T23:30:00+00:00"] == [
+    assert result.exposed_by_hour["2014-10-13T23:30:00+00:00"] == [
         ("satna", "rewa"), ("satna", "jhansi"),
     ]
 
@@ -61,8 +61,13 @@ def test_full_storm_pipeline_finds_and_replans_the_forced_service(
     replan = result.replans["storm-svc-1"]
     assert replan["status"] in ("solution", "partial")
 
-    qot = result.qot_checks["storm-svc-1"]
+    qot = result.qot_checks["storm-svc-1"]["path_a"]
     assert isinstance(qot["gsnr_db"], float)
+    # Both replanned legs are actually QoT-verified, not just the working
+    # leg -- the scenario's premise is that BOTH legs were exposed and BOTH
+    # get replanned.
+    assert "path_b" in result.qot_checks["storm-svc-1"]
+    assert isinstance(result.qot_checks["storm-svc-1"]["path_b"]["gsnr_db"], float)
 
     assert isinstance(result.validation["violations"], list)
 
