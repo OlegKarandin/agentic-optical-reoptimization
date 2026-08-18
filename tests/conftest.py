@@ -1,26 +1,24 @@
 """Shared fixtures land here as the suite grows."""
 import os
-import sys
 from pathlib import Path
 
 import pytest
 
-# Workaround for this local dev workspace only: `pip install -e` is broken
-# for both repos here because they sit under a path with Cyrillic characters
-# (...\Документы\...), which trips a real setuptools bug (editable_wheel.py's
-# _encode_pth opens its wrapper file without an explicit encoding and falls
-# back to the Windows ANSI codepage -> UnicodeEncodeError). Confirmed during
-# Task 1 that neither PYTHONUTF8=1 nor --no-build-isolation fixes it cleanly.
-# See docs/superpowers/plans/2026-08-06-step1-server-topology-roundtrip.md's
-# Global Constraints for detail. Until that's sorted out for real (move the
-# repos outside the Cyrillic path, or fix the pbr/pkg_resources issue that
-# --no-build-isolation surfaces), multilayer-optical-mcp's console script is
-# never installed, so tests spawn it by invoking its main() directly instead.
+# Workaround for this local dev workspace only: the sibling server repo split
+# (2026-08-18) into multilayer-optical-mcp-server (the MCP tool surface,
+# package multilayer_optical_mcp) depending on multilayer-optical-network
+# (the simulator library it used to contain). Both are now REGULAR (non -e)
+# pip installs into the "multilayer-optical-mcp" conda env -- a real install
+# from git, not this workspace's checkout -- which sidesteps the Cyrillic-path
+# editable-install bug (...\Документы\... trips editable_wheel.py's
+# _encode_pth -> UnicodeEncodeError, confirmed during step 1) for the package
+# imports themselves. The bug still blocks the [project.scripts] console-
+# script .exe from being generated on install, though, so tests still spawn
+# the server by invoking its main() directly via `python -c` instead of by
+# name. No PYTHONPATH override is needed any more: both packages already
+# resolve from the env's site-packages.
 _MULTILAYER_OPTICAL_MCP_ENV_PYTHON = Path(
     r"C:\Users\olegk\miniconda3\envs\multilayer-optical-mcp\python.exe"
-)
-_MULTILAYER_OPTICAL_MCP_SRC = (
-    Path(__file__).parent.parent.parent / "multilayer-optical-mcp" / "src"
 )
 
 
@@ -46,9 +44,8 @@ def local_server_command() -> list[str]:
 @pytest.fixture
 def local_server_env() -> dict[str, str]:
     """env= override for connect_server(), pairing with local_server_command:
-    puts multilayer-optical-mcp's src/ on the spawned process's PYTHONPATH,
-    since it isn't installed (see local_server_command's docstring) and
-    stdio_client's default subprocess env doesn't inherit PYTHONPATH."""
-    env = dict(os.environ)
-    env["PYTHONPATH"] = str(_MULTILAYER_OPTICAL_MCP_SRC)
-    return env
+    stdio_client's default subprocess env doesn't inherit the parent's
+    environment at all, so this just forwards it (both packages are properly
+    installed in the target conda env -- see local_server_command's
+    docstring -- no PYTHONPATH override needed)."""
+    return dict(os.environ)

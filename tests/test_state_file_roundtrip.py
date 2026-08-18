@@ -57,7 +57,7 @@ def built_state(tmp_path_factory, local_server_command, local_server_env):
     state = tmp_path / "state.json"
     proc = subprocess.run(
         [local_server_command[0], "-c",
-         "from multilayer_optical_mcp.build_cli import main; main()",
+         "from multilayer_optical_network.build_cli import main; main()",
          "--topology", str(topo), "--out", str(state),
          "--target-mean-util", "0.3", "--max-iters", "6"],
         env=local_server_env, capture_output=True, text=True, timeout=900,
