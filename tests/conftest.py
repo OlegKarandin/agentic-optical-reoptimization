@@ -1,5 +1,7 @@
 """Shared fixtures land here as the suite grows."""
+import json
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -49,3 +51,40 @@ def local_server_env() -> dict[str, str]:
     installed in the target conda env -- see local_server_command's
     docstring -- no PYTHONPATH override needed)."""
     return dict(os.environ)
+
+
+_STORM_STATE_CACHE: dict = {}
+
+TOY_INDIA_TOPOLOGY_PATH = (
+    Path(__file__).parent.parent
+    / "src" / "storm_reoptimizer" / "data" / "toy_india_topology.json"
+)
+
+
+@pytest.fixture
+def storm_state_path(tmp_path_factory, local_server_command, local_server_env):
+    """Offline-build this app's seeded demo services (storm-svc-1,
+    unexposed-svc) into a state file for --state, once per test session
+    (~2-3s real solve against the real 143-node toy topology -- see
+    tools/build_storm_state.py). Cached at module level for the same
+    ScopeMismatch reason test_state_file_roundtrip.py's built_state fixture
+    documents. Returns the state file's Path; pair with
+    TOY_INDIA_TOPOLOGY_PATH and connect_server(..., extra_args=["--state",
+    str(path)])."""
+    if "path" in _STORM_STATE_CACHE:
+        return _STORM_STATE_CACHE["path"]
+    tmp_path = tmp_path_factory.mktemp("storm_state")
+    out = tmp_path / "toy_india_state.json"
+    script = Path(__file__).parent.parent / "tools" / "build_storm_state.py"
+    proc = subprocess.run(
+        [local_server_command[0], str(script),
+         "--topology", str(TOY_INDIA_TOPOLOGY_PATH), "--out", str(out)],
+        env=local_server_env, capture_output=True, text=True, timeout=300,
+        check=False)
+    if proc.returncode != 0:
+        pytest.fail(
+            f"build_storm_state failed (rc={proc.returncode}): "
+            f"stdout={proc.stdout[-500:]!r} stderr={proc.stderr[-500:]!r}"
+        )
+    _STORM_STATE_CACHE["path"] = out
+    return out

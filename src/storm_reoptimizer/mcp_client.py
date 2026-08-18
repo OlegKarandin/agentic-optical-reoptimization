@@ -60,11 +60,22 @@ async def call_tool_json(
 
     These tools return plain dicts, not a typed/Pydantic output schema, so
     the installed mcp SDK (2.0.0) leaves `CallToolResult.structured_content`
-    as None -- the actual payload is JSON text in `content[0].text`.
+    as None -- the actual payload is JSON text in the content block(s).
     Confirmed by round-tripping get_topology against a real server
-    subprocess; do not read `.structured_content` for these tools."""
+    subprocess; do not read `.structured_content` for these tools.
+
+    Tools whose return type is a bare list (e.g. get_lightpaths) come back
+    as *multiple* content blocks, one per list item, not a single block
+    holding a JSON array -- confirmed against a real server subprocess
+    (get_lightpaths on a 4-lightpath state returns 4 blocks). Tools
+    returning an object (get_services, get_topology) come back as exactly
+    one block. Handle both: a single block parses to whatever JSON value it
+    holds (object or array); more than one block is assembled into a list
+    of each block's parsed value."""
     result = await client.call_tool(name, arguments)
     if result.is_error:
         text = "".join(getattr(block, "text", "") for block in result.content)
         raise RuntimeError(f"tool {name!r} failed: {text}")
-    return json.loads(result.content[0].text)
+    if len(result.content) == 1:
+        return json.loads(result.content[0].text)
+    return [json.loads(block.text) for block in result.content]
