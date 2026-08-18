@@ -55,6 +55,7 @@ async def connect_server(
 
 async def call_tool_json(
     client: Client, name: str, arguments: dict[str, Any] | None = None,
+    *, expect_list: bool = False,
 ) -> Any:
     """Call an MCP tool and return its parsed JSON payload.
 
@@ -69,13 +70,24 @@ async def call_tool_json(
     holding a JSON array -- confirmed against a real server subprocess
     (get_lightpaths on a 4-lightpath state returns 4 blocks). Tools
     returning an object (get_services, get_topology) come back as exactly
-    one block. Handle both: a single block parses to whatever JSON value it
-    holds (object or array); more than one block is assembled into a list
-    of each block's parsed value."""
+    one block.
+
+    This is genuinely ambiguous at N=1: a single-object tool result and a
+    list-returning tool that happens to produce exactly one item both
+    serialize to exactly one content block on the wire -- block count alone
+    can't tell them apart. Resolve it by caller declaration instead of
+    inference: pass `expect_list=True` for any tool whose return type is a
+    bare list (get_lightpaths and friends), so a single block is still
+    wrapped in a 1-item list rather than returned as a bare dict. Every
+    other (object-returning) call site leaves `expect_list` at its default
+    `False` and is unaffected. The >1-block case needs no gating on the
+    flag -- multiple blocks can only legitimately happen for a list-
+    returning tool in the first place, regardless of what the caller
+    passed."""
     result = await client.call_tool(name, arguments)
     if result.is_error:
         text = "".join(getattr(block, "text", "") for block in result.content)
         raise RuntimeError(f"tool {name!r} failed: {text}")
-    if len(result.content) == 1:
+    if len(result.content) == 1 and not expect_list:
         return json.loads(result.content[0].text)
     return [json.loads(block.text) for block in result.content]

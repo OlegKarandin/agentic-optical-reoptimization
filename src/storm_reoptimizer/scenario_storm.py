@@ -49,7 +49,7 @@ async def service_leg_oms_sequence(client: Client, ip_path: list[str]) -> list[s
     lightpath_id_by_link = {
         link["id"]: link["lightpath_id"] for link in ip_topo["ip_links"]
     }
-    lightpaths = await call_tool_json(client, "get_lightpaths")
+    lightpaths = await call_tool_json(client, "get_lightpaths", expect_list=True)
     oms_sequence_by_lightpath = {lp["id"]: lp["oms_sequence"] for lp in lightpaths}
 
     oms_sequence: list[str] = []
