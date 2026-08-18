@@ -213,6 +213,38 @@ By scenario, all on the `multilayer-optical-mcp` MCP server (this app calls, nev
 The app owns one function the server does not expose, by design:
 `map_geo_event_to_assets(geometry, filter)` — pure GIS, lives here.
 
+### The sibling side split into two repos (2026-08-18)
+
+What this doc calls "the server" is now two repos:
+
+- **`multilayer-optical-network`** — the deterministic simulator (IP-over-optical
+  model, GNPy adapter, solvers, validator). Published as a standalone,
+  pip-installable library, not MCP-specific.
+- **`multilayer-optical-mcp-server`** — the MCP tool surface (`server.py`) this
+  app talks to at runtime. Depends on `multilayer-optical-network`.
+
+This app's runtime pipeline (`scenario_storm.py` and friends) is unaffected by
+the split — it still only ever calls `mcp_client.call_tool_json` against the
+MCP server subprocess, per the hard seam above. Nothing in `src/` or `tests/`
+imports either sibling repo directly.
+
+**One narrow, deliberate exception:** an *offline* build-time script (outside
+`src/` and `tests/` — see `tools/`) that constructs this app's seeded demo
+service (`storm-svc-1`, `satna`↔`allahabad`) and serializes it to a state
+file, per the server's own `--state` flag (`multilayer-optical-mcp --topology
+… --state …`). This script imports `multilayer_optical_network` directly,
+because there is no MCP tool that persists a new service on a live server —
+`solve_allocation` computes on a discarded clone by design (confirmed against
+source; the server's own design spec for this file format explicitly rejects
+adding a `create_service` plan op, since "the storm scenario never" adds a
+demand to an already-running server). The offline script runs once (or on
+demand, ~2-3s for one demand against the 143-node toy topology, not the
+"minutes to hours" a full operating-network build takes) via the sibling
+`multilayer-optical-mcp` conda env's python, producing a checked-in-or-
+regeneratable state JSON — never imported into this app's own runtime
+process. The pipeline still loads that state exclusively through the real
+server's `--state` flag over stdio, exactly like every other input.
+
 ---
 
 ## Build order
