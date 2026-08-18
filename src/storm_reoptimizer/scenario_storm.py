@@ -57,3 +57,29 @@ async def service_leg_oms_sequence(client: Client, ip_path: list[str]) -> list[s
         lp_id = lightpath_id_by_link[link_id]
         oms_sequence.extend(oms_sequence_by_lightpath[lp_id])
     return oms_sequence
+
+
+async def define_storm_risk_group(
+    client: Client, rg_id: str, fiber_ids: list[str],
+) -> dict:
+    """Define the storm's risk group from real, resolved fiber ids."""
+    return await call_tool_json(
+        client, "define_risk_group",
+        {"rg_id": rg_id, "asset_ids": fiber_ids, "metadata": {"event_type": "storm"}},
+    )
+
+
+async def audit_exposed_services(client: Client, rg_id: str) -> list[dict]:
+    """Every service, paired with its exposure against `rg_id`. Callers
+    filter for both_intersect (the canonical case) or a single-leg
+    intersection (a real, less dramatic finding) as needed -- this returns
+    everything so no exposure signal is silently dropped."""
+    services = (await call_tool_json(client, "get_services"))["services"]
+    audited = []
+    for svc in services:
+        exposure = await call_tool_json(
+            client, "get_exposure",
+            {"service_id": svc["id"], "risk_group_id": rg_id},
+        )
+        audited.append({"service": svc, "exposure": exposure})
+    return audited

@@ -11,6 +11,9 @@ from storm_reoptimizer.mcp_client import call_tool_json, connect_server
 from storm_reoptimizer.scenario_storm import (
     edges_to_fiber_ids, resolve_exposed_assets, service_leg_oms_sequence,
 )
+from storm_reoptimizer.scenario_storm import (
+    audit_exposed_services, define_storm_risk_group,
+)
 
 TOPOLOGY_PATH = (
     Path(__file__).parent.parent
@@ -76,3 +79,41 @@ def test_service_leg_oms_sequence_resolves_ip_links_to_real_oms_ids(
     both = {*working_oms, *protection_oms}
     assert {"oms_satna_jhansi", "oms_jhansi_allahabad"} <= both \
         and {"oms_satna_rewa", "oms_rewa_allahabad"} <= both
+
+
+async def _run_audit(state_path, local_server_command, local_server_env):
+    async with connect_server(
+        TOPOLOGY_PATH, server_command=local_server_command, env=local_server_env,
+        extra_args=["--state", str(state_path)],
+    ) as client:
+        edges = [
+            Edge(src="satna", dst="jhansi", mount_type="aerial", geometry=None),
+            Edge(src="satna", dst="rewa", mount_type="aerial", geometry=None),
+        ]
+        fiber_ids = await edges_to_fiber_ids(client, edges)
+        rg = await define_storm_risk_group(client, "t5_storm_rg", fiber_ids)
+        audited = await audit_exposed_services(client, "t5_storm_rg")
+        return rg, audited
+
+
+def test_define_storm_risk_group_and_audit_finds_the_forced_service_exposed(
+    storm_state_path, local_server_command, local_server_env,
+):
+    rg, audited = asyncio.run(
+        _run_audit(storm_state_path, local_server_command, local_server_env)
+    )
+
+    assert rg["id"] == "t5_storm_rg"
+    assert rg["asset_ids"]  # real, non-empty: resolved from the two real ring OMSes
+    assert all(a.startswith("fiber_") for a in rg["asset_ids"])
+
+    forced_svc = next(a for a in audited if a["service"]["id"] == "storm-svc-1")
+    assert forced_svc["exposure"]["both_intersect"] is True
+    assert forced_svc["exposure"]["working_intersects"] is True
+    assert forced_svc["exposure"]["protection_intersects"] is True
+
+    # The seeded negative control (unexposed-svc, mumbai<->pune) must NOT
+    # be caught by a risk group built only from the satna/jhansi/rewa ring
+    # -- proves audit_exposed_services doesn't just mark everything exposed.
+    unexposed_svc = next(a for a in audited if a["service"]["id"] == "unexposed-svc")
+    assert unexposed_svc["exposure"]["both_intersect"] is False
