@@ -83,3 +83,55 @@ async def audit_exposed_services(client: Client, rg_id: str) -> list[dict]:
         )
         audited.append({"service": svc, "exposure": exposure})
     return audited
+
+
+async def replan_exposed_service(
+    client: Client, rg_id: str, src: str, dst: str,
+) -> dict:
+    """Find a fresh working/protection pair with BOTH legs clear of rg_id's
+    assets. basis="risk_group" alone only guarantees the two RETURNED legs
+    don't share risk-group membership with EACH OTHER -- constraints is what
+    actually excludes rg_id's assets from the search graph entirely (see
+    docs/superpowers/specs/2026-08-07-storm-scenario-design.md's second
+    2026-08-18 addendum: this needed a one-parameter fix upstream, in
+    multilayer-optical-mcp-server's compute_disjoint_paths tool wrapper,
+    which didn't thread constraints through until now)."""
+    return await call_tool_json(
+        client, "compute_disjoint_paths",
+        {"src": src, "dst": dst, "basis": "risk_group", "level": "link",
+         "constraints": {"avoid": {"risk_groups": [rg_id]}}},
+    )
+
+
+async def verify_qot(
+    client: Client, oms_sequence: list[str], mode_id: str,
+) -> dict:
+    """Baseline (single-channel) QoT check for a candidate route.
+    loading_channels can't be empty against the real server:
+    compute_qot's probe selection (gnpy_adapter/adapter.py) requires a
+    channel whose mode_id matches the mode under test, to pick the
+    frequency to propagate/report on -- so this is the sole channel riding
+    the path (the mode-under-test itself as its own probe), not a
+    pre-existing network comb. center_freq_hz/slot_width_hz use the
+    server's default spectrum grid (SpectrumGrid.default(): 191.4 THz
+    anchor, 100 GHz spacing) -- any on-grid slot is equivalent for an
+    otherwise-empty, single-channel baseline check."""
+    return await call_tool_json(
+        client, "compute_qot",
+        {"oms_sequence": oms_sequence, "direction": "forward",
+         "mode_id": mode_id,
+         "loading_channels": [
+             {"center_freq_hz": 191.4e12, "slot_width_hz": 100e9,
+              "mode_id": mode_id},
+         ]},
+    )
+
+
+async def validate_storm_plan(client: Client) -> dict:
+    """Whole-model validation against the storm risk group, with no plan
+    ops applied -- this step's pipeline ends here (no commit_plan/reconcile,
+    see the design spec's explicit scope)."""
+    return await call_tool_json(
+        client, "validate_plan",
+        {"plan": {"ops": []}, "basis": "risk_group", "level": "link"},
+    )

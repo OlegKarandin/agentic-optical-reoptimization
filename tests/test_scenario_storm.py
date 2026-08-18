@@ -117,3 +117,51 @@ def test_define_storm_risk_group_and_audit_finds_the_forced_service_exposed(
     # -- proves audit_exposed_services doesn't just mark everything exposed.
     unexposed_svc = next(a for a in audited if a["service"]["id"] == "unexposed-svc")
     assert unexposed_svc["exposure"]["both_intersect"] is False
+
+
+from storm_reoptimizer.scenario_storm import (
+    replan_exposed_service, validate_storm_plan, verify_qot,
+)
+
+
+async def _run_replan_verify_validate(state_path, local_server_command, local_server_env):
+    async with connect_server(
+        TOPOLOGY_PATH, server_command=local_server_command, env=local_server_env,
+        extra_args=["--state", str(state_path)],
+    ) as client:
+        edges = [
+            Edge(src="satna", dst="jhansi", mount_type="aerial", geometry=None),
+            Edge(src="satna", dst="rewa", mount_type="aerial", geometry=None),
+        ]
+        fiber_ids = await edges_to_fiber_ids(client, edges)
+        await define_storm_risk_group(client, "t6_storm_rg", fiber_ids)
+
+        replan = await replan_exposed_service(client, "t6_storm_rg", "satna", "allahabad")
+        qot = await verify_qot(client, replan["path_a"]["oms_sequence"], "300G@4.8dB")
+        report = await validate_storm_plan(client)
+        return replan, qot, report
+
+
+def test_replan_verify_validate_against_the_real_risk_group(
+    storm_state_path, local_server_command, local_server_env,
+):
+    replan, qot, report = asyncio.run(
+        _run_replan_verify_validate(
+            storm_state_path, local_server_command, local_server_env
+        )
+    )
+
+    assert replan["status"] in ("solution", "partial")
+    # Neither replanned leg should be built from the exposed ring OMSes --
+    # that's the whole point of this call: constraints threaded through
+    # actually excludes the risk group's assets from the search graph, not
+    # just from the pair's mutual-disjointness comparison.
+    replanned_oms = {*replan["path_a"]["oms_sequence"], *replan["path_b"]["oms_sequence"]}
+    assert "oms_satna_jhansi" not in replanned_oms
+    assert "oms_satna_rewa" not in replanned_oms
+
+    assert isinstance(qot["gsnr_db"], float)
+    assert qot["mode_feasible"] in (True, False)
+
+    assert "violations" in report
+    assert isinstance(report["violations"], list)
