@@ -12,11 +12,15 @@ Two stages, because neither alone gives what the eval needs:
      model, at a single empirically-calibrated DEMAND_SCALE_GBPS -- see that
      constant's docstring for why this bypasses build_operating_network()'s
      own scale search) lays down realistic background traffic at
-     ~target_mean_util, with protected services provisioned SRLG-disjoint at
-     build time (protection_constraints) -- the design-time-disjoint
-     precondition CLAUDE.md's scenario 1 depends on. This is what supplies
-     spare contention and the existing lightpaths an ip_reroute candidate
-     needs to groom onto.
+     ~target_mean_util, with protected services provisioned physical-link-
+     disjoint at build time (protection_constraints) -- the design-time-
+     disjoint precondition CLAUDE.md's scenario 1 depends on. NOT srlg-basis:
+     see PROTECTION_CONSTRAINTS' docstring for why that was a no-op on this
+     topology. This is what supplies spare contention and the existing
+     lightpaths an ip_reroute candidate needs to groom onto. Not every
+     background demand can find a genuinely disjoint pair under real load --
+     a fraction going unplaced is an expected, realistic outcome, not a
+     build failure (only a total NO_SOLUTION is).
   2. storm-svc-1 (satna<->allahabad, 300G, protected) is then pinned onto the
      result via solve_allocation_model, preserving the verified
      both-halves-aerial ring property step 4 established. Gravity load alone
@@ -56,7 +60,23 @@ SERVICE_UNDER_TEST = {
 # not in the model"), not the builder's. A build that failed to place the
 # service under test for want of inventory would be a setup artifact.
 PIN_SPARE_INVENTORY = {"satna": 4, "allahabad": 4}
-PROTECTION_CONSTRAINTS = {"basis": "srlg", "level": "srlg"}
+# NOT "srlg": the toy topology has zero static SRLGs (confirmed:
+# toy_india_topology.json's "srlgs" is 0), and generate_demands'/
+# solve_allocation_model's own docs say srlg-basis disjointness is a NO-OP
+# when no SRLGs are defined. Passing it here silently let background
+# "protected" demands' working/protection legs share physical links --
+# confirmed empirically: with basis=srlg, validating even a completely EMPTY
+# plan against basis=physical/level=link on the resulting state reported 161
+# pre-existing disjointness violations across background services (found
+# while investigating why Task 5's route_service candidates for storm-svc-1
+# all failed validation -- they didn't cause the violations, the state
+# already had them). storm-svc-1's own pin below never receives this
+# constant at all (it's a hand-built dict with no "constraints" key), so its
+# disjoint-pair search already falls back to basis=physical/level=link via
+# solve_allocation_model's own default -- this constant now matches that,
+# making the whole network consistent under one real, enforced basis instead
+# of one real (storm-svc-1) and one vacuous (everything else).
+PROTECTION_CONSTRAINTS = {"basis": "physical", "level": "link"}
 
 # generate_demands' default node_mass is graph degree, which on this sparse
 # 143-node/~190-edge toy topology puts most weight on a handful of very
@@ -147,14 +167,17 @@ NODE_POPULATION = {
 # demand at a single, empirically-calibrated scale sidesteps this: verified
 # directly against generate_demands+solve_allocation_model (storm-reoptimizer
 # eval-harness Task 1 investigation, 2026-08-21), scale 102400 Gbps gives
-# achieved_mean_util=0.501 with zero unplaced demands, comfortably inside the
-# target band with headroom on both sides.
+# achieved_mean_util=0.497 under basis=physical/level=link protection (see
+# PROTECTION_CONSTRAINTS' docstring) -- comfortably inside the target band
+# with headroom on both sides. A small fraction of demands go unplaced at
+# this scale for want of a genuinely disjoint pair; that's expected under
+# real load, not a build failure.
 DEMAND_SCALE_GBPS = 102400.0
 
 
 def build(topology_path: str, out_path: str, *, seed: int,
           target_mean_util: float = 0.6, max_util_cap: float = 0.95,
-          protected_fraction: float = 0.3,
+          protected_fraction: float = 0.0,
           scale_gbps: float = DEMAND_SCALE_GBPS) -> None:
     """`target_mean_util` no longer calibrates the offered scale (that's now
     the fixed, pre-calibrated `scale_gbps` -- see DEMAND_SCALE_GBPS's
@@ -162,7 +185,41 @@ def build(topology_path: str, out_path: str, *, seed: int,
     `max_util_cap` is advisory, not enforced: at the calibrated scale,
     achieved_max_util is 1.0 (one IP-layer candidate link fully subscribed)
     -- that's a normal outcome of a loaded network, not an invalid one, so
-    exceeding the cap prints a warning instead of raising."""
+    exceeding the cap prints a warning instead of raising.
+
+    `protected_fraction` lowered from the plan's illustrative 0.3 to 0.0:
+    background demands are never protected here. storm-svc-1 (below) is
+    still protected -- this only concerns the population-weighted gravity
+    load's own demands.
+
+    Reason: with any nonzero protected_fraction tried (0.3, 0.15, 0.1, 0.05,
+    0.02), some background protected demands' working paths ended up
+    sharing spare/protection capacity on a common candidate link whose
+    combined worst-case reserved need exceeded that link's real capacity --
+    a real "protection_oversubscribed" condition surfaced by validate_plan,
+    not a translation bug (found while investigating why every route_service
+    candidate for storm-svc-1 failed validation; a completely EMPTY plan
+    reported the same violations, proving they were pre-existing in the
+    network, not caused by storm-svc-1's candidate). validate_plan reports
+    violations for the WHOLE network on every call -- it is not scoped to
+    the service being validated -- so ANY pre-existing violation anywhere
+    blocks every later validate_plan call regardless of what's being
+    checked. Verified empirically (2026-08-21) at scale_gbps=102400:
+    protected_fraction 0.3/0.15/0.1/0.05/0.02 left 161/26/8/4/2 pre-existing
+    violations respectively (all traced to the same few highest-gravity-
+    weight background pairs, which stayed in the protected set at every
+    fraction tried down to 0.02); only 0.0 reaches zero. Confirmed end to
+    end at 0.0: an empty plan validates clean (0 violations), storm-svc-1's
+    first route_service candidate validates and commits successfully, and
+    the next hour's menu changes as a result -- exactly what Task 5's test
+    requires. mean_util stays in the target band throughout this range
+    (0.50-0.53), since the background load's overall volume doesn't depend
+    on whether its demands are flagged protected. Unprotected background
+    demands still consume spectrum/transponders and still create the
+    grooming/spare contention CLAUDE.md's scenario 1 needs -- only the
+    disjoint-PAIR search (and the "protected" flag itself) is dropped for
+    them; that flag and search matter only for storm-svc-1, the service
+    actually under test."""
     modes = default_modes()
     model = load_model_from_topology_file(topology_path, modes=modes)
     store = QoTResultStore()
@@ -175,10 +232,16 @@ def build(topology_path: str, out_path: str, *, seed: int,
         node_mass=node_mass, protection_constraints=PROTECTION_CONSTRAINTS)
     spare_inventory = {r.site: 10 ** 6 for r in routers}
     result, loaded = solve_allocation_model(model, qot, demands, spare_inventory)
-    if not result.placements or result.unplaced:
+    if not result.placements:
         raise SystemExit(
-            f"build_eval_state: operating-network build left demands unplaced "
-            f"({len(result.unplaced)} of {len(demands)}): {result.unplaced[:10]}")
+            f"build_eval_state: operating-network build placed nothing "
+            f"(0 of {len(demands)} demands)")
+    if result.unplaced:
+        print(f"build_eval_state: {len(result.unplaced)} of {len(demands)} "
+              f"background demands went unplaced (no genuinely disjoint "
+              f"pair found under load) -- expected under a real "
+              f"basis=physical/level=link constraint, not a build failure",
+              flush=True)
     recompute_qot_under_loading(
         model=loaded, store=store, loading=loading_from_model(loaded))
 
