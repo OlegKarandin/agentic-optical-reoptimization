@@ -8,7 +8,10 @@ env's python; never imported by this app's own runtime process.
 
 Two stages, because neither alone gives what the eval needs:
 
-  1. build_operating_network() lays down a realistic gravity load at
+  1. A population-weighted gravity load (generate_demands + solve_allocation_
+     model, at a single empirically-calibrated DEMAND_SCALE_GBPS -- see that
+     constant's docstring for why this bypasses build_operating_network()'s
+     own scale search) lays down realistic background traffic at
      ~target_mean_util, with protected services provisioned SRLG-disjoint at
      build time (protection_constraints) -- the design-time-disjoint
      precondition CLAUDE.md's scenario 1 depends on. This is what supplies
@@ -153,6 +156,13 @@ def build(topology_path: str, out_path: str, *, seed: int,
           target_mean_util: float = 0.6, max_util_cap: float = 0.95,
           protected_fraction: float = 0.3,
           scale_gbps: float = DEMAND_SCALE_GBPS) -> None:
+    """`target_mean_util` no longer calibrates the offered scale (that's now
+    the fixed, pre-calibrated `scale_gbps` -- see DEMAND_SCALE_GBPS's
+    docstring for why); it only sets the +/-0.2 acceptance tolerance below.
+    `max_util_cap` is advisory, not enforced: at the calibrated scale,
+    achieved_max_util is 1.0 (one IP-layer candidate link fully subscribed)
+    -- that's a normal outcome of a loaded network, not an invalid one, so
+    exceeding the cap prints a warning instead of raising."""
     modes = default_modes()
     model = load_model_from_topology_file(topology_path, modes=modes)
     store = QoTResultStore()
@@ -181,6 +191,12 @@ def build(topology_path: str, out_path: str, *, seed: int,
             f"build_eval_state: achieved_mean_util={achieved_mean_util:.3f} is "
             f"far from target_mean_util={target_mean_util}; re-calibrate "
             f"scale_gbps (see DEMAND_SCALE_GBPS's docstring)")
+    if achieved_max_util > max_util_cap:
+        print(f"build_eval_state: WARNING achieved_max_util="
+              f"{achieved_max_util:.3f} exceeds max_util_cap={max_util_cap} "
+              f"-- one or more IP-layer candidate links are fully "
+              f"subscribed; not treated as fatal (see build()'s docstring)",
+              flush=True)
 
     pin_qot = make_adapter_evaluator(loaded, store, cache=QoTCache())
     pin_result, work = solve_allocation_model(
@@ -213,10 +229,19 @@ def main() -> None:
     parser.add_argument("--topology", required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("--seed", type=int, required=True)
-    parser.add_argument("--target-mean-util", type=float, default=0.6)
+    parser.add_argument(
+        "--target-mean-util", type=float, default=0.6,
+        help="Acceptance tolerance center (+/-0.2) for the build's achieved "
+             "mean utilization. Does NOT calibrate offered traffic scale -- "
+             "that's the fixed DEMAND_SCALE_GBPS; see its docstring.")
+    parser.add_argument(
+        "--max-util-cap", type=float, default=0.95,
+        help="Advisory only: prints a warning (not fatal) if the achieved "
+             "max utilization exceeds this.")
     args = parser.parse_args()
     build(args.topology, args.out, seed=args.seed,
-          target_mean_util=args.target_mean_util)
+          target_mean_util=args.target_mean_util,
+          max_util_cap=args.max_util_cap)
 
 
 if __name__ == "__main__":
