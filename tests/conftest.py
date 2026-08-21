@@ -23,7 +23,7 @@ _MULTILAYER_OPTICAL_MCP_ENV_PYTHON = Path(
 )
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def local_server_command() -> list[str]:
     """server_command= override for connect_server(), valid only in this
     workspace. A real install (`multilayer-optical-mcp` on PATH) needs none
@@ -42,7 +42,7 @@ def local_server_command() -> list[str]:
     ]
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def local_server_env() -> dict[str, str]:
     """env= override for connect_server(), pairing with local_server_command:
     stdio_client's default subprocess env doesn't inherit the parent's
@@ -85,4 +85,33 @@ def storm_state_path(tmp_path_factory, local_server_command, local_server_env):
             f"stdout={proc.stdout[-500:]!r} stderr={proc.stderr[-500:]!r}"
         )
     _STORM_STATE_CACHE["path"] = out
+    return out
+
+
+EVAL_STATES_DIR = Path(__file__).parent.parent / "eval" / "states"
+EVAL_SEED = 17
+
+
+@pytest.fixture(scope="session")
+def loaded_state_path(local_server_command, local_server_env) -> Path:
+    """The eval harness's loaded operating network (tools/build_eval_state.py).
+    Built once and CACHED ON DISK at eval/states/loaded-s17.json (git-ignored),
+    not merely for the session: the two-stage build binary-searches offered
+    demand scale against the real 143-node topology and takes minutes, not
+    seconds. Delete the file to force a rebuild."""
+    out = EVAL_STATES_DIR / f"loaded-s{EVAL_SEED}.json"
+    if out.exists():
+        return out
+    out.parent.mkdir(parents=True, exist_ok=True)
+    script = Path(__file__).parent.parent / "tools" / "build_eval_state.py"
+    proc = subprocess.run(
+        [local_server_command[0], str(script),
+         "--topology", str(TOY_INDIA_TOPOLOGY_PATH), "--out", str(out),
+         "--seed", str(EVAL_SEED)],
+        env=local_server_env, capture_output=True, text=True, timeout=1800,
+        check=False)
+    if proc.returncode != 0:
+        pytest.fail(
+            f"build_eval_state failed (rc={proc.returncode}): "
+            f"stdout={proc.stdout[-500:]!r} stderr={proc.stderr[-1500:]!r}")
     return out

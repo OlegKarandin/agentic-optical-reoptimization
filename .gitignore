@@ -8,3 +8,5 @@ dist/
 .venv/
 
 .worktrees/
+eval/states/
+eval/traces/
