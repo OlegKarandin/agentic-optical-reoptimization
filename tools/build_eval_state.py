@@ -12,15 +12,21 @@ Two stages, because neither alone gives what the eval needs:
      model, at a single empirically-calibrated DEMAND_SCALE_GBPS -- see that
      constant's docstring for why this bypasses build_operating_network()'s
      own scale search) lays down realistic background traffic at
-     ~target_mean_util, with protected services provisioned physical-link-
-     disjoint at build time (protection_constraints) -- the design-time-
-     disjoint precondition CLAUDE.md's scenario 1 depends on. NOT srlg-basis:
-     see PROTECTION_CONSTRAINTS' docstring for why that was a no-op on this
-     topology. This is what supplies spare contention and the existing
-     lightpaths an ip_reroute candidate needs to groom onto. Not every
-     background demand can find a genuinely disjoint pair under real load --
-     a fraction going unplaced is an expected, realistic outcome, not a
-     build failure (only a total NO_SOLUTION is).
+     ~target_mean_util. This is what supplies the spectrum/transponder
+     grooming contention and the existing lightpaths an ip_reroute candidate
+     needs to groom onto. It does NOT supply protected-service spare
+     contention: background demands are never protected here
+     (protected_fraction=0.0 -- see its docstring for why), so
+     PROTECTION_CONSTRAINTS currently binds nothing in this stage.
+     storm-svc-1 (stage 2) is the only protected service the model itself
+     carries; the harness's own SpareLedger (a separate, later task) is
+     what synthesizes protected-service spare scarcity for scored episodes,
+     independent of the network model's real reservations (eval design
+     spec: "spare_inventory is not in the model"). A fraction of background
+     demands going unplaced (for ordinary routing/capacity reasons, not a
+     disjoint-pair search -- none runs when nothing is protected) is an
+     expected, realistic outcome, not a build failure (only a total
+     NO_SOLUTION is).
   2. storm-svc-1 (satna<->allahabad, 300G, protected) is then pinned onto the
      result via solve_allocation_model, preserving the verified
      both-halves-aerial ring property step 4 established. Gravity load alone
@@ -77,6 +83,12 @@ PIN_SPARE_INVENTORY = {"satna": 4, "allahabad": 4}
 # making the whole network consistent under one real, enforced basis instead
 # of one real (storm-svc-1) and one vacuous (everything else).
 PROTECTION_CONSTRAINTS = {"basis": "physical", "level": "link"}
+# Currently dead for the background load specifically: at
+# protected_fraction=0.0 (build()'s default -- see its docstring) no
+# background demand is ever marked protected, so this never gets attached
+# to one. Kept, not deleted, for interface stability (the Task 1 brief's
+# own "Produces" contract names this constant) and because it takes effect
+# again the moment protected_fraction is raised above 0.
 
 # generate_demands' default node_mass is graph degree, which on this sparse
 # 143-node/~190-edge toy topology puts most weight on a handful of very
@@ -167,11 +179,11 @@ NODE_POPULATION = {
 # demand at a single, empirically-calibrated scale sidesteps this: verified
 # directly against generate_demands+solve_allocation_model (storm-reoptimizer
 # eval-harness Task 1 investigation, 2026-08-21), scale 102400 Gbps gives
-# achieved_mean_util=0.497 under basis=physical/level=link protection (see
-# PROTECTION_CONSTRAINTS' docstring) -- comfortably inside the target band
-# with headroom on both sides. A small fraction of demands go unplaced at
-# this scale for want of a genuinely disjoint pair; that's expected under
-# real load, not a build failure.
+# achieved_mean_util=0.526 at protected_fraction=0.0 (see its docstring) --
+# comfortably inside the target band with headroom on both sides. A small
+# fraction of demands can still go unplaced at this scale for ordinary
+# routing/capacity reasons (no disjoint-pair search runs when nothing is
+# protected); that's expected under real load, not a build failure.
 DEMAND_SCALE_GBPS = 102400.0
 
 
@@ -214,12 +226,23 @@ def build(topology_path: str, out_path: str, *, seed: int,
     the next hour's menu changes as a result -- exactly what Task 5's test
     requires. mean_util stays in the target band throughout this range
     (0.50-0.53), since the background load's overall volume doesn't depend
-    on whether its demands are flagged protected. Unprotected background
-    demands still consume spectrum/transponders and still create the
-    grooming/spare contention CLAUDE.md's scenario 1 needs -- only the
-    disjoint-PAIR search (and the "protected" flag itself) is dropped for
-    them; that flag and search matter only for storm-svc-1, the service
-    actually under test."""
+    on whether its demands are flagged protected.
+
+    What this trades away: at protected_fraction=0.0, PROTECTION_CONSTRAINTS
+    binds nothing here (no background demand is ever marked protected, so
+    no disjoint-pair search ever runs for one) and the network model itself
+    holds no protected-service spare RESERVATION other than storm-svc-1's
+    own -- there is no other protected service in the model for storm-svc-1
+    to contend with over spares. Unprotected background demands still
+    consume spectrum/transponders and still create grooming contention (an
+    ip_reroute candidate still has real lightpaths to groom onto), but not
+    spare-reservation contention. If a later task needs the network MODEL
+    itself (not the harness's SpareLedger) to show multiple protected
+    services genuinely contending for spares, this ruling would need
+    revisiting; per the eval design spec ("spare_inventory is not in the
+    model"), scored spare scarcity is synthesized by the harness's own
+    ledger, decoupled from the network model's real reservations, so no
+    task in the current plan appears to need this."""
     modes = default_modes()
     model = load_model_from_topology_file(topology_path, modes=modes)
     store = QoTResultStore()
@@ -232,16 +255,17 @@ def build(topology_path: str, out_path: str, *, seed: int,
         node_mass=node_mass, protection_constraints=PROTECTION_CONSTRAINTS)
     spare_inventory = {r.site: 10 ** 6 for r in routers}
     result, loaded = solve_allocation_model(model, qot, demands, spare_inventory)
-    if not result.placements:
+    if result.status is SolverStatus.NO_SOLUTION:
         raise SystemExit(
             f"build_eval_state: operating-network build placed nothing "
             f"(0 of {len(demands)} demands)")
     if result.unplaced:
         print(f"build_eval_state: {len(result.unplaced)} of {len(demands)} "
-              f"background demands went unplaced (no genuinely disjoint "
-              f"pair found under load) -- expected under a real "
-              f"basis=physical/level=link constraint, not a build failure",
-              flush=True)
+              f"background demands went unplaced (no feasible route or "
+              f"insufficient transponders under load -- at "
+              f"protected_fraction=0.0 no demand here ever enters the "
+              f"disjoint-pair search) -- expected under real load, not a "
+              f"build failure", flush=True)
     recompute_qot_under_loading(
         model=loaded, store=store, loading=loading_from_model(loaded))
 
