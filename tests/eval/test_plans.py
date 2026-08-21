@@ -111,45 +111,26 @@ async def _round_trip(state_path, server_command, server_env):
         menu = await call_tool_json(client, "route_service", {
             "service_id": "storm-svc-1", "protected": False})
         assert menu["candidates"], "loaded network produced an empty menu"
-        # The first candidate may have a spectrum clash or disjointness violation.
-        # Try up to 5 candidates until one validates. Choosing a valid candidate
-        # is the decider's job, not the translator's.
-        chosen = None
-        plan = None
-        report = None
-        found_valid = False
-        for i in range(min(5, len(menu["candidates"]))):
-            candidate = menu["candidates"][i]
-            plan = plan_from_candidate(index, candidate, "storm-svc-1", prefix=f"eval-t{i}")
-            report = await validate_candidate(client, plan, basis="physical",
-                                              level="link")
-            if report["ok"]:
-                chosen = candidate
-                found_valid = True
-                break
-        # If no candidate validated, commit the first plan (state issue, not translation).
-        if chosen is None:
-            chosen = menu["candidates"][0]
+        chosen = menu["candidates"][0]
+        plan = plan_from_candidate(index, chosen, "storm-svc-1", prefix="eval-t0")
+        report = await validate_candidate(client, plan, basis="physical",
+                                          level="link")
         commit = await commit_candidate(client, plan, basis="physical",
                                         level="link")
         after = await call_tool_json(client, "route_service", {
             "service_id": "storm-svc-1", "protected": False})
-        return chosen, report, commit, menu, after, found_valid
+        return chosen, report, commit, menu, after
 
 
 def test_plan_round_trips_and_the_commit_changes_the_next_hour_menu(
     loaded_state_path, local_server_command, local_server_env,
 ):
-    chosen, report, commit, before, after, found_valid = asyncio.run(
+    chosen, report, commit, before, after = asyncio.run(
         _round_trip(loaded_state_path, local_server_command, local_server_env))
 
-    # If a valid candidate was found, verify its report is ok and commit succeeds.
-    # Otherwise this is a state issue, not a translation bug (translation is
-    # verified by unit tests). We still test that the server accepts the plan.
-    if found_valid:
-        assert report["ok"], report.get("violations", [])
-        assert commit["status"] == "committed", commit
-        assert commit["intended_snapshot_id"]
-        # Gap 2's fix, made observable: the committed lightpaths occupy spectrum
-        # and change grooming residual, so the next menu is not the previous one.
-        assert after["candidates"] != before["candidates"]
+    assert report["ok"], report["violations"]
+    assert commit["status"] == "committed", commit
+    assert commit["intended_snapshot_id"]
+    # Gap 2's fix, made observable: the committed lightpaths occupy spectrum
+    # and change grooming residual, so the next menu is not the previous one.
+    assert after["candidates"] != before["candidates"]
