@@ -11,6 +11,7 @@ readme = "CLAUDE.md"
 dependencies = [
     "mcp[cli]>=1.0",
     "shapely>=2",
+    "pyyaml>=6",
 ]
 
 [project.optional-dependencies]
