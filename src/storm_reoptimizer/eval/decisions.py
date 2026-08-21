@@ -1,0 +1,218 @@
+# src/storm_reoptimizer/eval/decisions.py
+"""The three decisions a rollout asks for, and the interface both the
+baseline and (in step 6) the agent implement (eval design spec, Decisions
+1-3). runner.py talks only to `Decider`, so dropping an LLM in behind this
+module is the whole of step 6's integration work.
+
+Decision 1 (timing) is the one no tool produces: the server model has no
+concept of time, so ACT-or-WAIT is unmodelled by anything upstream.
+Decision 2 (constraints) reshapes the search space -- `avoid` is what
+build_layered_graph forbids, so it changes what candidates EXIST.
+Decision 3 (objective) only reorders: route_service harvests placements
+first and scores them after, so weights reorder a menu that is typically 3-5
+entries after dedup. That is why the choice is ordinal-or-holistic and never
+a vector of floats: the seven terms are in incommensurate units (a slot
+count, 2.0*n_lightpaths, a 0-1 ratio, Gbps, milliseconds, summed dB, a
+service count) and total_margin is a BENEFIT subtracted while the other six
+are costs. Asking for raw multipliers across those is asking for numerology.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Protocol
+
+from .observation import Observation
+
+# In the order evaluate_objective reports them.
+COST_TERMS = ("spectrum_used", "transponders", "max_util", "dropped_traffic",
+              "added_latency", "total_margin", "services_at_risk")
+BENEFIT_TERMS = frozenset({"total_margin"})
+
+_AVOID_KEYS = {"assets", "srlgs", "risk_groups"}
+_ACTIONS = {"act", "wait"}
+_BASES = {"physical", "srlg", "risk_group"}
+_LEVELS = {"link", "srlg", "node"}
+
+
+class DecisionError(ValueError):
+    """A decision payload that does not satisfy its schema."""
+
+
+def _reasoning(payload: dict, where: str) -> str:
+    text = payload.get("reasoning")
+    if not isinstance(text, str) or not text.strip():
+        raise DecisionError(f"{where}: `reasoning` is mandatory and non-empty")
+    return text
+
+
+@dataclass(frozen=True)
+class TimingDecision:
+    action: str          # "act" | "wait"
+    reasoning: str
+
+    @classmethod
+    def from_dict(cls, payload: dict) -> "TimingDecision":
+        reasoning = _reasoning(payload, "timing")
+        action = payload.get("action")
+        if action not in _ACTIONS:
+            raise DecisionError(
+                f"timing: `action` must be one of {sorted(_ACTIONS)}, "
+                f"got {action!r}")
+        return cls(action=action, reasoning=reasoning)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"action": self.action, "reasoning": self.reasoning}
+
+
+@dataclass(frozen=True)
+class ConstraintDecision:
+    """The avoid set's HORIZON is the real choice here. Avoiding the full t+6
+    cone frequently leaves no feasible path; avoiding only current exposure
+    leaves the reroute re-exposed three hours later. Protection posture ships
+    alongside it because route_service already takes protected/best_effort/
+    basis/level -- deciding when to accept degraded protection is the same
+    class of event-state judgement as the horizon choice, and free to expose.
+    The baseline pins all four, so the fields cost the comparison nothing."""
+    avoid: dict
+    reasoning: str
+    protected: bool = True
+    best_effort: bool = False
+    basis: str = "srlg"
+    level: str = "srlg"
+
+    @classmethod
+    def from_dict(cls, payload: dict) -> "ConstraintDecision":
+        reasoning = _reasoning(payload, "constraints")
+        avoid = payload.get("avoid")
+        if not isinstance(avoid, dict):
+            raise DecisionError("constraints: `avoid` must be a mapping")
+        unknown = set(avoid) - _AVOID_KEYS
+        if unknown:
+            raise DecisionError(
+                f"constraints: `avoid` has unknown key(s) {sorted(unknown)}; "
+                f"allowed: {sorted(_AVOID_KEYS)}")
+        basis = payload.get("basis", "srlg")
+        level = payload.get("level", "srlg")
+        if basis not in _BASES:
+            raise DecisionError(f"constraints: unknown basis {basis!r}")
+        if level not in _LEVELS:
+            raise DecisionError(f"constraints: unknown level {level!r}")
+        return cls(avoid=avoid, reasoning=reasoning,
+                   protected=bool(payload.get("protected", True)),
+                   best_effort=bool(payload.get("best_effort", False)),
+                   basis=basis, level=level)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"avoid": self.avoid, "protected": self.protected,
+                "best_effort": self.best_effort, "basis": self.basis,
+                "level": self.level, "reasoning": self.reasoning}
+
+    def route_service_args(self, service_id: str) -> dict[str, Any]:
+        return {"service_id": service_id, "protected": self.protected,
+                "basis": self.basis, "level": self.level,
+                "best_effort": self.best_effort, "avoid": self.avoid}
+
+
+@dataclass(frozen=True)
+class ObjectiveDecision:
+    choice: str                          # "candidate_<i>" | "infeasible"
+    priority: tuple[str, ...] | None     # interpretability artifact, optional
+    reasoning: str
+
+    @classmethod
+    def from_dict(cls, payload: dict) -> "ObjectiveDecision":
+        reasoning = _reasoning(payload, "objective")
+        choice = payload.get("choice")
+        if not isinstance(choice, str):
+            raise DecisionError("objective: `choice` must be a string")
+        candidate_index(choice)          # validates the label shape
+        priority = payload.get("priority")
+        if priority is not None:
+            unknown = [t for t in priority if t not in COST_TERMS]
+            if unknown:
+                raise DecisionError(
+                    f"objective: `priority` names non-cost-terms {unknown}; "
+                    f"allowed: {list(COST_TERMS)}")
+            priority = tuple(priority)
+        return cls(choice=choice, priority=priority, reasoning=reasoning)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"choice": self.choice,
+                "priority": list(self.priority) if self.priority else None,
+                "reasoning": self.reasoning}
+
+
+def candidate_index(choice: str) -> int | None:
+    """`"candidate_2"` -> 2; `"infeasible"` -> None."""
+    if choice == "infeasible":
+        return None
+    prefix = "candidate_"
+    if not choice.startswith(prefix) or not choice[len(prefix):].isdigit():
+        raise DecisionError(
+            f"objective: `choice` must be 'candidate_<i>' or 'infeasible', "
+            f"got {choice!r}")
+    return int(choice[len(prefix):])
+
+
+def rank_by_priority(candidates: list[dict],
+                     priority: tuple[str, ...]) -> list[int]:
+    """Candidate indices, best first, sorted lexicographically on `priority`.
+    Costs ascend; total_margin is a benefit and descends. Used by the
+    baseline's fixed (service_class -> priority ordering) policy, and
+    available to a decider that states one."""
+    def key(i: int):
+        cv = candidates[i]["cost_vector"]
+        return tuple(-cv.get(t, 0.0) if t in BENEFIT_TERMS else cv.get(t, 0.0)
+                     for t in priority)
+    return sorted(range(len(candidates)), key=key)
+
+
+TIMING_JSON_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "required": ["action", "reasoning"],
+    "properties": {
+        "action": {"type": "string", "enum": sorted(_ACTIONS)},
+        "reasoning": {"type": "string", "minLength": 1},
+    },
+}
+
+CONSTRAINT_JSON_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "required": ["avoid", "reasoning"],
+    "properties": {
+        "avoid": {
+            "type": "object", "additionalProperties": False,
+            "properties": {k: {"type": "array", "items": {"type": "string"}}
+                           for k in sorted(_AVOID_KEYS)},
+        },
+        "protected": {"type": "boolean"},
+        "best_effort": {"type": "boolean"},
+        "basis": {"type": "string", "enum": sorted(_BASES)},
+        "level": {"type": "string", "enum": sorted(_LEVELS)},
+        "reasoning": {"type": "string", "minLength": 1},
+    },
+}
+
+OBJECTIVE_JSON_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "required": ["choice", "priority", "reasoning"],
+    "properties": {
+        "choice": {"type": "string"},
+        "priority": {"type": ["array", "null"],
+                     "items": {"type": "string", "enum": list(COST_TERMS)}},
+        "reasoning": {"type": "string", "minLength": 1},
+    },
+}
+
+
+class Decider(Protocol):
+    """Implemented by baseline.ForecastBlindBaseline today and by step 6's
+    LLM agent tomorrow. runner.py knows nothing else about either."""
+
+    name: str
+
+    def timing(self, obs: Observation) -> TimingDecision: ...
+
+    def constraints(self, obs: Observation) -> ConstraintDecision: ...
+
+    def objective(self, obs: Observation, menu: dict) -> ObjectiveDecision: ...
