@@ -82,7 +82,7 @@ def test_constraints_avoid_only_the_nearest_exposed_horizon_and_pin_posture():
         _obs(offset_km=10.0, width_km=90.0, hours_ahead=3))
     assert d.avoid == {"risk_groups": ["rg_X_t1_t3"]}
     assert (d.protected, d.best_effort, d.basis, d.level) == (
-        True, False, "srlg", "srlg")
+        False, False, "physical", "link")
 
 
 def test_objective_is_a_fixed_service_class_priority_table():

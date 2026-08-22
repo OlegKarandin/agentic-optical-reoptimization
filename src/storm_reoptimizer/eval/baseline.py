@@ -90,8 +90,14 @@ class ForecastBlindBaseline:
         return ConstraintDecision(
             avoid={"risk_groups": risk_groups},
             reasoning=f"{self.name}: avoid the currently-exposed risk group "
-                      f"only; protection posture pinned",
-            protected=True, best_effort=False, basis="srlg", level="srlg")
+                      f"only; protection posture pinned. protected=False/"
+                      f"basis=physical/level=link: this topology has no "
+                      f"static SRLGs (basis='srlg' is a no-op on it), and "
+                      f"protected=True would populate route_service's "
+                      f"`pairs` menu, which plan_from_candidate has no path "
+                      f"to translate -- it only builds a single working-leg "
+                      f"reroute op.",
+            protected=False, best_effort=False, basis="physical", level="link")
 
     def objective(self, obs: Observation, menu: dict) -> ObjectiveDecision:
         candidates = menu.get("candidates") or []
