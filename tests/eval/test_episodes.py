@@ -12,10 +12,13 @@ from storm_reoptimizer.eval.assertions import (
     assert_issuance_prefix_shared, assert_menus_identical,
     assert_non_flip_decisions_non_binding, assert_shared_scalars_equal,
 )
+from storm_reoptimizer.eval.baseline import ForecastBlindBaseline
 from storm_reoptimizer.eval.decisions import (
     ConstraintDecision, ObjectiveDecision, TimingDecision,
 )
+from storm_reoptimizer.eval.runner import run_episode
 from storm_reoptimizer.eval.scenario_file import load_all_scenarios
+from storm_reoptimizer.eval.scoring import episode_metrics
 from storm_reoptimizer.mcp_client import connect_server
 
 TOPOLOGY_PATH = (
@@ -23,8 +26,8 @@ TOPOLOGY_PATH = (
     / "src" / "storm_reoptimizer" / "data" / "toy_india_topology.json"
 )
 
-# Extended by Tasks 15-17 to ("T1", "T2", "T3").
-PAIRS = ("T1",)
+# Extended by Tasks 16-17 to ("T1", "T2", "T3").
+PAIRS = ("T1", "T2")
 
 
 @pytest.mark.parametrize("pair", PAIRS)
@@ -134,3 +137,151 @@ def test_t1_non_flip_decisions_are_non_binding(
             non_flip=("constraints", "objective"))
 
     asyncio.run(_run())
+
+
+# T2's flip variable is `constraints` (gold.label is `wide`/`narrow`, an
+# avoid-set outcome), so the two decisions T2 is NOT testing are `timing` and
+# `objective`. There is no way to score an avoid-horizon choice without
+# committing something, so the gold TIMING decision at t1 is "act" in BOTH
+# halves (unlike T1, where gold.label IS the timing action). The gold
+# OBJECTIVE decision is whichever candidate index actually carries the
+# wide-avoid lever in T2a (candidate_2: optical_reroute, 1 spare pair, under
+# avoid={risk_groups:[rg_T2a_t1_t6]}/basis=risk_group/level=risk_group -- see
+# docs/superpowers/rehearsals/T2.md) and the narrow-avoid lever in T2b
+# (candidate_0: ip_reroute, 0 spare pairs, reusing storm-svc-1's own existing
+# working lightpath unchanged, under avoid={}/basis=physical/level=link) --
+# found by probing the real server, not guessed. An unknown risk_group id
+# (e.g. rg_T2a_t1_t6 before hour t1 has minted it) is silently treated as an
+# empty exclusion by route_service (confirmed against the real server), so
+# using this fixed gold constraints/objective pair at every hour is safe --
+# no crash, just a wasted retry loop at hours other than t1.
+_T2_NON_FLIP_GOLD_DECISIONS = {
+    "T2a": (
+        TimingDecision("act", "gold"),
+        ConstraintDecision(
+            avoid={"risk_groups": ["rg_T2a_t1_t6"]}, reasoning="gold",
+            protected=False, best_effort=False, basis="risk_group",
+            level="risk_group"),
+        ObjectiveDecision("candidate_2", None, "gold"),
+    ),
+    "T2b": (
+        TimingDecision("act", "gold"),
+        ConstraintDecision(
+            avoid={}, reasoning="gold", protected=False, best_effort=False,
+            basis="physical", level="link"),
+        ObjectiveDecision("candidate_0", None, "gold"),
+    ),
+}
+
+
+@pytest.mark.parametrize("half", ("T2a", "T2b"))
+def test_t2_non_flip_decisions_are_non_binding(
+    half, loaded_state_path, local_server_command, local_server_env,
+):
+    scenario = load_all_scenarios()[half]
+    timing, constraints, objective = _T2_NON_FLIP_GOLD_DECISIONS[half]
+    gold_decisions = {
+        "timing": timing, "constraints": constraints, "objective": objective,
+    }
+
+    async def _run():
+        @asynccontextmanager
+        async def _connect():
+            async with connect_server(
+                TOPOLOGY_PATH, server_command=local_server_command,
+                env=local_server_env,
+                extra_args=["--state", str(loaded_state_path)],
+            ) as client:
+                yield client
+
+        await assert_non_flip_decisions_non_binding(
+            _connect, scenario, topology_path=TOPOLOGY_PATH,
+            gold_decisions=gold_decisions,
+            non_flip=("timing", "objective"))
+
+    asyncio.run(_run())
+
+
+class _WidensOnDisjointnessRejection:
+    """Wraps ForecastBlindBaseline('immediate') -- same timing/objective --
+    but reacts to a genuine validate_plan disjointness_collapse rejection by
+    adding the violation's OWN `shared_assets` to the avoid set and retrying.
+
+    This is NOT a change to baseline.py: ForecastBlindBaseline's constraints()
+    is deliberately blind to `last_rejection` (its docstring: "Neither reads
+    revisions... that is what makes each variant emit the SAME answer to both
+    halves", the exact property assert_each_baseline_variant_ties relies on
+    for every pair). Making it reactive would risk breaking that invariant
+    suite-wide. This wrapper is local to this one probe: it demonstrates the
+    real recovery mechanic ("widening avoid and re-calling route_service", per
+    the design) without touching the shared, already-reviewed baseline.
+
+    Confirmed against the real server (see task-15-report.md): storm-svc-1's
+    STATIC protection lightpath uses satna<->jhansi<->allahabad. Avoiding only
+    the near/currently-exposed corridor (satna<->rewa) leaves every one of
+    route_service's 9 candidates colliding with that protection leg under
+    basis=physical/level=link -- a REAL, first-try rejection, not fabricated.
+    Widening with the violation's own shared_assets (which name the specific
+    jhansi<->allahabad fiber/amp/oms/roadm ids) finds a genuinely disjoint,
+    longer route via jabalpur that validates cleanly on the very next
+    iteration."""
+
+    def __init__(self) -> None:
+        self._inner = ForecastBlindBaseline("immediate")
+        self.name = "t2a-rejection-probe"
+
+    def timing(self, obs):
+        return self._inner.timing(obs)
+
+    def constraints(self, obs):
+        base = self._inner.constraints(obs)
+        extra: set[str] = set()
+        if obs.last_rejection and obs.last_rejection.get("type") == "validation_violations":
+            for violation in obs.last_rejection.get("violations", []):
+                if violation.get("type") == "disjointness_collapse":
+                    extra.update(violation.get("shared_assets", []))
+        if not extra:
+            return base
+        avoid = dict(base.avoid)
+        avoid["assets"] = sorted(set(avoid.get("assets", [])) | extra)
+        return ConstraintDecision(
+            avoid=avoid,
+            reasoning=base.reasoning + "; widened after disjointness rejection",
+            protected=base.protected, best_effort=base.best_effort,
+            basis=base.basis, level=base.level)
+
+    def objective(self, obs, menu):
+        return self._inner.objective(obs, menu)
+
+
+def test_t2a_carries_a_real_validate_plan_rejection(
+    loaded_state_path, local_server_command, local_server_env,
+):
+    """storm-svc-1's first-choice candidate under the near-horizon-only avoid
+    genuinely fails validate_plan (disjointness_collapse against its own
+    static protection leg, which shares the satna<->jhansi<->allahabad
+    corridor with every cheap alternative to the exposed satna<->rewa
+    corridor) -- a real rejection, not fabricated. Recovery means widening
+    avoid with the violation's own shared_assets and re-calling route_service,
+    which is what makes recovered_from_rejection a metric that can actually
+    fire. See docs/superpowers/rehearsals/T2.md and task-15-report.md for the
+    full derivation."""
+    t2a = load_all_scenarios()["T2a"]
+
+    async def _run():
+        async with connect_server(
+            TOPOLOGY_PATH, server_command=local_server_command,
+            env=local_server_env,
+            extra_args=["--state", str(loaded_state_path)],
+        ) as client:
+            return await run_episode(client, t2a,
+                                     _WidensOnDisjointnessRejection(),
+                                     topology_path=TOPOLOGY_PATH)
+
+    trace = asyncio.run(_run())
+    kinds = {r["type"] for h in trace.hours for r in h["rejections"]}
+    assert "validation_violations" in kinds, (
+        f"T2a produced no validate_plan rejection (saw {sorted(kinds)}); the "
+        f"near-horizon avoid must genuinely collide with storm-svc-1's own "
+        f"protection leg, or recovered_from_rejection can never fire")
+    assert episode_metrics(t2a, trace)["recovered_from_rejection"]

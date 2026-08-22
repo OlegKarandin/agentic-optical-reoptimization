@@ -1,0 +1,72 @@
+id: T2a
+pair: T2
+seed: 17
+state_file: eval/states/loaded-s17.json
+service_under_test: storm-svc-1
+track: hudhud
+hours: [t0, t1, t2, t6]
+decision_hour: t1
+lead_time_hours: 1
+spares_on_hand: 1            # transponder PAIRS: one new lightpath each
+damage_radius_km: 74
+reference_avoid: {}          # neutral third value: current exposure only
+forecast:
+  t0:                        # BYTE-IDENTICAL in T2b -- a distant, low-confidence
+                              # early forecast (offset 271.7km from storm-svc-1,
+                              # p_cut ~0) that gives no reason to act yet
+    t6: {cone: {type: Polygon, coordinates: [[[79.6, 23.40469], [79.71379, 23.39091], [79.81982, 23.35048], [79.91088, 23.28616], [79.98074, 23.20235], [80.02466, 23.10474], [80.03964, 23.0], [80.02466, 22.89526], [79.98074, 22.79765], [79.91088, 22.71384], [79.81982, 22.64952], [79.71379, 22.60909], [79.6, 22.59531], [79.48621, 22.60909], [79.38018, 22.64952], [79.28912, 22.71384], [79.21926, 22.79765], [79.17534, 22.89526], [79.16036, 23.0], [79.17534, 23.10474], [79.21926, 23.20235], [79.28912, 23.28616], [79.38018, 23.35048], [79.48621, 23.39091], [79.6, 23.40469]]]},
+         width_km: 90, center: {lat: 23.0, lon: 79.6}}
+  t1:                        # the revision -- two horizons, near (t2) and far
+                              # (t6), both centred on storm-svc-1's OWN point
+                              # (satna<->rewa is the exposed aerial corridor at
+                              # width 90; widening to 200 additionally exposes
+                              # satna<->jhansi -- storm-svc-1's own STATIC
+                              # PROTECTION corridor). This is the one place T2a
+                              # and T2b differ in text (T2b's widths carry a
+                              # +0.2km epsilon -- same exposed fiber sets, but
+                              # the issuance-prefix-share assertion requires the
+                              # decision-hour issuance to differ AT ALL; the
+                              # real flip lives in svc-c's state, not here).
+    t2: {cone: {type: Polygon, coordinates: [[[81.32778, 25.26025], [81.44321, 25.24646], [81.55078, 25.20603], [81.64315, 25.14172], [81.71403, 25.0579], [81.75859, 24.9603], [81.77378, 24.85555], [81.75859, 24.75081], [81.71403, 24.65321], [81.64315, 24.56939], [81.55078, 24.50508], [81.44321, 24.46465], [81.32778, 24.45086], [81.21234, 24.46465], [81.10477, 24.50508], [81.0124, 24.56939], [80.94152, 24.65321], [80.89697, 24.75081], [80.88177, 24.85555], [80.89697, 24.9603], [80.94152, 25.0579], [81.0124, 25.14172], [81.10477, 25.20603], [81.21234, 25.24646], [81.32778, 25.26025]]]},
+         width_km: 90, center: {lat: 24.855553333333333, lon: 81.32777666666667}}
+    t6: {cone: {type: Polygon, coordinates: [[[81.32778, 25.75487], [81.5843, 25.72423], [81.82334, 25.63439], [82.02861, 25.49147], [82.18612, 25.30521], [82.28513, 25.08831], [82.31891, 24.85555], [82.28513, 24.62279], [82.18612, 24.40589], [82.02861, 24.21964], [81.82334, 24.07672], [81.5843, 23.98688], [81.32778, 23.95623], [81.07125, 23.98688], [80.83221, 24.07672], [80.62694, 24.21964], [80.46943, 24.40589], [80.37042, 24.62279], [80.33665, 24.85555], [80.37042, 25.08831], [80.46943, 25.30521], [80.62694, 25.49147], [80.83221, 25.63439], [81.07125, 25.72423], [81.32778, 25.75487]]]},
+         width_km: 200, center: {lat: 24.855553333333333, lon: 81.32777666666667}}
+realized: {}                 # nothing realized-cut this episode -- storm-svc-1
+                              # is never at risk of being dropped either way, so
+                              # gold.survived is trivially satisfiable and the
+                              # pair scores purely on WHICH avoid the committed
+                              # candidate used (decision_label), not on outcome
+gold:
+  survived: [storm-svc-1]
+  max_spares_wasted: 0
+  decision_at_t0: wait
+  label: wide
+  rationale: |
+    Wide avoid costs the last spare pair; narrow avoid is an ip_reroute that
+    costs none but sits inside the t+3 cone with P(re-exposure) = 0.3.
+    T2a: svc-c has groomable survivors (probe: route_service(svc-c) returns an
+      ip_reroute candidate), so the spare has no competing claim. Insurance
+      costs ~0 and removes 0.3 * 300 G = 90 G of expected loss. Correct: wide.
+    T2b: svc-c has no groomable survivor (probe: route_service(svc-c) returns
+      optical_reroute only), so the spare is certainly claimed. Insurance costs
+      1.0 * 300 G later to remove 0.3 * 300 G now. Correct: narrow.
+
+    Real numbers, this half: route_service(storm-svc-1, avoid={risk_groups:
+    [rg_T2a_t1_t2]}, basis=physical, level=link) -- avoiding ONLY the near
+    (currently-exposed) corridor -- returns candidates that ALL genuinely fail
+    validate_plan(disjointness_collapse): the cheapest routes off satna<->rewa
+    funnel through satna<->jhansi, storm-svc-1's own STATIC protection
+    corridor. Avoiding the FULL far-horizon group (rg_T2a_t1_t6, satna<->rewa
+    + satna<->jhansi) under basis=risk_group/level=risk_group instead finds a
+    genuinely disjoint, longer route via jabalpur (candidate_2, optical_reroute,
+    1 spare pair) that validates cleanly -- confirmed against the real server.
+flip_variable: [svc-c, groom, spare, re-exposed]
+metadata:
+  label_rule: avoid_horizon_at_decision_hour
+  wide_avoid_risk_group: rg_T2a_t1_t6   # matches the runner's rg_{scenario}_{issued}_{horizon} minting
+  widest_avoid_feasible: true           # EQUAL in T2b -- see rehearsal doc Q1
+  cone_width_km: 90            # EQUAL in T2b (the near horizon's declared width)
+  cone_motion_kmh: 0.0         # EQUAL in T2b -- near/far horizons share one centre
+  n_future_claimants: 1        # EQUAL in T2b -- svc-c
+  exposure_horizon_hours: 2    # EQUAL in T2b
+  spares_on_hand: 1            # EQUAL in T2b
