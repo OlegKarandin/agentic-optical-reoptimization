@@ -45,11 +45,29 @@ realized:
                                 # confirmed against the real server:
                                 # get_affected_services(fiber_satna_rewa_0)
                                 # returns storm-svc-1 (and d0423, incidental)
-                                # BEFORE any reroute. If the gold act commits
-                                # at t0 (effective_at_index = index(t1)),
-                                # storm-svc-1 is off this fiber before the
-                                # cut lands; if the decider waits, this same
-                                # cut downs it.
+                                # BEFORE any reroute. NOTE (found in Task 17's
+                                # review): only the WORKING corridor is ever
+                                # realized-cut here -- the PROTECTION corridor
+                                # (satna<->jhansi) is never touched, and
+                                # simulate_ip_routing's final reconvergence
+                                # picks it up automatically regardless of any
+                                # decision. Confirmed empirically: a decider
+                                # that never acts at all still shows
+                                # storm-svc-1 in services_survived. This is
+                                # NOT specific to D1 -- T1b has the identical
+                                # single-corridor-realized-cut structure. So
+                                # "if the decider waits, this same cut downs
+                                # it" (below) is NOT literally true as
+                                # services_survived measures it --
+                                # gold.survived is not a discriminating check
+                                # for this episode. What IS discriminating is
+                                # decision_label (the raw act/wait choice at
+                                # t0), which does not depend on outcome at
+                                # all -- see scoring.py's module docstring
+                                # ("Flip-variable citation is NECESSARY, NOT
+                                # SUFFICIENT... not reasoning verification")
+                                # for why the harness scores the categorical
+                                # choice, not the physical result.
 gold:
   survived: [storm-svc-1]
   max_spares_wasted: 0
