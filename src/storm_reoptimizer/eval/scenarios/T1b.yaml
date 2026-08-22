@@ -1,0 +1,50 @@
+id: T1b
+pair: T1
+seed: 17
+state_file: eval/states/loaded-s17.json
+service_under_test: storm-svc-1
+track: hudhud
+hours: [t0, t1, t2, t3]
+decision_hour: t1
+lead_time_hours: 1
+spares_on_hand: 1            # transponder PAIRS: one new lightpath each
+damage_radius_km: 74
+reference_avoid: {}          # neutral third value: current exposure only
+forecast:
+  t0:                        # BYTE-IDENTICAL to T1a -- both services ambiguous
+    t3: {cone: {type: Polygon, coordinates: [[[81.16389, 25.80747], [81.27984, 25.79368], [81.38789, 25.75325], [81.48068, 25.68894], [81.55188, 25.60512], [81.59663, 25.50752], [81.6119, 25.40278], [81.59663, 25.29803], [81.55188, 25.20043], [81.48068, 25.11661], [81.38789, 25.0523], [81.27984, 25.01187], [81.16389, 24.99808], [81.04793, 25.01187], [80.93988, 25.0523], [80.8471, 25.11661], [80.7759, 25.20043], [80.73114, 25.29803], [80.71588, 25.40278], [80.73114, 25.50752], [80.7759, 25.60512], [80.8471, 25.68894], [80.93988, 25.75325], [81.04793, 25.79368], [81.16389, 25.80747]]]},
+         width_km: 90, center: {lat: 25.402776666666668, lon: 81.16388833333332}}
+  t1:                        # the revision -- this is what WAIT-past-here does NOT buy
+    # BYTE-IDENTICAL to T1a -- see T1a.yaml's comment on this entry for why
+    # it is needed (a shared near-term nowcast so storm-svc-1's raw geometric
+    # exposure, not just its p_cut, is the same in both halves).
+    t2: {cone: {type: Polygon, coordinates: [[[81.32778, 25.26025], [81.44321, 25.24646], [81.55078, 25.20603], [81.64315, 25.14172], [81.71403, 25.0579], [81.75859, 24.9603], [81.77378, 24.85555], [81.75859, 24.75081], [81.71403, 24.65321], [81.64315, 24.56939], [81.55078, 24.50508], [81.44321, 24.46465], [81.32778, 24.45086], [81.21234, 24.46465], [81.10477, 24.50508], [81.0124, 24.56939], [80.94152, 24.65321], [80.89697, 24.75081], [80.88177, 24.85555], [80.89697, 24.9603], [80.94152, 25.0579], [81.0124, 25.14172], [81.10477, 25.20603], [81.21234, 25.24646], [81.32778, 25.26025]]]},
+         width_km: 90, center: {lat: 24.855553333333333, lon: 81.32777666666667}}
+    t3: {cone: {type: Polygon, coordinates: [[[81.32778, 25.26025], [81.44321, 25.24646], [81.55078, 25.20603], [81.64315, 25.14172], [81.71403, 25.0579], [81.75859, 24.9603], [81.77378, 24.85555], [81.75859, 24.75081], [81.71403, 24.65321], [81.64315, 24.56939], [81.55078, 24.50508], [81.44321, 24.46465], [81.32778, 24.45086], [81.21234, 24.46465], [81.10477, 24.50508], [81.0124, 24.56939], [80.94152, 24.65321], [80.89697, 24.75081], [80.88177, 24.85555], [80.89697, 24.9603], [80.94152, 25.0579], [81.0124, 25.14172], [81.10477, 25.20603], [81.21234, 25.24646], [81.32778, 25.26025]]]},
+         width_km: 90, center: {lat: 24.855553333333333, lon: 81.32777666666667}}
+realized:
+  t3: [fiber_satna_rewa_0]
+gold:
+  survived: [storm-svc-1, svc-b]
+  max_spares_wasted: 0
+  decision_at_t0: wait
+  label: act
+  rationale: |
+    At t1, issued_t1 centres the t+3 cone on storm-svc-1 -- the positions are
+    exchanged from T1a.
+      p_cut(storm-svc-1)  = 0.8834 -> expected loss 0.8834 * 300G  = 265.0 G
+      p_cut(svc-b)        = 0.1346 -> expected loss 0.1346 * 100G  = 13.5 G
+    One spare pair between them. The lead time (1h) expires in 2h at exposure,
+    so waiting past t1 forecloses the optical reroute; storm-svc-1's own claim
+    (265.0G expected loss) now dominates svc-b's (13.5G). Correct: act by t+2
+    on storm-svc-1.
+    Realized: storm-svc-1 is cut at t3 (fiber_satna_rewa_0).
+flip_variable: [svc-b, cone, centre, spare]
+metadata:
+  label_rule: timing_at_decision_hour
+  cone_width_km: 90          # EQUAL to T1a
+  cone_motion_kmh: 63.0      # EQUAL to T1a -- offset(t0 centre, t1 centre) / 1h
+  n_future_claimants: 1      # EQUAL to T1a
+  exposure_horizon_hours: 2  # EQUAL to T1a
+  spares_on_hand: 1          # EQUAL to T1a
+  widest_avoid_feasible: true

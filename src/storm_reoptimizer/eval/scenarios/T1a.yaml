@@ -1,0 +1,60 @@
+id: T1a
+pair: T1
+seed: 17
+state_file: eval/states/loaded-s17.json
+service_under_test: storm-svc-1
+track: hudhud
+hours: [t0, t1, t2, t3]
+decision_hour: t1
+lead_time_hours: 1
+spares_on_hand: 1            # transponder PAIRS: one new lightpath each
+damage_radius_km: 74
+reference_avoid: {}          # neutral third value: current exposure only
+forecast:
+  t0:                        # BYTE-IDENTICAL in T1b -- both services ambiguous
+    t3: {cone: {type: Polygon, coordinates: [[[81.16389, 25.80747], [81.27984, 25.79368], [81.38789, 25.75325], [81.48068, 25.68894], [81.55188, 25.60512], [81.59663, 25.50752], [81.6119, 25.40278], [81.59663, 25.29803], [81.55188, 25.20043], [81.48068, 25.11661], [81.38789, 25.0523], [81.27984, 25.01187], [81.16389, 24.99808], [81.04793, 25.01187], [80.93988, 25.0523], [80.8471, 25.11661], [80.7759, 25.20043], [80.73114, 25.29803], [80.71588, 25.40278], [80.73114, 25.50752], [80.7759, 25.60512], [80.8471, 25.68894], [80.93988, 25.75325], [81.04793, 25.79368], [81.16389, 25.80747]]]},
+         width_km: 90, center: {lat: 25.402776666666668, lon: 81.16388833333332}}
+  t1:                        # the revision -- this is what WAIT buys
+    # BYTE-IDENTICAL in T1b: a near-term (t+1) nowcast of the storm's CURRENT
+    # footprint, sitting over storm-svc-1's own corridor regardless of which
+    # service the t+3 revision below centres on. Needed so a forecast-blind
+    # policy that only asks "is storm-svc-1 inside ANY published cone" reads
+    # the SAME answer in both halves -- without it, storm-svc-1's raw
+    # geometric containment at t+3 alone flips between the halves (p_cut>=
+    # 0.85 at a cone's own centre provably forces p_cut>=0.68 at that same
+    # cone's edge for ANY width_km/damage_radius_km, so the >=0.85/<=0.30
+    # split this pair needs at t+3 can never leave storm-svc-1 on the same
+    # side of the t+3 cone's boundary in both halves -- confirmed empirically:
+    # baseline variant "immediate" answered T1a/T1b differently before this
+    # horizon was added). This t+1 nowcast is EQUAL in both halves precisely
+    # so it carries no flip information itself; only the t+3 cone below does.
+    t2: {cone: {type: Polygon, coordinates: [[[81.32778, 25.26025], [81.44321, 25.24646], [81.55078, 25.20603], [81.64315, 25.14172], [81.71403, 25.0579], [81.75859, 24.9603], [81.77378, 24.85555], [81.75859, 24.75081], [81.71403, 24.65321], [81.64315, 24.56939], [81.55078, 24.50508], [81.44321, 24.46465], [81.32778, 24.45086], [81.21234, 24.46465], [81.10477, 24.50508], [81.0124, 24.56939], [80.94152, 24.65321], [80.89697, 24.75081], [80.88177, 24.85555], [80.89697, 24.9603], [80.94152, 25.0579], [81.0124, 25.14172], [81.10477, 25.20603], [81.21234, 25.24646], [81.32778, 25.26025]]]},
+         width_km: 90, center: {lat: 24.855553333333333, lon: 81.32777666666667}}
+    t3: {cone: {type: Polygon, coordinates: [[[81.0, 26.35469], [81.11649, 26.34091], [81.22504, 26.30048], [81.31825, 26.23616], [81.38977, 26.15235], [81.43474, 26.05474], [81.45007, 25.95], [81.43474, 25.84526], [81.38977, 25.74765], [81.31825, 25.66384], [81.22504, 25.59952], [81.11649, 25.55909], [81.0, 25.54531], [80.88351, 25.55909], [80.77496, 25.59952], [80.68175, 25.66384], [80.61023, 25.74765], [80.56526, 25.84526], [80.54993, 25.95], [80.56526, 26.05474], [80.61023, 26.15235], [80.68175, 26.23616], [80.77496, 26.30048], [80.88351, 26.34091], [81.0, 26.35469]]]},
+         width_km: 90, center: {lat: 25.95, lon: 80.99999999999999}}
+realized:
+  t3: [fiber_allahabad_fatehpur_0, fiber_allahabad_fatehpur_1]
+gold:
+  survived: [storm-svc-1, svc-b]
+  max_spares_wasted: 0
+  decision_at_t0: wait
+  label: wait
+  rationale: |
+    At t1, issued_t1 centres the t+3 cone on svc-b (d0029, allahabad<->kanpur, 100G).
+      p_cut(svc-b)        = 0.8834 -> expected loss 0.8834 * 100G  = 88.3 G
+      p_cut(storm-svc-1)  = 0.1349 -> expected loss 0.1349 * 300G  = 40.5 G
+    One spare pair between them. Spending it on storm-svc-1 forecloses svc-b's
+    only restoration, so the comparison is 0.1349*300G (40.5G) against
+    0.8834*100G (88.3G); the latter dominates. Correct: wait on storm-svc-1,
+    hold the spare.
+    Realized: svc-b is cut at t3 (fiber_allahabad_fatehpur_0/_1) and the held
+    spare restores it.
+flip_variable: [svc-b, cone, centre, spare]
+metadata:
+  label_rule: timing_at_decision_hour
+  cone_width_km: 90          # EQUAL in T1b
+  cone_motion_kmh: 63.0      # EQUAL in T1b -- offset(t0 centre, t1 centre) / 1h
+  n_future_claimants: 1      # EQUAL in T1b
+  exposure_horizon_hours: 2  # EQUAL in T1b
+  spares_on_hand: 1          # EQUAL in T1b
+  widest_avoid_feasible: true
