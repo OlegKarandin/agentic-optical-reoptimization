@@ -1,0 +1,127 @@
+id: T3a
+pair: T3
+seed: 17
+state_file: eval/states/loaded-s17.json
+service_under_test: storm-svc-1
+track: hudhud
+hours: [t0, t1, t2, t6]
+decision_hour: t1
+lead_time_hours: 1
+spares_on_hand: 1            # transponder PAIRS: one new lightpath each
+damage_radius_km: 74
+reference_avoid: {}          # neutral third value: current exposure only --
+                              # also the ACTUAL avoid the gold constraints
+                              # decision uses (constraints is non-flip here)
+forecast:
+  t0:                        # BYTE-IDENTICAL in T3b -- reuses T2a/T2b's own
+                              # t0 cone verbatim (distant, low-confidence
+                              # early guess at where the storm will be by t6,
+                              # offset 271.7km from storm-svc-1, p_cut~0) --
+                              # gives no reason to act yet
+    t6: {cone: {type: Polygon, coordinates: [[[79.6, 23.40469], [79.71379, 23.39091], [79.81982, 23.35048], [79.91088, 23.28616], [79.98074, 23.20235], [80.02466, 23.10474], [80.03964, 23.0], [80.02466, 22.89526], [79.98074, 22.79765], [79.91088, 22.71384], [79.81982, 22.64952], [79.71379, 22.60909], [79.6, 22.59531], [79.48621, 22.60909], [79.38018, 22.64952], [79.28912, 22.71384], [79.21926, 22.79765], [79.17534, 22.89526], [79.16036, 23.0], [79.17534, 23.10474], [79.21926, 23.20235], [79.28912, 23.28616], [79.38018, 23.35048], [79.48621, 23.39091], [79.6, 23.40469]]]},
+         width_km: 90, center: {lat: 23.0, lon: 79.6}}
+  t1:                        # the revision -- two horizons: "t2" (the two
+                              # CLAIMANT services' exposure, THE FLIP -- this
+                              # cone's centre differs between T3a/T3b, same
+                              # width) and "t6" (storm-svc-1's OWN corridor,
+                              # BYTE-IDENTICAL in both halves -- see the t6
+                              # entry's comment for why this is what grounds
+                              # candidate B's real, non-fabricated cost).
+    t2: {cone: {type: Polygon, coordinates: [[[79.08537, 26.02158], [79.20153, 26.00779], [79.30977, 25.96736], [79.40272, 25.90305], [79.47405, 25.81923], [79.51888, 25.72163], [79.53418, 25.61689], [79.51888, 25.51214], [79.47405, 25.41454], [79.40272, 25.33072], [79.30977, 25.26641], [79.20153, 25.22598], [79.08537, 25.21219], [78.96921, 25.22598], [78.86096, 25.26641], [78.76801, 25.33072], [78.69669, 25.41454], [78.65185, 25.51214], [78.63656, 25.61689], [78.65185, 25.72163], [78.69669, 25.81923], [78.76801, 25.90305], [78.86096, 25.96736], [78.96921, 26.00779], [79.08537, 26.02158]]]},
+         width_km: 90, center: {lat: 25.616886766510603, lon: 79.08536699999999}}
+         # centre 110.0km from the two claimants (d0462, d0212 -- both 100G,
+         # both at (24.627633, 79.08536699999999)) -> p_cut=0.2226 for both
+         # (probe: cut_probability(110.0, 90.0, 74.0) = 0.2226)
+    t6: {cone: {type: Polygon, coordinates: [[[81.32778, 26.29447], [81.73821, 26.24544], [82.12068, 26.10169], [82.44911, 25.87302], [82.70113, 25.57501], [82.85955, 25.22797], [82.91358, 24.85555], [82.85955, 24.48313], [82.70113, 24.1361], [82.44911, 23.83809], [82.12068, 23.60942], [81.73821, 23.46567], [81.32778, 23.41664], [80.91734, 23.46567], [80.53487, 23.60942], [80.20644, 23.83809], [79.95443, 24.1361], [79.796, 24.48313], [79.74197, 24.85555], [79.796, 25.22797], [79.95443, 25.57501], [80.20644, 25.87302], [80.53487, 26.10169], [80.91734, 26.24544], [81.32778, 26.29447]]]},
+         width_km: 320, center: {lat: 24.855553333333333, lon: 81.32777666666667}}
+         # centred ON storm-svc-1 (offset=0) -> p_cut=0.3410 (probe:
+         # cut_probability(0.0, 320.0, 74.0) = 0.3410). Confirmed via
+         # map_geo_event_to_assets at this exact width/centre: exposed
+         # aerial edges are satna<->rewa (storm-svc-1's WORKING corridor)
+         # AND satna<->jhansi (its PROTECTION corridor) -- the widened front
+         # a groom-onto-protection candidate cannot outrun either, which is
+         # why B's real cost below is grounded in the WORKING corridor
+         # staying in place, not in any groom mechanic.
+realized: {}                 # nothing realized-cut this episode -- neither
+                              # storm-svc-1 nor the two claimant services (d0462,
+                              # d0212) are ever cut within this episode's own
+                              # hours. The claimants' exposure is EXPECTED
+                              # capacity at risk LATER (beyond hour t6, this
+                              # episode's own horizon) -- run_episode has no
+                              # code path that could restore a non-SUT service
+                              # anyway (see docs/superpowers/rehearsals/T1.md's
+                              # Q2), so gold.survived below names only
+                              # storm-svc-1, which is trivially satisfied
+                              # (nothing is ever at risk of being dropped
+                              # regardless of the t1 objective choice) --
+                              # matching T2's own realized:{} precedent.
+gold:
+  survived: [storm-svc-1]
+  max_spares_wasted: 0
+  decision_at_t0: wait
+  label: A
+  rationale: |
+    Real menu at t1 under avoid={} (protected=False, basis=physical for menu
+    generation -- basis only matters for validate_plan/commit_plan, never for
+    candidate generation in unprotected mode -- confirmed against
+    route_service.py's source): 10 candidates. candidate_0 is ip_reroute,
+    reusing storm-svc-1's own CURRENT working lightpath (lp-cand-storm-svc-1-0,
+    satna<->rewa<->allahabad) completely UNCHANGED -- restored=300G,
+    shortfall=0G, 0 spare pairs. candidate_4 is optical_reroute, a NEW
+    lightpath via jabalpur (satna<->jabalpur<->damoh<->sagar<->rajgarh<->
+    gwalior<->jhansi<->allahabad) -- restored=300G, shortfall=0G, 1 spare pair
+    (the LAST one on hand). Both candidates fully restore storm-svc-1's 300G;
+    the menu is genuinely identical in both T3 halves (same avoid={}, same
+    candidates, same cost vectors -- confirmed by
+    test_pair_menus_are_identical_under_reference_avoid). Neither candidate
+    shows a Gbps SHORTFALL against storm-svc-1's own demand on this real
+    network (its working AND protection lightpaths are both provisioned at
+    800G, far above its 300G demand, so no reachable groom candidate for
+    storm-svc-1 is ever capacity-limited -- confirmed by exhaustive probing,
+    see docs/superpowers/rehearsals/T3.md's Q0 for the full derivation). The
+    real trade is therefore not "restored vs shortfall" but "exposed vs safe":
+    candidate_0 leaves storm-svc-1 UNCHANGED on the currently-exposed working
+    corridor (satna<->rewa, still inside the widened t6 cone); candidate_4
+    physically moves it off both the working AND protection corridors via
+    jabalpur (validated disjoint under basis=risk_group/level=risk_group --
+    jhansi<->allahabad is buried, so risk-group-basis validation does not
+    treat it as shared with protection even though candidate_4's route ends
+    on it -- the same mechanic T2's rehearsal doc derives in full).
+
+    Candidate B's (candidate_0's) real cost is storm-svc-1's own re-exposure:
+    p_cut(offset=0, width=320, damage_radius=74) = 0.3410 -> 0.3410*300G =
+    102.3 G given up now by staying in place.
+    T3a: 2 claimants (d0462, d0212, 100G each) at p_cut=0.2226 (probe:
+      cut_probability(110.0, 90.0, 74.0)) -> 2*100*0.2226 = 44.5 G expected
+      capacity at risk later.
+      102.3 G given up now > 44.5 G expected later. Correct: A (spend the
+      last spare pair on candidate_4; the future claim is not yet worth
+      insuring against).
+    T3b: 2 claimants (same d0462, d0212) at p_cut=0.8834 (probe:
+      cut_probability(0.0, 90.0, 74.0)) -> 2*100*0.8834 = 176.7 G expected
+      capacity at risk later.
+      102.3 G given up now < 176.7 G expected later. Correct: B (commit
+      candidate_0, keep the last spare pair for the far more valuable future
+      claim).
+    Neither the claimant COUNT (2, equal in both halves), the MENU (identical
+    in both halves), nor storm-svc-1's own re-exposure cost (102.3 G, equal
+    in both halves) separates T3a from T3b -- only the PRODUCT of the two
+    claimants' rate (100G, equal here) and exposure probability (0.2226 vs
+    0.8834, the actual flip) does.
+flip_variable: [claimant, expected, rate, probability]
+metadata:
+  label_rule: chosen_lever_at_decision_hour
+  label_by_lever: {optical_reroute: A, hybrid: A, ip_reroute: B}
+  coherence: {term: transponders, higher_priority_in: T3b}
+  cone_width_km: 320           # EQUAL in T3b -- the SHARED t6 horizon's
+                                # declared width (the t2/claimant horizon's
+                                # width, 90, is EQUAL too, but t6 is what
+                                # grounds the held-equal real cost)
+  cone_motion_kmh: 271.7       # EQUAL in T3b -- offset(t0's t6-forecast
+                                # centre, t1's t6-forecast centre) / 1h
+  n_future_claimants: 2        # EQUAL in T3b
+  exposure_horizon_hours: 2    # EQUAL in T3b -- t6 is hours_ahead=2 from t1
+  spares_on_hand: 1            # EQUAL in T3b
+  widest_avoid_feasible: true  # EQUAL in T3b -- both candidates commit
+                                # cleanly under the SAME fixed avoid={} in
+                                # both halves (constraints is non-flip here)

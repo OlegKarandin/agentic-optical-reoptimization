@@ -26,8 +26,8 @@ TOPOLOGY_PATH = (
     / "src" / "storm_reoptimizer" / "data" / "toy_india_topology.json"
 )
 
-# Extended by Tasks 16-17 to ("T1", "T2", "T3").
-PAIRS = ("T1", "T2")
+# Extended by Task 17 to add "D1" (a diagnostic singleton, not a pair).
+PAIRS = ("T1", "T2", "T3")
 
 
 @pytest.mark.parametrize("pair", PAIRS)
@@ -198,6 +198,74 @@ def test_t2_non_flip_decisions_are_non_binding(
             _connect, scenario, topology_path=TOPOLOGY_PATH,
             gold_decisions=gold_decisions,
             non_flip=("timing", "objective"))
+
+    asyncio.run(_run())
+
+
+# T3's flip variable is `objective` (gold.label is A/B, read off which
+# candidate LEVER actually gets committed at t1 via metadata.label_by_lever),
+# so the two decisions T3 is NOT testing are `timing` and `constraints`. Per
+# chosen_lever_at_decision_hour (scoring.py), a label can only be read off a
+# COMMITTED candidate, so the gold TIMING decision at t1 is "act" in BOTH
+# halves (same reasoning as T2, unlike T1 where gold.label IS the timing
+# action). The gold CONSTRAINTS decision is FIXED to avoid={} (T3's own
+# reference_avoid -- the menu the pair's whole claim rests on being identical
+# in both halves) with basis="risk_group"/level="risk_group": confirmed
+# against the real server that BOTH gold candidates need risk_group-basis
+# validation to commit -- basis="physical"/level="link" makes EITHER
+# candidate collide with storm-svc-1's own static protection leg
+# (jhansi<->allahabad, shared regardless of which corridor the new working
+# path actually uses) via disjointness_collapse, the exact same
+# buried-shared-leg mechanic T2's rehearsal doc derives in full. The gold
+# OBJECTIVE decision is whichever candidate index actually carries each
+# half's lever under this fixed avoid={}: candidate_4 for T3a (optical_reroute
+# via jabalpur, 1 spare pair -- the only lightpath-clean route confirmed
+# genuinely disjoint from protection under basis=risk_group), candidate_0 for
+# T3b (ip_reroute, reusing storm-svc-1's own CURRENT working lightpath
+# unchanged, 0 spare pairs) -- both found by probing the real server, see
+# docs/superpowers/rehearsals/T3.md.
+_T3_NON_FLIP_GOLD_DECISIONS = {
+    "T3a": (
+        TimingDecision("act", "gold"),
+        ConstraintDecision(
+            avoid={}, reasoning="gold", protected=False, best_effort=False,
+            basis="risk_group", level="risk_group"),
+        ObjectiveDecision("candidate_4", None, "gold"),
+    ),
+    "T3b": (
+        TimingDecision("act", "gold"),
+        ConstraintDecision(
+            avoid={}, reasoning="gold", protected=False, best_effort=False,
+            basis="risk_group", level="risk_group"),
+        ObjectiveDecision("candidate_0", None, "gold"),
+    ),
+}
+
+
+@pytest.mark.parametrize("half", ("T3a", "T3b"))
+def test_t3_non_flip_decisions_are_non_binding(
+    half, loaded_state_path, local_server_command, local_server_env,
+):
+    scenario = load_all_scenarios()[half]
+    timing, constraints, objective = _T3_NON_FLIP_GOLD_DECISIONS[half]
+    gold_decisions = {
+        "timing": timing, "constraints": constraints, "objective": objective,
+    }
+
+    async def _run():
+        @asynccontextmanager
+        async def _connect():
+            async with connect_server(
+                TOPOLOGY_PATH, server_command=local_server_command,
+                env=local_server_env,
+                extra_args=["--state", str(loaded_state_path)],
+            ) as client:
+                yield client
+
+        await assert_non_flip_decisions_non_binding(
+            _connect, scenario, topology_path=TOPOLOGY_PATH,
+            gold_decisions=gold_decisions,
+            non_flip=("timing", "constraints"))
 
     asyncio.run(_run())
 
