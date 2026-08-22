@@ -197,3 +197,18 @@ async def assert_non_flip_decisions_non_binding(
                     f"(gold {list(scenario.gold.survived)!r}). The pair is "
                     f"confounded: a lost episode would not say which decision "
                     f"lost it.")
+
+
+def assert_no_single_variable_rule_solves(episodes: list[ScenarioFile]) -> None:
+    """No threshold on any observable, and no parameter-free greedy policy,
+    solves the suite. Static over gold labels and metadata -- cheap, and it
+    fails the build during authoring rather than measuring after the fact."""
+    from .rules import best_rule
+    rule, score = best_rule(episodes)
+    if score >= 1.0:
+        raise PairInvalid(
+            f"a single-variable rule solves the whole suite: {rule.name} "
+            f"scores {score:.2f}. The flip is a threshold (or a greedy "
+            f"one-liner), not a comparison -- rebuild the pair so every "
+            f"enumerated scalar is EQUAL across its halves and the flip lives "
+            f"in the relation between two of them.")

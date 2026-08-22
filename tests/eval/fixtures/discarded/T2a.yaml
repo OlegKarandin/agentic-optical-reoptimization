@@ -1,0 +1,39 @@
+id: T2a
+pair: T2
+seed: 17
+state_file: eval/states/loaded-s17.json
+service_under_test: storm-svc-1
+track: hudhud
+hours: [t0, t1, t2, t3]
+decision_hour: t1
+lead_time_hours: 1
+spares_on_hand: 1
+damage_radius_km: 74
+reference_avoid: {}
+forecast:
+  t0:
+    t3:
+      cone:
+        type: Polygon
+        coordinates: [[[80.0, 20.0], [82.0, 20.0], [82.0, 22.0], [80.0, 22.0], [80.0, 20.0]]]
+      width_km: 90
+      center:
+        lat: 21.0
+        lon: 81.0
+realized:
+  t3: [fiber_004]
+gold:
+  survived: [storm-svc-1]
+  max_spares_wasted: 0
+  decision_at_t0: act
+  label: wide
+  rationale: "discarded draft: kept as a known-bad fixture for the one-variable check. Flips on cone_motion_kmh (a threshold), though beaten by greedy:widest_feasible_avoid."
+flip_variable: [cone]
+metadata:
+  label_rule: timing_at_decision_hour
+  cone_width_km: 150
+  cone_motion_kmh: 30
+  n_future_claimants: 1
+  exposure_horizon_hours: 2
+  spares_on_hand: 1
+  widest_avoid_feasible: true
