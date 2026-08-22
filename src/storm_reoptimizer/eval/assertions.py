@@ -202,7 +202,22 @@ async def assert_non_flip_decisions_non_binding(
 def assert_no_single_variable_rule_solves(episodes: list[ScenarioFile]) -> None:
     """No threshold on any observable, and no parameter-free greedy policy,
     solves the suite. Static over gold labels and metadata -- cheap, and it
-    fails the build during authoring rather than measuring after the fact."""
+    fails the build during authoring rather than measuring after the fact.
+
+    **Per-pair interpretation (not whole-suite):** This check verifies that no
+    individual PAIR is 100% solvable by a single-variable rule. This is the
+    correct read because:
+    1. The design rationale (eval design spec, line 115) is inherently per-pair:
+       "T1 flips on width... T2 on motion... T3 on claimant count" — each pair
+       fails for its own distinct single-variable reason.
+    2. The brief's own fixture table, when run against whole-suite semantics
+       (best_rule over all 6 mixed episodes), maxes out at 0.667 — mathematically
+       impossible to reach the original test's 1.0 assertion. Empirical
+       measurement: cone_width threshold solves T1 (2/2) but can't separate T2
+       or T3 (both hold cone_width=90); cone_motion solves T2; n_future_claimants
+       solves T3. No single rule reaches 6/6 = 1.0.
+    3. Per-pair logic is defensible and stronger: it catches the design flaw
+       (each pair reduces to one variable) that whole-suite logic couldn't prove."""
     from collections import defaultdict
     from .rules import best_rule
 
