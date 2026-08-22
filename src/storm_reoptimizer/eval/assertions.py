@@ -190,7 +190,13 @@ async def assert_non_flip_decisions_non_binding(
                 trace = await run_episode(client, scenario, decider,
                                           topology_path=topology_path)
             survived = episode_metrics(scenario, trace)["services_survived"]
-            if sorted(survived) != sorted(scenario.gold.survived):
+            # NOT exact-set equality -- see scoring.py's survived_matches_gold
+            # comment: services_survived unions in the whole loaded network's
+            # roster (~500+ services on the real eval state), while
+            # gold.survived only ever names the 1-3 services this episode is
+            # actually about. The real check is whether every named service
+            # survived, not whether the two sets are identical.
+            if not set(scenario.gold.survived) <= set(survived):
                 raise PairInvalid(
                     f"{scenario.id}: the {name} decision BINDS -- replacing it "
                     f"with {alternative!r} changed the outcome to {survived!r} "

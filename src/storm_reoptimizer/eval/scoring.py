@@ -100,7 +100,20 @@ def episode_metrics(scenario: ScenarioFile, trace: EpisodeTrace) -> dict:
         "scenario_id": scenario.id,
         "decider": trace.decider_name,
         "services_survived": sorted(survived),
-        "survived_matches_gold": sorted(survived) == sorted(scenario.gold.survived),
+        # NOT exact-set equality: _known_service_ids unions in every service
+        # named in ANY hour's real get_services() roster (the whole loaded
+        # network -- ~500+ background services on the real eval state, by
+        # design, since episode_metrics also needs the full roster for
+        # spares_wasted's ever_affected check below). gold.survived is
+        # always a short, specific list naming the 1-3 services THIS
+        # episode is actually about (e.g. [storm-svc-1, svc-b]) -- it was
+        # never meant to enumerate the whole network. Exact equality can
+        # never be true once the loaded network carries more than a
+        # handful of services (confirmed: it never was, on the real
+        # eval/states/loaded-s17.json state -- found during Task 14's
+        # authoring, 2026-08-22). The correct check is whether every
+        # service gold.survived NAMES actually survived.
+        "survived_matches_gold": set(scenario.gold.survived) <= survived,
         "decision_label": decision_label(scenario, trace),
         "label_correct": decision_label(scenario, trace) == scenario.gold.label,
         "spares_wasted": spares_wasted,
