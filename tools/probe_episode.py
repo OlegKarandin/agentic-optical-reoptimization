@@ -54,8 +54,8 @@ async def probe(topology: Path, state: Path, service: str, lat: float,
             print(f"  {edge.src} <-> {edge.dst}")
 
         menu = await call_tool_json(client, "route_service", {
-            "service_id": service, "protected": True, "basis": "srlg",
-            "level": "srlg", "best_effort": False, "avoid": avoid})
+            "service_id": service, "protected": False, "basis": "physical",
+            "level": "link", "best_effort": False, "avoid": avoid})
         print(f"\n=== route_service({service}, avoid={avoid}) -> "
               f"{menu['status']} ===")
         for i, cand in enumerate(menu["candidates"]):
