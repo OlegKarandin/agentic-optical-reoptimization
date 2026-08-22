@@ -33,11 +33,23 @@ def test_the_check_rejects_the_discarded_drafts(tmp_path):
     """T1's gold was a pure function of "is my service in the cone?", T2's of
     cone_motion, T3's of n_future_claimants. Each is one observable, so a
     one-line rule reproduces it -- the check must say so."""
+    from collections import defaultdict
     episodes = list(load_all_scenarios(DISCARDED).values())
-    rule, score = best_rule(episodes)
-    assert score == pytest.approx(1.0), (
-        f"the discarded drafts are supposed to be solvable by one rule; "
-        f"best was {rule.name} at {score}")
+
+    # Verify that each pair is solvable by a single-variable rule
+    groups: dict[str, list] = defaultdict(list)
+    for e in episodes:
+        key = e.pair or e.id
+        groups[key].append(e)
+
+    for pair_key, pair_episodes in groups.items():
+        if len(pair_episodes) > 1:
+            rule, score = best_rule(pair_episodes)
+            assert score == pytest.approx(1.0), (
+                f"pair {pair_key} should be solvable by one rule; "
+                f"best was {rule.name} at {score}")
+
+    # The check should reject because each pair is solvable by a single variable
     with pytest.raises(PairInvalid, match="single-variable"):
         assert_no_single_variable_rule_solves(episodes)
 

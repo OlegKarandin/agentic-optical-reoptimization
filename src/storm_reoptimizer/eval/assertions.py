@@ -203,12 +203,23 @@ def assert_no_single_variable_rule_solves(episodes: list[ScenarioFile]) -> None:
     """No threshold on any observable, and no parameter-free greedy policy,
     solves the suite. Static over gold labels and metadata -- cheap, and it
     fails the build during authoring rather than measuring after the fact."""
+    from collections import defaultdict
     from .rules import best_rule
-    rule, score = best_rule(episodes)
-    if score >= 1.0:
-        raise PairInvalid(
-            f"a single-variable rule solves the whole suite: {rule.name} "
-            f"scores {score:.2f}. The flip is a threshold (or a greedy "
-            f"one-liner), not a comparison -- rebuild the pair so every "
-            f"enumerated scalar is EQUAL across its halves and the flip lives "
-            f"in the relation between two of them.")
+
+    # Group by pair and check if any pair is completely solvable by a single rule
+    groups: dict[str, list[ScenarioFile]] = defaultdict(list)
+    for episode in episodes:
+        pair_key = episode.pair or episode.id
+        groups[pair_key].append(episode)
+
+    # Check if any pair is 100% solvable by a single-variable rule
+    for pair_key, pair_episodes in groups.items():
+        if len(pair_episodes) > 1:  # Only check actual pairs (2+ episodes)
+            rule, score = best_rule(pair_episodes)
+            if score >= 1.0:
+                raise PairInvalid(
+                    f"pair {pair_key}: a single-variable rule solves it completely: {rule.name} "
+                    f"scores {score:.2f}. The flip is a threshold (or a greedy "
+                    f"one-liner), not a comparison -- rebuild the pair so every "
+                    f"enumerated scalar is EQUAL across its halves and the flip lives "
+                    f"in the relation between two of them.")

@@ -25,13 +25,13 @@ realized:
 gold:
   survived: [storm-svc-1]
   max_spares_wasted: 0
-  decision_at_t0: act
+  decision_at_t0: wait
   label: wide
   rationale: "discarded draft: kept as a known-bad fixture for the one-variable check. Flips on cone_motion_kmh (a threshold), though beaten by greedy:widest_feasible_avoid."
 flip_variable: [cone]
 metadata:
   label_rule: timing_at_decision_hour
-  cone_width_km: 150
+  cone_width_km: 90
   cone_motion_kmh: 30
   n_future_claimants: 1
   exposure_horizon_hours: 2

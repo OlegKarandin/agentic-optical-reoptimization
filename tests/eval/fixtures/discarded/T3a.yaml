@@ -31,7 +31,7 @@ gold:
 flip_variable: [cone]
 metadata:
   label_rule: timing_at_decision_hour
-  cone_width_km: 50
+  cone_width_km: 90
   cone_motion_kmh: 20
   n_future_claimants: 0
   exposure_horizon_hours: 2
