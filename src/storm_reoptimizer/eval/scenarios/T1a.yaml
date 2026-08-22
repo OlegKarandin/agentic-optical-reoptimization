@@ -35,7 +35,20 @@ forecast:
 realized:
   t3: [fiber_allahabad_fatehpur_0, fiber_allahabad_fatehpur_1]
 gold:
-  survived: [storm-svc-1, svc-b]
+  # NOT [storm-svc-1, svc-b]: svc-b is never service_under_test in this pair,
+  # and run_episode only ever acts on service_under_test (runner.py's route_
+  # service/validate_plan/commit_plan calls are all scoped to
+  # scenario.service_under_test) -- there is no mechanism anywhere in this
+  # harness that reroutes or restores a service other than the SUT. svc-b IS
+  # realized-cut at t3 below and, confirmed empirically (a clean gold-decision
+  # replay: zero actions taken, d0029 reported dropped by simulate_ip_routing
+  # with reason "link_down"), it stays down regardless of what storm-svc-1's
+  # decider does. "Hold the spare for svc-b" is the expected-value reasoning
+  # that makes waiting the correct call for storm-svc-1's OWN decision (why
+  # spend the one spare on a 13%-probability threat), not a claim that the
+  # harness actually restores svc-b -- it doesn't, and can't. See
+  # docs/superpowers/rehearsals/T1.md's Q2 for the full writeup.
+  survived: [storm-svc-1]
   max_spares_wasted: 0
   decision_at_t0: wait
   label: wait
@@ -43,12 +56,18 @@ gold:
     At t1, issued_t1 centres the t+3 cone on svc-b (d0029, allahabad<->kanpur, 100G).
       p_cut(svc-b)        = 0.8834 -> expected loss 0.8834 * 100G  = 88.3 G
       p_cut(storm-svc-1)  = 0.1349 -> expected loss 0.1349 * 300G  = 40.5 G
-    One spare pair between them. Spending it on storm-svc-1 forecloses svc-b's
-    only restoration, so the comparison is 0.1349*300G (40.5G) against
-    0.8834*100G (88.3G); the latter dominates. Correct: wait on storm-svc-1,
-    hold the spare.
-    Realized: svc-b is cut at t3 (fiber_allahabad_fatehpur_0/_1) and the held
-    spare restores it.
+    One spare pair between them. storm-svc-1 is the only service this episode's
+    decider can act on, so the real question is whether committing the spare to
+    storm-svc-1 now is worth it. The comparison is 0.1349*300G (40.5G) against
+    0.8834*100G (88.3G); the latter dominates -- svc-b's exposure is by far the
+    larger expected loss, so committing storm-svc-1's own spare to a 13%-odds
+    threat would be spending scarce capacity where it is least needed. Correct:
+    wait on storm-svc-1, hold the spare.
+    Realized: storm-svc-1 is never cut in this half (only svc-b is, at t3 via
+    fiber_allahabad_fatehpur_0/_1) -- confirming "wait" cost nothing. svc-b is
+    NOT restored by anything in this harness (no cross-service restoration
+    exists); it is scored only on storm-svc-1's survival and on storm-svc-1's
+    own spare not being wasted.
 flip_variable: [svc-b, cone, centre, spare]
 metadata:
   label_rule: timing_at_decision_hour

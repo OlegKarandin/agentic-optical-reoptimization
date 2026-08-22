@@ -25,7 +25,14 @@ forecast:
 realized:
   t3: [fiber_satna_rewa_0]
 gold:
-  survived: [storm-svc-1, svc-b]
+  # d0029, not the literal alias "svc-b" -- the harness's own service roster
+  # (get_services(), simulate_ip_routing's dropped list) only ever uses real
+  # ids; "svc-b" never appears anywhere the scoring code looks, so a literal
+  # "svc-b" here could never be found in `survived` regardless of outcome.
+  # svc-b is never realized-cut in T1b (see `realized` above -- only
+  # storm-svc-1's own fiber is), so it trivially survives in every replay;
+  # naming it correctly here is just precision, not a load-bearing check.
+  survived: [storm-svc-1, d0029]
   max_spares_wasted: 0
   decision_at_t0: wait
   label: act
