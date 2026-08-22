@@ -1,0 +1,88 @@
+id: D1
+# no `pair` key: D1 is a singleton diagnostic, excluded from pair_solved
+# (rules.py's _by_pair groups it alone under its own id, and
+# assert_no_single_variable_rule_solves only checks groups of size > 1 --
+# a lone episode is trivially "solved" by any rule and that is fine, since
+# this episode's job is attribution, not discrimination against a twin).
+seed: 17
+state_file: eval/states/loaded-s17.json
+service_under_test: storm-svc-1
+track: hudhud
+hours: [t0, t1]
+decision_hour: t0
+lead_time_hours: 1
+spares_on_hand: 2            # transponder PAIRS: two on hand, so acting is
+                              # never a scarcity trade -- the whole point of
+                              # this episode is that "hold the spare" has no
+                              # excuse here (design doc's "Why D1 exists")
+damage_radius_km: 74
+reference_avoid:             # NOT {} -- see "The real mechanics" below. This
+                              # is also the ACTUAL avoid the gold act uses.
+  assets: [fiber_satna_rewa_0, fiber_rewa_satna_0,
+           fiber_satna_jhansi_0, fiber_satna_jhansi_1, fiber_satna_jhansi_2,
+           fiber_jhansi_satna_0, fiber_jhansi_satna_1, fiber_jhansi_satna_2]
+forecast:
+  t0:                         # one issuance, one horizon -- decision_hour IS
+                              # t0, so there is nothing to revise; D1 has no
+                              # "what wait buys" horizon by design (waiting
+                              # past t0 forecloses action entirely, since
+                              # lead_time_hours=1 == hours to exposure)
+    t1: {cone: {type: Polygon, coordinates: [[[80.83333, 24.65078], [80.85253, 24.64848], [80.87042, 24.64174], [80.88578, 24.63102], [80.89757, 24.61705], [80.90497, 24.60079], [80.9075, 24.58333], [80.90497, 24.56587], [80.89757, 24.54961], [80.88578, 24.53564], [80.87042, 24.52492], [80.85253, 24.51818], [80.83333, 24.51588], [80.81413, 24.51818], [80.79624, 24.52492], [80.78088, 24.53564], [80.76909, 24.54961], [80.76169, 24.56587], [80.75916, 24.58333], [80.76169, 24.60079], [80.76909, 24.61705], [80.78088, 24.63102], [80.79624, 24.64174], [80.81413, 24.64848], [80.83333, 24.65078]]]},
+         width_km: 15, center: {lat: 24.58333, lon: 80.83333}}
+         # centred on satna -- the node where BOTH of storm-svc-1's
+         # corridors originate -- not on storm-svc-1's own representative
+         # point (24.855553333333333, 81.32777666666667). offset(storm-svc-1)
+         # = 58.4457km -> p_cut = 0.9761 (probe: cut_probability(58.4457,
+         # 15.0, 74.0)). Confirmed via map_geo_event_to_assets at this exact
+         # width/centre: exposed aerial edges are satna<->rewa (WORKING) and
+         # satna<->jhansi (PROTECTION) -- both corridors, same mechanic T2's
+         # rehearsal doc derives for the far horizon. Every other service's
+         # offset from THIS centre is >=91.7km (nearest: d0361, p_cut=0.0120)
+         # -- see "The real mechanics" below for why the centre moved off
+         # storm-svc-1's own point.
+realized:
+  t1: [fiber_satna_rewa_0]     # storm-svc-1's own WORKING-path fiber --
+                                # confirmed against the real server:
+                                # get_affected_services(fiber_satna_rewa_0)
+                                # returns storm-svc-1 (and d0423, incidental)
+                                # BEFORE any reroute. If the gold act commits
+                                # at t0 (effective_at_index = index(t1)),
+                                # storm-svc-1 is off this fiber before the
+                                # cut lands; if the decider waits, this same
+                                # cut downs it.
+gold:
+  survived: [storm-svc-1]
+  max_spares_wasted: 0
+  decision_at_t0: act
+  label: act
+  rationale: |
+    180 km cone at t+1, storm-svc-1 dead-centre -- the design doc's own
+    framing; the PROBED geometry deviates from a literal 180km/storm-svc-1's-
+    own-point cone for two reasons carried over from real testing (see "The
+    real mechanics" below), but the substance is unchanged: p_cut(storm-svc-1)
+    = 0.9761, no other service in any cone hour exceeds p_cut = 0.0120
+    (n_future_claimants = 0), 2 spare pairs free. Hours to exposure (1)
+    equals the optical_reroute lead time, so waiting past t0 forecloses
+    action entirely -- t0 is both the decision hour and the only hour before
+    the storm reaches its own currently-exposed corridor. Expected cost of
+    acting ~ 0 (no competing claimant for either spare pair, and 1 remains
+    on hand afterward regardless) against 0.9761 * 300G = 292.8 G of expected
+    loss if the network waits and the working-path fiber (fiber_satna_rewa_0)
+    goes down as realized at t1. Correct: act at t0.
+
+    PRECONDITION: the menu contains no ip_reroute candidate.
+    test_d1_menu_contains_no_ip_reroute_candidate asserts this for real
+    against the live server. A zero-lead-time option would make waiting free
+    and silently invert this label -- see "The real mechanics" below for why
+    this needed a non-trivial reference_avoid to hold.
+flip_variable: [uncontested, spare, lead]
+metadata:
+  label_rule: timing_at_decision_hour
+  cone_width_km: 15             # NOT 180 -- see "The real mechanics" below
+  cone_motion_kmh: 0.0           # single issuance, no revision to diff
+                                  # against (D1 has only one forecast entry)
+  n_future_claimants: 0
+  exposure_horizon_hours: 1
+  spares_on_hand: 2
+  widest_avoid_feasible: true
+  no_ip_reroute_in_menu: true

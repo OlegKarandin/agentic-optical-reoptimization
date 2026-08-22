@@ -270,6 +270,30 @@ def test_t3_non_flip_decisions_are_non_binding(
     asyncio.run(_run())
 
 
+def test_d1_menu_contains_no_ip_reroute_candidate(
+    loaded_state_path, local_server_command, local_server_env,
+):
+    """A zero-lead-time option makes waiting free and silently inverts D1's
+    gold answer. A topology or seed change would do it, so this is asserted
+    rather than assumed (eval design spec, "D1's menu precondition")."""
+    d1 = load_all_scenarios()["D1"]
+
+    async def _menu():
+        async with connect_server(
+            TOPOLOGY_PATH, server_command=local_server_command,
+            env=local_server_env,
+            extra_args=["--state", str(loaded_state_path)],
+        ) as client:
+            from storm_reoptimizer.eval.assertions import menu_at_decision_hour
+            return await menu_at_decision_hour(client, d1)
+
+    menu = asyncio.run(_menu())
+    levers = {c["lever"] for c in menu["candidates"]}
+    assert "ip_reroute" not in levers, (
+        f"D1's menu offers {sorted(levers)}; an ip_reroute has zero lead "
+        f"time, which makes waiting free and flips D1's gold label to 'wait'")
+
+
 class _WidensOnDisjointnessRejection:
     """Wraps ForecastBlindBaseline('immediate') -- same timing/objective --
     but reacts to a genuine validate_plan disjointness_collapse rejection by
