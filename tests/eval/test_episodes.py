@@ -10,7 +10,10 @@ import pytest
 from storm_reoptimizer.eval.assertions import (
     assert_each_baseline_variant_ties, assert_gold_choices_differ,
     assert_issuance_prefix_shared, assert_menus_identical,
-    assert_shared_scalars_equal,
+    assert_non_flip_decisions_non_binding, assert_shared_scalars_equal,
+)
+from storm_reoptimizer.eval.decisions import (
+    ConstraintDecision, ObjectiveDecision, TimingDecision,
 )
 from storm_reoptimizer.eval.scenario_file import load_all_scenarios
 from storm_reoptimizer.mcp_client import connect_server
@@ -81,5 +84,53 @@ def test_each_baseline_variant_scores_exactly_one_half(
         # corrupted the second replay with state the first had mutated).
         await assert_each_baseline_variant_ties(
             _connect, _connect, a, b, topology_path=TOPOLOGY_PATH)
+
+    asyncio.run(_run())
+
+
+# T1's flip variable is `timing`, so gold.label IS the gold timing action;
+# the two decisions this pair is NOT testing are `constraints` and
+# `objective`. This test exists BECAUSE its absence let two real bugs slip
+# through Task 14's own review three times over -- the assertion had only
+# ever been reasoned about from a probed menu, never actually run against
+# the live server (see docs/superpowers/rehearsals/T1.md's Q2 and the SDD
+# ledger's Task-14-reopened-3rd-time entry). Tasks 15/16 (T2, T3) must add
+# their own equivalent test when they author those pairs: gold.label there
+# encodes the constraints/objective flip, not timing, so the gold_decisions
+# mapping below does not generalize as-is -- it needs a pair-specific
+# translation from that pair's own gold.label into a decision object.
+_T1_NON_FLIP_GOLD_DECISIONS = {
+    "T1a": TimingDecision("wait", "gold"),
+    "T1b": TimingDecision("act", "gold"),
+}
+
+
+@pytest.mark.parametrize("half", ("T1a", "T1b"))
+def test_t1_non_flip_decisions_are_non_binding(
+    half, loaded_state_path, local_server_command, local_server_env,
+):
+    scenario = load_all_scenarios()[half]
+    gold_decisions = {
+        "timing": _T1_NON_FLIP_GOLD_DECISIONS[half],
+        "constraints": ConstraintDecision(
+            avoid={}, reasoning="gold", protected=False, basis="physical",
+            level="link"),
+        "objective": ObjectiveDecision("candidate_0", None, "gold"),
+    }
+
+    async def _run():
+        @asynccontextmanager
+        async def _connect():
+            async with connect_server(
+                TOPOLOGY_PATH, server_command=local_server_command,
+                env=local_server_env,
+                extra_args=["--state", str(loaded_state_path)],
+            ) as client:
+                yield client
+
+        await assert_non_flip_decisions_non_binding(
+            _connect, scenario, topology_path=TOPOLOGY_PATH,
+            gold_decisions=gold_decisions,
+            non_flip=("constraints", "objective"))
 
     asyncio.run(_run())
