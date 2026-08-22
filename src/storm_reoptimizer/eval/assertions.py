@@ -50,9 +50,11 @@ PLAUSIBLE_ALTERNATIVES = {
     "timing": [TimingDecision("act", "alternative: act at once"),
                TimingDecision("wait", "alternative: hold")],
     "constraints": [
-        ConstraintDecision(avoid={}, reasoning="alternative: unconstrained"),
+        ConstraintDecision(avoid={}, reasoning="alternative: unconstrained",
+                           protected=False, basis="physical", level="link"),
         ConstraintDecision(avoid={"risk_groups": []},
-                           reasoning="alternative: empty risk-group avoid")],
+                           reasoning="alternative: empty risk-group avoid",
+                           protected=False, basis="physical", level="link")],
     "objective": [
         ObjectiveDecision("candidate_0", None, "alternative: first candidate"),
         ObjectiveDecision("candidate_1", None, "alternative: second candidate")],
@@ -142,17 +144,23 @@ async def assert_menus_identical(client_a: Client, client_b: Client,
 
 
 async def assert_each_baseline_variant_ties(
-    client_a: Client, client_b: Client, a: ScenarioFile, b: ScenarioFile, *,
+    client_factory_a, client_factory_b, a: ScenarioFile, b: ScenarioFile, *,
     topology_path: str | Path,
 ) -> None:
     """Per variant, separately: each individual fixed policy must answer both
-    halves identically. Not that the two variants agree with each other."""
+    halves identically. Not that the two variants agree with each other.
+    `client_factory_a`/`client_factory_b` are async context manager factories
+    yielding a FRESH server connection per replay -- each run_episode call
+    mutates state, so reusing one connection across variants would replay
+    the second variant against state already mutated by the first."""
     for variant in BASELINE_VARIANTS:
         labels = []
-        for client, scenario in ((client_a, a), (client_b, b)):
-            trace = await run_episode(client, scenario,
-                                      ForecastBlindBaseline(variant),
-                                      topology_path=topology_path)
+        for client_factory, scenario in ((client_factory_a, a),
+                                         (client_factory_b, b)):
+            async with client_factory() as client:
+                trace = await run_episode(client, scenario,
+                                          ForecastBlindBaseline(variant),
+                                          topology_path=topology_path)
             labels.append(decision_label(scenario, trace))
         if labels[0] != labels[1]:
             raise PairInvalid(
