@@ -120,8 +120,8 @@ async def menu_at_decision_hour(client: Client, scenario: ScenarioFile) -> dict:
             await call_tool_json(client, "inject_failure",
                                  {"asset_ids": list(cuts)})
     return await call_tool_json(client, "route_service", {
-        "service_id": scenario.service_under_test, "protected": True,
-        "basis": "srlg", "level": "srlg", "best_effort": False,
+        "service_id": scenario.service_under_test, "protected": False,
+        "basis": "physical", "level": "link", "best_effort": False,
         "avoid": scenario.reference_avoid})
 
 
