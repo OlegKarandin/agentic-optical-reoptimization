@@ -31,7 +31,14 @@ BENEFIT_TERMS = frozenset({"total_margin"})
 _AVOID_KEYS = {"assets", "srlgs", "risk_groups"}
 _ACTIONS = {"act", "wait"}
 _BASES = {"physical", "srlg", "risk_group"}
-_LEVELS = {"link", "srlg", "node"}
+# `risk_group` is load-bearing, not decorative: T2a/T3a/T3b's gold
+# constraint decision only validates under basis="risk_group"/
+# level="risk_group" (the buried-shared-leg mechanic their rehearsal docs
+# derive), so leaving it out made 3 of 7 episodes' gold answers
+# unrepresentable by anything that goes through from_dict/the JSON schema
+# -- i.e. by step 6's LLM decider. Added 2026-08-23 (whole-branch review
+# finding C3).
+_LEVELS = {"link", "srlg", "node", "risk_group"}
 
 
 class DecisionError(ValueError):
@@ -75,10 +82,23 @@ class ConstraintDecision:
     The baseline pins all four, so the fields cost the comparison nothing."""
     avoid: dict
     reasoning: str
-    protected: bool = True
+    # The defaults are the POSTURE THIS PROJECT ACTUALLY USES, not the
+    # server signature's own. Every real call site on this branch --
+    # baseline.ForecastBlindBaseline.constraints, assertions.
+    # PLAUSIBLE_ALTERNATIVES, assertions.menu_at_decision_hour, tools/
+    # probe_episode.py, tools/build_eval_state.py, and every gold decision in
+    # tests/eval/test_episodes.py -- passes protected=False/basis="physical"/
+    # level="link" explicitly, and ZERO of them wanted protected=True/srlg.
+    # The toy topology carries no static SRLGs (basis="srlg" is a no-op on
+    # it) and protected=True populates route_service's `pairs` menu, which
+    # plan_from_candidate cannot translate. Defaulting to the unused posture
+    # was a pure trap for anything that constructs a ConstraintDecision
+    # without naming every field. Flipped 2026-08-23 (whole-branch review
+    # finding I5).
+    protected: bool = False
     best_effort: bool = False
-    basis: str = "srlg"
-    level: str = "srlg"
+    basis: str = "physical"
+    level: str = "link"
 
     @classmethod
     def from_dict(cls, payload: dict) -> "ConstraintDecision":
@@ -91,14 +111,14 @@ class ConstraintDecision:
             raise DecisionError(
                 f"constraints: `avoid` has unknown key(s) {sorted(unknown)}; "
                 f"allowed: {sorted(_AVOID_KEYS)}")
-        basis = payload.get("basis", "srlg")
-        level = payload.get("level", "srlg")
+        basis = payload.get("basis", "physical")
+        level = payload.get("level", "link")
         if basis not in _BASES:
             raise DecisionError(f"constraints: unknown basis {basis!r}")
         if level not in _LEVELS:
             raise DecisionError(f"constraints: unknown level {level!r}")
         return cls(avoid=avoid, reasoning=reasoning,
-                   protected=bool(payload.get("protected", True)),
+                   protected=bool(payload.get("protected", False)),
                    best_effort=bool(payload.get("best_effort", False)),
                    basis=basis, level=level)
 

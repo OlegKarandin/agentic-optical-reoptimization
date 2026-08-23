@@ -23,10 +23,39 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Callable
 
+from .derived import DERIVED_VARS
 from .scenario_file import ScenarioFile
 
+# What an episode's AUTHOR declared.
 OBSERVABLE_VARS = ("cone_width_km", "cone_motion_kmh", "n_future_claimants",
                    "exposure_horizon_hours", "spares_on_hand")
+
+# ...plus what the forecast geometry actually IMPLIES, whether or not anyone
+# declared it. `DERIVED_VARS` (derived.py) is the second list, and the reason
+# it exists: for three rounds of review, T1's halves differed by
+# p_cut(storm-svc-1) = 0.1349 vs 0.8834 at the exposure horizon -- a bare
+# threshold that answers the pair 2/2 with no reasoning at all -- and this
+# enumeration could not see it, because nobody had typed that number into
+# `metadata`. An episode author cannot be trusted to declare the variable
+# that breaks their own episode; the check has to derive it. Derived values
+# are supplied per episode by the caller (they need a live server to read the
+# service under test's real coordinates), so every function here takes an
+# optional `derived` map and falls back to metadata alone when none is given.
+ENUMERATED_VARS = OBSERVABLE_VARS + DERIVED_VARS
+
+# scenario id -> {var: value}, as produced by
+# derived.DerivedGeometry.scalars().
+DerivedMap = dict[str, dict[str, float]]
+
+
+def observables(episode: ScenarioFile,
+                derived: DerivedMap | None = None) -> dict:
+    """One episode's declared metadata, overlaid with any derived-geometry
+    scalars supplied for it. Derived wins on a name collision: it is the
+    measured value, and the declaration is the claim about it."""
+    values = dict(episode.metadata)
+    values.update((derived or {}).get(episode.id, {}))
+    return values
 
 
 @dataclass(frozen=True)
@@ -37,19 +66,20 @@ class Rule:
     side: Callable[[ScenarioFile], str]
 
 
-def threshold_rules(episodes: list[ScenarioFile], var: str) -> list[Rule]:
+def threshold_rules(episodes: list[ScenarioFile], var: str,
+                    derived: DerivedMap | None = None) -> list[Rule]:
     """Every split point over the suite for one observable. Split points are
     the midpoints between adjacent distinct values -- exhaustive, because the
     episode set is small enough to score every one of them."""
-    values = sorted({e.metadata[var] for e in episodes
-                     if var in e.metadata})
+    seen = [observables(e, derived) for e in episodes]
+    values = sorted({v[var] for v in seen if var in v})
     thresholds = [(lo + hi) / 2.0 for lo, hi in zip(values, values[1:])]
     rules = []
     for threshold in thresholds:
         rules.append(Rule(
             name=f"threshold:{var}<{threshold:g}",
-            side=lambda e, v=var, t=threshold: (
-                "lo" if e.metadata.get(v, 0) < t else "hi")))
+            side=lambda e, v=var, t=threshold, d=derived: (
+                "lo" if observables(e, d).get(v, 0) < t else "hi")))
     return rules
 
 
@@ -67,10 +97,11 @@ def greedy_rules() -> list[Rule]:
     ]
 
 
-def candidate_rules(episodes: list[ScenarioFile]) -> list[Rule]:
+def candidate_rules(episodes: list[ScenarioFile],
+                    derived: DerivedMap | None = None) -> list[Rule]:
     rules: list[Rule] = []
-    for var in OBSERVABLE_VARS:
-        rules.extend(threshold_rules(episodes, var))
+    for var in ENUMERATED_VARS:
+        rules.extend(threshold_rules(episodes, var, derived))
     rules.extend(greedy_rules())
     return rules
 
@@ -97,7 +128,8 @@ def score_rule(rule: Rule, episodes: list[ScenarioFile]) -> float:
     return correct / len(episodes)
 
 
-def best_rule(episodes: list[ScenarioFile]) -> tuple[Rule, float]:
+def best_rule(episodes: list[ScenarioFile],
+              derived: DerivedMap | None = None) -> tuple[Rule, float]:
     scored = [(rule, score_rule(rule, episodes))
-              for rule in candidate_rules(episodes)]
+              for rule in candidate_rules(episodes, derived)]
     return max(scored, key=lambda item: item[1])

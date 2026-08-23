@@ -2,8 +2,8 @@
 import pytest
 
 from storm_reoptimizer.eval.decisions import (
-    COST_TERMS, ConstraintDecision, DecisionError, ObjectiveDecision,
-    TimingDecision, candidate_index, rank_by_priority,
+    CONSTRAINT_JSON_SCHEMA, COST_TERMS, ConstraintDecision, DecisionError,
+    ObjectiveDecision, TimingDecision, candidate_index, rank_by_priority,
 )
 
 
@@ -26,11 +26,49 @@ def test_reasoning_is_mandatory_on_all_three_decisions():
 
 
 def test_constraint_decision_defaults_the_protection_posture():
+    """The default is the posture this project actually uses, NOT the
+    server signature's own. It used to be protected=True/srlg/srlg, and the
+    whole-branch review (2026-08-23, finding I5) confirmed that ZERO of the
+    7+ real call sites on this branch wanted that -- every one of them
+    passed protected=False/basis="physical"/level="link" explicitly, so the
+    old default was a pure trap for anything constructing a
+    ConstraintDecision without naming every field."""
     d = ConstraintDecision.from_dict(
         {"avoid": {"risk_groups": ["rg_t3"]}, "reasoning": "clear of t+3"})
     assert d.avoid == {"risk_groups": ["rg_t3"]}
     assert (d.protected, d.best_effort, d.basis, d.level) == (
-        True, False, "srlg", "srlg")
+        False, False, "physical", "link")
+    # The bare constructor and from_dict must agree -- they are two of the
+    # three paths into this object (ScriptedDecider's own fallback is the
+    # third) and a divergence between them would be invisible.
+    bare = ConstraintDecision(avoid={}, reasoning="x")
+    assert (bare.protected, bare.best_effort, bare.basis, bare.level) == (
+        False, False, "physical", "link")
+
+
+def test_risk_group_is_a_legal_constraint_level():
+    """T2a/T3a/T3b's gold decisions only validate under basis="risk_group"/
+    level="risk_group". _LEVELS omitted it until 2026-08-23 (whole-branch
+    review finding C3), which made those three gold answers unrepresentable
+    by anything that goes through from_dict or the JSON schema -- i.e. by
+    step 6's schema-constrained LLM decider. The tests that construct them
+    directly never noticed, because the constructor does no validation."""
+    payload = {"avoid": {"risk_groups": ["rg_T2a_t1_t6"]},
+               "reasoning": "avoid the full t+6 cone",
+               "protected": False, "best_effort": False,
+               "basis": "risk_group", "level": "risk_group"}
+    d = ConstraintDecision.from_dict(payload)
+    assert (d.basis, d.level) == ("risk_group", "risk_group")
+    assert d.to_dict() == payload
+    assert ConstraintDecision.from_dict(d.to_dict()) == d
+    assert "risk_group" in CONSTRAINT_JSON_SCHEMA["properties"]["level"]["enum"]
+    assert "risk_group" in CONSTRAINT_JSON_SCHEMA["properties"]["basis"]["enum"]
+
+
+def test_constraint_decision_rejects_an_unknown_level():
+    with pytest.raises(DecisionError, match="level"):
+        ConstraintDecision.from_dict(
+            {"avoid": {}, "reasoning": "x", "level": "continent"})
 
 
 def test_constraint_decision_rejects_an_unknown_avoid_key():

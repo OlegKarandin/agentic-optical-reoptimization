@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from storm_reoptimizer.eval.assertions import (
+    assert_declared_scalars_match_derived_geometry,
     assert_each_baseline_variant_ties, assert_gold_choices_differ,
     assert_issuance_prefix_shared, assert_menus_identical,
     assert_non_flip_decisions_non_binding, assert_shared_scalars_equal,
@@ -63,6 +64,39 @@ def test_pair_menus_are_identical_under_reference_avoid(
                        local_server_env))
 
 
+async def _derived(a, b, state_path, server_command, server_env):
+    @asynccontextmanager
+    async def _connect():
+        async with connect_server(
+            TOPOLOGY_PATH, server_command=server_command, env=server_env,
+            extra_args=["--state", str(state_path)],
+        ) as client:
+            yield client
+
+    async with _connect() as client_a, _connect() as client_b:
+        await assert_declared_scalars_match_derived_geometry(
+            client_a, client_b, a, b, topology_path=TOPOLOGY_PATH)
+
+
+@pytest.mark.parametrize("pair", PAIRS)
+def test_pair_derived_geometry_is_equal_across_the_halves(
+    pair, loaded_state_path, local_server_command, local_server_env,
+):
+    """test_pair_passes_the_static_assertions checks the scalars the episode's
+    AUTHOR declared. This checks the ones its `forecast` block actually
+    implies -- the service under test's real p_cut at the exposure horizon,
+    the decision-hour issuance's own within-issuance cone motion, and every
+    horizon's real width (whole-branch review 2026-08-23, finding C2).
+
+    MCP-backed, and one fresh connection per half, because the p_cut needs the
+    service under test's real working-path coordinates -- the same contract
+    test_pair_menus_are_identical_under_reference_avoid already has."""
+    episodes = load_all_scenarios()
+    asyncio.run(_derived(episodes[f"{pair}a"], episodes[f"{pair}b"],
+                         loaded_state_path, local_server_command,
+                         local_server_env))
+
+
 @pytest.mark.parametrize("pair", PAIRS)
 def test_each_baseline_variant_scores_exactly_one_half(
     pair, loaded_state_path, local_server_command, local_server_env,
@@ -102,9 +136,16 @@ def test_each_baseline_variant_scores_exactly_one_half(
 # encodes the constraints/objective flip, not timing, so the gold_decisions
 # mapping below does not generalize as-is -- it needs a pair-specific
 # translation from that pair's own gold.label into a decision object.
+# Both halves declare `gold.decision_at_t0: wait`, so the gold TIMING
+# DEFAULT is "wait" in both and T1b's gold.label ("act") is scripted at the
+# decision hour only. Passing the label as a bare default would replay a
+# rollout that also acts at t0 -- not the gold rollout. That mistake was live
+# in T2/T3's fixtures below until 2026-08-23, where it really did move the
+# graded label; see assert_non_flip_decisions_non_binding's docstring.
 _T1_NON_FLIP_GOLD_DECISIONS = {
-    "T1a": TimingDecision("wait", "gold"),
-    "T1b": TimingDecision("act", "gold"),
+    "T1a": (TimingDecision("wait", "gold"), None),
+    "T1b": (TimingDecision("wait", "gold: hold at t0, per gold.decision_at_t0"),
+            TimingDecision("act", "gold: act at the decision hour")),
 }
 
 
@@ -113,13 +154,16 @@ def test_t1_non_flip_decisions_are_non_binding(
     half, loaded_state_path, local_server_command, local_server_env,
 ):
     scenario = load_all_scenarios()[half]
+    default_timing, timing_at_d = _T1_NON_FLIP_GOLD_DECISIONS[half]
     gold_decisions = {
-        "timing": _T1_NON_FLIP_GOLD_DECISIONS[half],
+        "timing": default_timing,
         "constraints": ConstraintDecision(
             avoid={}, reasoning="gold", protected=False, basis="physical",
             level="link"),
         "objective": ObjectiveDecision("candidate_0", None, "gold"),
     }
+    gold_by_hour = ({"timing": {scenario.decision_hour: timing_at_d}}
+                    if timing_at_d else None)
 
     async def _run():
         @asynccontextmanager
@@ -133,7 +177,7 @@ def test_t1_non_flip_decisions_are_non_binding(
 
         await assert_non_flip_decisions_non_binding(
             _connect, scenario, topology_path=TOPOLOGY_PATH,
-            gold_decisions=gold_decisions,
+            gold_decisions=gold_decisions, gold_by_hour=gold_by_hour,
             non_flip=("constraints", "objective"))
 
     asyncio.run(_run())
@@ -180,9 +224,14 @@ def test_t2_non_flip_decisions_are_non_binding(
 ):
     scenario = load_all_scenarios()[half]
     timing, constraints, objective = _T2_NON_FLIP_GOLD_DECISIONS[half]
+    # T2a/T2b both declare `gold.decision_at_t0: wait`: gold HOLDS at t0 and
+    # acts at t1. See _T1_NON_FLIP_GOLD_DECISIONS' comment.
     gold_decisions = {
-        "timing": timing, "constraints": constraints, "objective": objective,
+        "timing": TimingDecision("wait", "gold: hold at t0, per "
+                                         "gold.decision_at_t0"),
+        "constraints": constraints, "objective": objective,
     }
+    gold_by_hour = {"timing": {scenario.decision_hour: timing}}
 
     async def _run():
         @asynccontextmanager
@@ -196,7 +245,7 @@ def test_t2_non_flip_decisions_are_non_binding(
 
         await assert_non_flip_decisions_non_binding(
             _connect, scenario, topology_path=TOPOLOGY_PATH,
-            gold_decisions=gold_decisions,
+            gold_decisions=gold_decisions, gold_by_hour=gold_by_hour,
             non_flip=("timing", "objective"))
 
     asyncio.run(_run())
@@ -248,9 +297,18 @@ def test_t3_non_flip_decisions_are_non_binding(
 ):
     scenario = load_all_scenarios()[half]
     timing, constraints, objective = _T3_NON_FLIP_GOLD_DECISIONS[half]
+    # T3a/T3b both declare `gold.decision_at_t0: wait`. Acting at t0 as well
+    # is not merely off-gold here, it CHANGES THE GRADED LABEL: the t0 commit
+    # reroutes storm-svc-1, so by t1 `candidate_4` is an ip_reroute rather
+    # than the optical_reroute T3a was authored against, and T3a reads "B"
+    # where gold says "A". Found 2026-08-23, once this assertion started
+    # scoring the label instead of survival (whole-branch review finding I1).
     gold_decisions = {
-        "timing": timing, "constraints": constraints, "objective": objective,
+        "timing": TimingDecision("wait", "gold: hold at t0, per "
+                                         "gold.decision_at_t0"),
+        "constraints": constraints, "objective": objective,
     }
+    gold_by_hour = {"timing": {scenario.decision_hour: timing}}
 
     async def _run():
         @asynccontextmanager
@@ -264,7 +322,7 @@ def test_t3_non_flip_decisions_are_non_binding(
 
         await assert_non_flip_decisions_non_binding(
             _connect, scenario, topology_path=TOPOLOGY_PATH,
-            gold_decisions=gold_decisions,
+            gold_decisions=gold_decisions, gold_by_hour=gold_by_hour,
             non_flip=("timing", "constraints"))
 
     asyncio.run(_run())

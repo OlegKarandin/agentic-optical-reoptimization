@@ -1,6 +1,7 @@
 """The one-variable check (eval design spec, "The one-variable check"), and
 the fixtures that prove it fires. "An assertion never seen to fire is not
 known to work, and this one's whole job is to fire during authoring." """
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -8,12 +9,18 @@ import pytest
 from storm_reoptimizer.eval.assertions import (
     PairInvalid, assert_no_single_variable_rule_solves,
 )
+from storm_reoptimizer.eval.derived import derived_scalars_for
 from storm_reoptimizer.eval.rules import (
     OBSERVABLE_VARS, best_rule, candidate_rules, score_rule,
 )
 from storm_reoptimizer.eval.scenario_file import load_all_scenarios
+from storm_reoptimizer.mcp_client import connect_server
 
 DISCARDED = Path(__file__).parent / "fixtures" / "discarded"
+TOPOLOGY_PATH = (
+    Path(__file__).parent.parent.parent
+    / "src" / "storm_reoptimizer" / "data" / "toy_india_topology.json"
+)
 
 
 def test_the_enumerated_observables_are_the_five_the_spec_names():
@@ -69,3 +76,41 @@ def test_the_shipped_suite_is_not_solved_by_any_single_rule():
     if len(episodes) < 7:
         pytest.skip("episodes not authored yet (Tasks 14-17)")
     assert_no_single_variable_rule_solves(episodes)
+
+
+def test_the_shipped_suite_is_not_solved_by_any_rule_over_DERIVED_geometry(
+    loaded_state_path, local_server_command, local_server_env,
+):
+    """The same check, over the numbers the episodes' `forecast` blocks
+    actually imply rather than the ones their authors typed into `metadata`
+    (whole-branch review 2026-08-23, finding C2).
+
+    The test above it is the one that was green through four reviews of T1
+    while `p_cut(storm-svc-1)` at T1's exposure horizon sat at 0.1349 in one
+    half and 0.8834 in the other -- a bare threshold on a single number,
+    no comparison to the competing claimant and no reasoning of any kind,
+    answering the pair 2/2. It could not see that, because `OBSERVABLE_VARS`
+    only ever read author-declared metadata and nobody had declared it. An
+    episode author cannot be trusted to declare the variable that breaks
+    their own episode.
+
+    MCP-backed because the derived value needs the service under test's REAL
+    working-path coordinates (`runner.service_points`), which only the server
+    knows. One connection for the whole suite: every shipped episode names the
+    same `state_file`, so the point is the same number seven times, and
+    `derived_scalars_for` asserts that rather than assuming it."""
+    episodes = list(load_all_scenarios().values())
+    if len(episodes) < 7:
+        pytest.skip("episodes not authored yet (Tasks 14-17)")
+
+    async def _derived():
+        async with connect_server(
+            TOPOLOGY_PATH, server_command=local_server_command,
+            env=local_server_env,
+            extra_args=["--state", str(loaded_state_path)],
+        ) as client:
+            return await derived_scalars_for(client, episodes,
+                                             topology_path=TOPOLOGY_PATH)
+
+    derived = asyncio.run(_derived())
+    assert_no_single_variable_rule_solves(episodes, derived)

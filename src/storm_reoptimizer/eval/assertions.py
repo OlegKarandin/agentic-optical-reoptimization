@@ -35,6 +35,7 @@ from mcp.client import Client
 from ..mcp_client import call_tool_json
 from .baseline import BASELINE_VARIANTS, ForecastBlindBaseline, ScriptedDecider
 from .decisions import ConstraintDecision, ObjectiveDecision, TimingDecision
+from .derived import DERIVED_TOLERANCE, DerivedGeometry, derived_geometry
 from .runner import run_episode
 from .scenario_file import ScenarioFile
 from .scoring import decision_label, episode_metrics
@@ -172,43 +173,228 @@ async def assert_each_baseline_variant_ties(
 async def assert_non_flip_decisions_non_binding(
     client_factory, scenario: ScenarioFile, *, topology_path: str | Path,
     gold_decisions: dict, non_flip: tuple[str, ...],
+    gold_by_hour: dict[str, dict] | None = None,
 ) -> None:
     """Replay this half with the gold decision for the flip variable and each
     plausible alternative for the two decisions the pair is NOT testing; the
-    outcome must not move. `client_factory` is an async context manager
+    GRADED ANSWER must not move. `client_factory` is an async context manager
     factory yielding a FRESH server connection per replay -- each replay
-    mutates state."""
+    mutates state.
+
+    **What "the outcome" means here, and why it changed (2026-08-23,
+    whole-branch review finding I1).** This used to score each replay on
+    `set(gold.survived) <= set(services_survived)`, and the whole-branch
+    review found that check could not fail on ANY shipped episode: T2/T3
+    declare `realized: {}`, which makes it trivially true, and D1/T1b's
+    single-corridor realized cut is auto-reconverged by the untouched
+    PROTECTION corridor inside `simulate_ip_routing`, so the service under
+    test survives no matter what the decider does (documented in D1.yaml's
+    own `realized` comment). An assertion that cannot fire is not a check.
+
+    It now scores on `decision_label` -- the one categorical
+    `cross_twin_metrics.pair_solved` is actually built from (`label_correct`
+    on both halves). Precisely: a replay may return NO label, but it must
+    never return a DIFFERENT, WRONG one.
+
+      * No label (`None`) is tolerated. It means the alternative declined to
+        act, or its candidate never validated, so nothing committed and the
+        episode is simply ungraded. That is a null result, not a flipped one:
+        it cannot make the wrong half look right. It is also structural for
+        T2/T3, whose gold timing at the decision hour is "act" in BOTH halves
+        precisely because an avoid-horizon or lever choice cannot be read off
+        an episode that never commits -- so `TimingDecision("wait", ...)` in
+        PLAUSIBLE_ALTERNATIVES necessarily yields `None` there, by design,
+        not by defect.
+      * A wrong non-`None` label FAILS. That is the confound the assertion
+        exists to catch: an episode lost for a reason other than the decision
+        the pair is testing, which would make a lost episode uninterpretable.
+
+    The old survival subset check is KEPT, deliberately, as a secondary
+    guard. It is insufficient alone (that is finding I1) but it is not wrong,
+    it costs nothing on top of a replay already performed, and it would still
+    catch a gross regression on an episode whose `realized` block does bite.
+    Both are reported with the same `PairInvalid`.
+
+    **`gold_decisions` are DEFAULTS at every hour; `gold_by_hour` is the
+    per-hour override, and an episode whose gold answer differs BETWEEN hours
+    needs it.** Every twin half declares `gold.decision_at_t0` separately from
+    `gold.label`, and for five of the six they differ: T1b/T2a/T2b/T3a/T3b all
+    say "wait at t0, act at the decision hour". Passing a bare
+    `TimingDecision("act", ...)` as the gold timing therefore replays a
+    rollout that acts at t0 as well -- which is NOT the gold rollout, and on
+    T3a genuinely changed the graded label (the t0 commit reroutes
+    storm-svc-1, so by t1 `candidate_4` is an `ip_reroute` rather than the
+    `optical_reroute` the pair was authored against, reading label "B" where
+    gold says "A"). That was a live defect in this assertion's own test
+    fixtures, invisible for as long as the check scored survival instead of
+    the label. Script the decision hour through `gold_by_hour` and leave the
+    default at the episode's `gold.decision_at_t0`.
+
+    **Where this is provably vacuous, stated so nobody mistakes green for
+    evidence.** For T1 the flip variable IS `timing`, and T1's `label_rule`
+    is `timing_at_decision_hour` -- the graded label is read straight off the
+    timing decision the replay holds at gold. No constraints or objective
+    alternative can move it. For T1a it is doubly vacuous: gold timing is
+    "wait" at every hour, so the rollout never acts and the
+    constraints/objective alternatives are never even consulted (the
+    `TimingDecision("act", ...)` alternative does exercise them, but timing
+    is T1's flip variable and so is never in `non_flip`). That is a
+    structural property of a timing pair, not a hole in this check -- the
+    check does real work on T2 (where a constraints/objective alternative
+    could commit under a different avoid horizon) and on T3 (where a
+    constraints alternative could commit a different LEVER, which is exactly
+    what `chosen_lever_at_decision_hour` grades)."""
     for name in non_flip:
         for alternative in PLAUSIBLE_ALTERNATIVES[name]:
+            # Gold's own per-hour script, with the alternative substituted for
+            # gold at the decision hour for the one decision under test.
+            by_hour = {key: dict(value)
+                       for key, value in (gold_by_hour or {}).items()}
+            by_hour.setdefault(name, {})[scenario.decision_hour] = alternative
             decider = ScriptedDecider(
                 f"non-binding:{name}",
                 default_timing=gold_decisions.get("timing"),
                 default_constraints=gold_decisions.get("constraints"),
                 default_objective=gold_decisions.get("objective"),
-                **{f"{name}_by_hour": {scenario.decision_hour: alternative}})
+                timing_by_hour=by_hour.get("timing"),
+                constraints_by_hour=by_hour.get("constraints"),
+                objective_by_hour=by_hour.get("objective"))
             async with client_factory() as client:
                 trace = await run_episode(client, scenario, decider,
                                           topology_path=topology_path)
-            survived = episode_metrics(scenario, trace)["services_survived"]
-            # NOT exact-set equality -- see scoring.py's survived_matches_gold
-            # comment: services_survived unions in the whole loaded network's
-            # roster (~500+ services on the real eval state), while
-            # gold.survived only ever names the 1-3 services this episode is
-            # actually about. The real check is whether every named service
-            # survived, not whether the two sets are identical.
+            metrics = episode_metrics(scenario, trace)
+
+            # PRIMARY: the graded categorical. None means "ungraded", which
+            # is tolerated; a different non-None label is the real confound.
+            label = metrics["decision_label"]
+            if label is not None and label != scenario.gold.label:
+                raise PairInvalid(
+                    f"{scenario.id}: the {name} decision BINDS -- replacing it "
+                    f"with {alternative!r} changed the GRADED LABEL to "
+                    f"{label!r} (gold {scenario.gold.label!r}). The pair is "
+                    f"confounded: a lost episode would not say which decision "
+                    f"lost it.")
+
+            # SECONDARY, and known-weak: see the docstring. NOT exact-set
+            # equality -- see scoring.py's survived_matches_gold comment:
+            # services_survived unions in the whole loaded network's roster
+            # (~500+ services on the real eval state), while gold.survived
+            # only ever names the 1-3 services this episode is actually
+            # about. The real check is whether every named service survived,
+            # not whether the two sets are identical.
+            survived = metrics["services_survived"]
             if not set(scenario.gold.survived) <= set(survived):
                 raise PairInvalid(
                     f"{scenario.id}: the {name} decision BINDS -- replacing it "
-                    f"with {alternative!r} changed the outcome to {survived!r} "
+                    f"with {alternative!r} changed survival to {survived!r} "
                     f"(gold {list(scenario.gold.survived)!r}). The pair is "
                     f"confounded: a lost episode would not say which decision "
                     f"lost it.")
 
 
-def assert_no_single_variable_rule_solves(episodes: list[ScenarioFile]) -> None:
+async def assert_declared_scalars_match_derived_geometry(
+    client_a: Client, client_b: Client, a: ScenarioFile, b: ScenarioFile, *,
+    topology_path: str | Path,
+) -> None:
+    """`assert_shared_scalars_equal`, but for the quantities the episode's
+    author did NOT declare -- the ones its `forecast` block actually implies.
+
+    Added 2026-08-23 for the whole-branch review's finding C2. Every confound
+    check the harness had read only author-typed `metadata`, so nothing ever
+    noticed that T1's halves differ by `p_cut(storm-svc-1) = 0.1349` vs
+    `0.8834` at the exposure horizon -- a single number that answers the pair
+    2/2 with no reasoning at all -- or that their decision-hour issuance's own
+    cones move 126.1 km/h apart in one half and 0.0 in the other while both
+    halves declare `cone_motion_kmh: 63.0`. An episode author cannot be
+    trusted to declare the variable that breaks their own episode; the check
+    has to derive it. See derived.py.
+
+    Three derived quantities, each held EQUAL across the halves to
+    DERIVED_TOLERANCE, for the same reason `assert_shared_scalars_equal`
+    holds the declared ones equal -- a bare scalar difference is a threshold,
+    and the flip is supposed to live in a RELATION between two services:
+
+      1. `sut_p_cut_at_exposure_horizon` -- the service under test's real cut
+         probability at the horizon `exposure_horizon_hours` names, computed
+         from its real working-path coordinates on a live server against the
+         real cone. The single most exploitable number in an episode.
+      2. `within_issuance_cone_motion_kmh` -- how far the decision-hour
+         issuance's own cone centre travels between its own horizons. Not the
+         same quantity as the declared `cone_motion_kmh`, which describes the
+         t0 -> d REVISION.
+      3. the decision-hour issuance's per-horizon `width_km`. The declared
+         `cone_width_km` is one number naming one horizon; this checks every
+         horizon the issuance actually publishes, which is what catches a
+         pair whose halves differ ONLY by a width epsilon.
+
+    Each client must be freshly connected against the half's own state file,
+    the same contract `assert_menus_identical` has. ALL mismatches are
+    collected and reported together: a half being rebuilt needs the whole
+    list, not the first item."""
+    derived_a = await derived_geometry(client_a, a, topology_path=topology_path)
+    derived_b = await derived_geometry(client_b, b, topology_path=topology_path)
+    problems = _derived_mismatches(a, derived_a, b, derived_b)
+    if problems:
+        raise PairInvalid(
+            f"{a.id}/{b.id}: the halves' DERIVED forecast geometry differs, so "
+            f"a one-line threshold on a number nobody declared separates them:"
+            + "".join(f"\n  - {p}" for p in problems)
+            + f"\n(SUT representative points: {a.id} {derived_a.sut_point}, "
+              f"{b.id} {derived_b.sut_point}; exposure horizons "
+              f"{derived_a.exposure_horizon!r}/{derived_b.exposure_horizon!r}.) "
+              f"Rebuild the pair so every derived scalar is EQUAL across its "
+              f"halves and the flip lives in the relation between two "
+              f"services.")
+
+
+def _derived_mismatches(a: ScenarioFile, derived_a: DerivedGeometry,
+                        b: ScenarioFile, derived_b: DerivedGeometry
+                        ) -> list[str]:
+    """The human-readable list of derived quantities that are not equal."""
+    problems: list[str] = []
+    for name, value_a, value_b in (
+        ("sut_p_cut_at_exposure_horizon",
+         derived_a.sut_p_cut_at_exposure_horizon,
+         derived_b.sut_p_cut_at_exposure_horizon),
+        ("within_issuance_cone_motion_kmh",
+         derived_a.within_issuance_cone_motion_kmh,
+         derived_b.within_issuance_cone_motion_kmh),
+    ):
+        if abs(value_a - value_b) > DERIVED_TOLERANCE:
+            problems.append(
+                f"{name}: {value_a!r} ({a.id}) vs {value_b!r} ({b.id}), "
+                f"|delta| = {abs(value_a - value_b):.6g} > "
+                f"{DERIVED_TOLERANCE:g}")
+    widths_a, widths_b = derived_a.horizon_widths_km, derived_b.horizon_widths_km
+    if set(widths_a) != set(widths_b):
+        problems.append(
+            f"decision-hour issuance publishes different horizons: "
+            f"{sorted(widths_a)} ({a.id}) vs {sorted(widths_b)} ({b.id})")
+    for horizon in sorted(set(widths_a) & set(widths_b)):
+        if abs(widths_a[horizon] - widths_b[horizon]) > DERIVED_TOLERANCE:
+            problems.append(
+                f"width_km at horizon {horizon!r}: {widths_a[horizon]!r} "
+                f"({a.id}) vs {widths_b[horizon]!r} ({b.id})")
+    return problems
+
+
+def assert_no_single_variable_rule_solves(
+    episodes: list[ScenarioFile],
+    derived: dict[str, dict[str, float]] | None = None,
+) -> None:
     """No threshold on any observable, and no parameter-free greedy policy,
     solves the suite. Static over gold labels and metadata -- cheap, and it
     fails the build during authoring rather than measuring after the fact.
+
+    `derived` (added 2026-08-23, whole-branch review finding C2) is an
+    optional `{scenario_id: {var: value}}` map of scalars computed from the
+    episodes' REAL forecast geometry rather than read from their author-typed
+    `metadata` -- see derived.py, and `derived.DerivedGeometry.scalars()`,
+    which produces exactly this shape. Passing it widens the enumeration by
+    `rules.DERIVED_VARS`. It is optional only because those values need a
+    live server to read the service under test's real coordinates; a caller
+    that CAN supply them always should, because the confound this check
+    missed for three rounds of review of T1 was exactly a derived one.
 
     **Per-pair interpretation (not whole-suite):** This check verifies that no
     individual PAIR is 100% solvable by a single-variable rule. This is the
@@ -236,7 +422,7 @@ def assert_no_single_variable_rule_solves(episodes: list[ScenarioFile]) -> None:
     # Check if any pair is 100% solvable by a single-variable rule
     for pair_key, pair_episodes in groups.items():
         if len(pair_episodes) > 1:  # Only check actual pairs (2+ episodes)
-            rule, score = best_rule(pair_episodes)
+            rule, score = best_rule(pair_episodes, derived)
             if score >= 1.0:
                 raise PairInvalid(
                     f"pair {pair_key}: a single-variable rule solves it completely: {rule.name} "
