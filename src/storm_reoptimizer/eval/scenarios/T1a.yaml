@@ -10,70 +10,141 @@ lead_time_hours: 1
 spares_on_hand: 1            # transponder PAIRS: one new lightpath each
 damage_radius_km: 74
 reference_avoid: {}          # neutral third value: current exposure only
+# GEOMETRY REBUILT 2026-08-23 (whole-branch review, finding C2). The ORIGINAL
+# construction put the t+3 cone on svc-b's own point in T1a and on
+# storm-svc-1's own point in T1b -- an exact exchange, which made
+# p_cut(storm-svc-1) AT THE EXPOSURE HORIZON 0.1349 in T1a and 0.8834 in T1b.
+# A bare threshold on that ONE number -- no comparison to any claimant, no
+# reasoning of any kind -- answered the pair 2/2. It survived three rounds of
+# review only because rules.py enumerated author-DECLARED metadata and nobody
+# had declared that number; derived.py derives it now, and gates the build on
+# it.
+# The rebuild holds storm-svc-1's OWN exposure EXACTLY equal across the halves
+# -- offset 120.62584410267883 km, p_cut 0.1614014761182878 at t+3, the SAME
+# FLOAT in both -- and moves the flip entirely into the CLAIMANTS' exposure,
+# which is what forces the answer out of a scalar and into an expected-value
+# COMPARISON.
+# The construction, so it can be re-derived rather than trusted: the two
+# halves' t+3 centres are MIRROR IMAGES about storm-svc-1's own meridian
+# (identical latitude 25.53004453777238; longitudes 81.32777666666667 -+
+# 0.94157310741212). That is not a cosmetic symmetry -- it is what makes
+# every derived scalar equal BIT FOR BIT rather than merely to some tolerance:
+#   * radial_offset_km(centre, storm-svc-1) -> equal p_cut at the exposure
+#     horizon (rules.py enumerates distinct FLOAT values, so "equal to 1e-12"
+#     would still have handed a threshold rule the pair);
+#   * radial_offset_km(storm-svc-1, centre) -> equal WITHIN-issuance cone
+#     motion, the t2->t3 leg of this same issuance: 121.03718436910242 km/h in
+#     both halves (derived.within_issuance_cone_motion_kmh -- a DIFFERENT
+#     quantity from metadata.cone_motion_kmh below);
+#   * and the shared t0 centre sits ON that mirror axis, so it is exactly
+#     95.04036836557925 km from BOTH halves' t+3 centres, which is what makes
+#     metadata.cone_motion_kmh equal and TRUE rather than merely declared.
+# See docs/superpowers/rehearsals/T1.md for the full probe trail.
 forecast:
   t0:                        # BYTE-IDENTICAL in T1b -- both services ambiguous
-    t3: {cone: {type: Polygon, coordinates: [[[81.16389, 25.80747], [81.27984, 25.79368], [81.38789, 25.75325], [81.48068, 25.68894], [81.55188, 25.60512], [81.59663, 25.50752], [81.6119, 25.40278], [81.59663, 25.29803], [81.55188, 25.20043], [81.48068, 25.11661], [81.38789, 25.0523], [81.27984, 25.01187], [81.16389, 24.99808], [81.04793, 25.01187], [80.93988, 25.0523], [80.8471, 25.11661], [80.7759, 25.20043], [80.73114, 25.29803], [80.71588, 25.40278], [80.73114, 25.50752], [80.7759, 25.60512], [80.8471, 25.68894], [80.93988, 25.75325], [81.04793, 25.79368], [81.16389, 25.80747]]]},
-         width_km: 90, center: {lat: 25.402776666666668, lon: 81.16388833333332}}
+    # On storm-svc-1's own meridian (the mirror axis), at the latitude where
+    # storm-svc-1 and the claimants are equidistant: BOTH sit at offset
+    # 65.299 km, p_cut 0.5716. Nothing here favours either, and storm-svc-1 is
+    # OUTSIDE the cone's own 45 km half-width, so a containment-only policy
+    # reads "not exposed" in both halves.
+    t3: {cone: {type: Polygon, coordinates: [[[81.32778, 25.8475], [81.44377, 25.83371], [81.55186, 25.79328], [81.64467, 25.72896], [81.71589, 25.64515], [81.76067, 25.54754], [81.77594, 25.4428], [81.76067, 25.33806], [81.71589, 25.24045], [81.64467, 25.15664], [81.55186, 25.09232], [81.44377, 25.0519], [81.32778, 25.03811], [81.21178, 25.0519], [81.1037, 25.09232], [81.01088, 25.15664], [80.93966, 25.24045], [80.89489, 25.33806], [80.87962, 25.4428], [80.89489, 25.54754], [80.93966, 25.64515], [81.01088, 25.72896], [81.1037, 25.79328], [81.21178, 25.83371], [81.32778, 25.8475]]]},
+         width_km: 90, center: {lat: 25.442800716819043, lon: 81.32777666666667}}
   t1:                        # the revision -- this is what WAIT buys
     # BYTE-IDENTICAL in T1b: a near-term (t+1) nowcast of the storm's CURRENT
-    # footprint, sitting over storm-svc-1's own corridor regardless of which
-    # service the t+3 revision below centres on. Needed so a forecast-blind
-    # policy that only asks "is storm-svc-1 inside ANY published cone" reads
-    # the SAME answer in both halves -- without it, storm-svc-1's raw
-    # geometric containment at t+3 alone flips between the halves (p_cut>=
-    # 0.85 at a cone's own centre provably forces p_cut>=0.68 at that same
-    # cone's edge for ANY width_km/damage_radius_km, so the >=0.85/<=0.30
-    # split this pair needs at t+3 can never leave storm-svc-1 on the same
-    # side of the t+3 cone's boundary in both halves -- confirmed empirically:
-    # baseline variant "immediate" answered T1a/T1b differently before this
-    # horizon was added). This t+1 nowcast is EQUAL in both halves precisely
-    # so it carries no flip information itself; only the t+3 cone below does.
+    # footprint, sitting over storm-svc-1's own corridor regardless of where
+    # the t+3 revision below lands. It is what makes a forecast-blind policy
+    # that only asks "is storm-svc-1 inside ANY published cone" read the SAME
+    # answer in both halves (confirmed empirically: baseline variant
+    # "immediate" answered T1a/T1b differently before this horizon existed).
+    # After the 2026-08-23 rebuild storm-svc-1's t+3 OFFSET is equal across
+    # the halves too, so its raw containment at t+3 is identical either way
+    # (120.626 km, outside the 45 km half-width, in both) -- this nowcast is
+    # now belt and braces, kept because it is also what makes the t1 acting
+    # deadline real.
     t2: {cone: {type: Polygon, coordinates: [[[81.32778, 25.26025], [81.44321, 25.24646], [81.55078, 25.20603], [81.64315, 25.14172], [81.71403, 25.0579], [81.75859, 24.9603], [81.77378, 24.85555], [81.75859, 24.75081], [81.71403, 24.65321], [81.64315, 24.56939], [81.55078, 24.50508], [81.44321, 24.46465], [81.32778, 24.45086], [81.21234, 24.46465], [81.10477, 24.50508], [81.0124, 24.56939], [80.94152, 24.65321], [80.89697, 24.75081], [80.88177, 24.85555], [80.89697, 24.9603], [80.94152, 25.0579], [81.0124, 25.14172], [81.10477, 25.20603], [81.21234, 25.24646], [81.32778, 25.26025]]]},
          width_km: 90, center: {lat: 24.855553333333333, lon: 81.32777666666667}}
-    t3: {cone: {type: Polygon, coordinates: [[[81.0, 26.35469], [81.11649, 26.34091], [81.22504, 26.30048], [81.31825, 26.23616], [81.38977, 26.15235], [81.43474, 26.05474], [81.45007, 25.95], [81.43474, 25.84526], [81.38977, 25.74765], [81.31825, 25.66384], [81.22504, 25.59952], [81.11649, 25.55909], [81.0, 25.54531], [80.88351, 25.55909], [80.77496, 25.59952], [80.68175, 25.66384], [80.61023, 25.74765], [80.56526, 25.84526], [80.54993, 25.95], [80.56526, 26.05474], [80.61023, 26.15235], [80.68175, 26.23616], [80.77496, 26.30048], [80.88351, 26.34091], [81.0, 26.35469]]]},
-         width_km: 90, center: {lat: 25.95, lon: 80.99999999999999}}
+    # THE FLIP. The revised t+3 cone resolves WEST, onto the allahabad<->kanpur
+    # corridor: 77.3 km from the two 100G claimants (d0029 and d0348, both
+    # represented at (25.95, 81.0)) -> p_cut 0.4715 each. storm-svc-1 is
+    # 120.62584410267883 km off this axis -> p_cut 0.1614014761182878, which
+    # is the SAME FLOAT T1b's own t+3 cone gives it.
+    t3: {cone: {type: Polygon, coordinates: [[[80.3862, 25.93474], [80.50228, 25.92095], [80.61045, 25.88052], [80.70333, 25.81621], [80.7746, 25.73239], [80.81941, 25.63479], [80.83469, 25.53004], [80.81941, 25.4253], [80.7746, 25.3277], [80.70333, 25.24388], [80.61045, 25.17957], [80.50228, 25.13914], [80.3862, 25.12535], [80.27013, 25.13914], [80.16196, 25.17957], [80.06908, 25.24388], [79.9978, 25.3277], [79.953, 25.4253], [79.93772, 25.53004], [79.953, 25.63479], [79.9978, 25.73239], [80.06908, 25.81621], [80.16196, 25.88052], [80.27013, 25.92095], [80.3862, 25.93474]]]},
+         width_km: 90, center: {lat: 25.53004453777238, lon: 80.38620355925455}}
 realized:
-  t3: [fiber_allahabad_fatehpur_0, fiber_allahabad_fatehpur_1]
+  # Both claimants go down at t3: fiber_allahabad_fatehpur_0/_1 carry d0029's
+  # working path and fiber_fatehpur_allahabad_0 carries d0348's (the same
+  # corridor, opposite-direction OMS) -- confirmed by inject_failure +
+  # get_affected_services against the real server. storm-svc-1 is NOT cut in
+  # this half, which is what makes "wait" cost nothing here.
+  t3: [fiber_allahabad_fatehpur_0, fiber_allahabad_fatehpur_1,
+       fiber_fatehpur_allahabad_0]
 gold:
-  # NOT [storm-svc-1, svc-b]: svc-b is never service_under_test in this pair,
-  # and run_episode only ever acts on service_under_test (runner.py's route_
-  # service/validate_plan/commit_plan calls are all scoped to
-  # scenario.service_under_test) -- there is no mechanism anywhere in this
-  # harness that reroutes or restores a service other than the SUT. svc-b IS
-  # realized-cut at t3 below and, confirmed empirically (a clean gold-decision
-  # replay: zero actions taken, d0029 reported dropped by simulate_ip_routing
-  # with reason "link_down"), it stays down regardless of what storm-svc-1's
-  # decider does. "Hold the spare for svc-b" is the expected-value reasoning
-  # that makes waiting the correct call for storm-svc-1's OWN decision (why
-  # spend the one spare on a 13%-probability threat), not a claim that the
-  # harness actually restores svc-b -- it doesn't, and can't. See
-  # docs/superpowers/rehearsals/T1.md's Q2 for the full writeup.
+  # NOT [storm-svc-1, d0029, d0348]: the claimants are never
+  # service_under_test in this pair, and run_episode only ever acts on
+  # service_under_test (runner.py's route_service/validate_plan/commit_plan
+  # calls are all scoped to scenario.service_under_test) -- there is no
+  # mechanism anywhere in this harness that reroutes or restores a service
+  # other than the SUT. The claimants ARE realized-cut at t3 above and,
+  # confirmed empirically (a clean gold-decision replay: zero actions taken,
+  # d0029 reported dropped by simulate_ip_routing with reason "link_down"),
+  # they stay down regardless of what storm-svc-1's decider does. "Hold the
+  # spare for them" is the expected-value reasoning that makes waiting the
+  # correct call for storm-svc-1's OWN decision (why spend the one spare on a
+  # 16%-probability threat when 94 G of other traffic sits at 47%), not a
+  # claim that the harness actually restores them -- it doesn't, and can't.
+  # See docs/superpowers/rehearsals/T1.md's Q2 for the full writeup.
   survived: [storm-svc-1]
   max_spares_wasted: 0
   decision_at_t0: wait
   label: wait
   rationale: |
-    At t1, issued_t1 centres the t+3 cone on svc-b (d0029, allahabad<->kanpur, 100G).
-      p_cut(svc-b)        = 0.8834 -> expected loss 0.8834 * 100G  = 88.3 G
-      p_cut(storm-svc-1)  = 0.1349 -> expected loss 0.1349 * 300G  = 40.5 G
-    One spare pair between them. storm-svc-1 is the only service this episode's
-    decider can act on, so the real question is whether committing the spare to
-    storm-svc-1 now is worth it. The comparison is 0.1349*300G (40.5G) against
-    0.8834*100G (88.3G); the latter dominates -- svc-b's exposure is by far the
-    larger expected loss, so committing storm-svc-1's own spare to a 13%-odds
-    threat would be spending scarce capacity where it is least needed. Correct:
-    wait on storm-svc-1, hold the spare.
-    Realized: storm-svc-1 is never cut in this half (only svc-b is, at t3 via
-    fiber_allahabad_fatehpur_0/_1) -- confirming "wait" cost nothing. svc-b is
-    NOT restored by anything in this harness (no cross-service restoration
-    exists); it is scored only on storm-svc-1's survival and on storm-svc-1's
-    own spare not being wasted.
+    storm-svc-1's OWN exposure at the t+3 horizon is IDENTICAL in both halves
+    of this pair, by construction: offset 120.62584410267883 km from the
+    revised cone axis, p_cut = 0.1614014761182878, the same float in T1a and
+    T1b. Nothing about storm-svc-1 separates the halves; only what ELSE the
+    storm is about to hit does.
+      storm-svc-1 (300G)           p_cut 0.1614 ->  48.4 G expected loss
+      d0029 (100G)                 p_cut 0.4715 ->  47.2 G
+      d0348 (100G)                 p_cut 0.4715 ->  47.2 G
+      the two named claimants together           ->  94.3 G
+      every other service, summed                ->  13.3 G
+      total expected capacity at risk elsewhere  -> 107.6 G
+    One spare pair between them. storm-svc-1 is the only service this
+    episode's decider can act on, so the real question is whether committing
+    the spare to storm-svc-1 now is worth it. The comparison is 48.4 G against
+    107.6 G (94.3 G even counting only the two named claimants); the claimants
+    dominate roughly 2:1, so committing storm-svc-1's own spare to a 16%-odds
+    threat would be spending scarce capacity where it is least needed.
+    Correct: wait on storm-svc-1, hold the spare.
+    At t0 nothing yet distinguishes them -- storm-svc-1 and both claimants sit
+    at the same offset (65.299 km) and the same p_cut (0.5716) of the shared
+    t0 cone -- and the t+3 exposure is 3 hours out against a 1 h lead time, so
+    waiting into t1 is free and buys the revision: gold.decision_at_t0 = wait.
+    Realized: storm-svc-1 is never cut in this half (only the two claimants
+    are, at t3 via fiber_allahabad_fatehpur_0/_1 and fiber_fatehpur_allahabad_0)
+    -- confirming "wait" cost nothing. Neither claimant is restored by anything
+    in this harness (no cross-service restoration exists); the episode is
+    scored only on storm-svc-1's survival and on storm-svc-1's own spare not
+    being wasted.
 flip_variable: [svc-b, cone, centre, spare]
 metadata:
   label_rule: timing_at_decision_hour
-  cone_width_km: 90          # EQUAL in T1b
-  cone_motion_kmh: 63.0      # EQUAL in T1b -- offset(t0 centre, t1 centre) / 1h
-  n_future_claimants: 1      # EQUAL in T1b
+  cone_width_km: 90          # EQUAL in T1b -- and EVERY horizon of the
+                              # decision-hour issuance is 90 in both halves,
+                              # which derived.horizon_widths_km now checks
+  cone_motion_kmh: 95.0      # EQUAL in T1b -- offset(t0 centre, t1's t+3
+                              # centre) / 1h, = 95.04036836557925 km, the SAME
+                              # FLOAT in both halves because the t0 centre
+                              # sits on the mirror axis the two t+3 centres
+                              # are reflected across. NOT the same quantity as
+                              # derived.within_issuance_cone_motion_kmh
+                              # (121.03718436910242 in both halves), which is
+                              # the t2->t3 leg INSIDE the t1 issuance.
+  n_future_claimants: 2      # EQUAL in T1b -- d0029 and d0348: the same two
+                              # services in both halves, and the only two
+                              # non-SUT services that clear p_cut 0.05 at t+3
+                              # in EITHER half (T1a 0.4715, T1b 0.0956). Only
+                              # their exposure differs.
   exposure_horizon_hours: 2  # EQUAL in T1b
   spares_on_hand: 1          # EQUAL in T1b
   widest_avoid_feasible: true

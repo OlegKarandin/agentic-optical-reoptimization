@@ -12,22 +12,32 @@ damage_radius_km: 74
 reference_avoid: {}          # neutral third value: current exposure only --
                               # also the ACTUAL avoid the gold constraints
                               # decision uses (constraints is non-flip here)
+# GEOMETRICALLY UNCHANGED by the 2026-08-23 rebuild (whole-branch review,
+# finding C2): this half's t2 centre already sat 228.0754620624 km from the
+# shared t6 centre, and it is T3a's t2 centre that was moved onto that same
+# locus. See T3a.yaml's header comment for the full statement of the
+# confound. Only this file's gold.rationale arithmetic and
+# metadata.n_future_claimants changed, to match the re-derived claimant
+# roster.
 forecast:
   t0:                        # BYTE-IDENTICAL to T3a's t0 -- see T3a.yaml's
                               # comment
     t6: {cone: {type: Polygon, coordinates: [[[79.6, 23.40469], [79.71379, 23.39091], [79.81982, 23.35048], [79.91088, 23.28616], [79.98074, 23.20235], [80.02466, 23.10474], [80.03964, 23.0], [80.02466, 22.89526], [79.98074, 22.79765], [79.91088, 22.71384], [79.81982, 22.64952], [79.71379, 22.60909], [79.6, 22.59531], [79.48621, 22.60909], [79.38018, 22.64952], [79.28912, 22.71384], [79.21926, 22.79765], [79.17534, 22.89526], [79.16036, 23.0], [79.17534, 23.10474], [79.21926, 23.20235], [79.28912, 23.28616], [79.38018, 23.35048], [79.48621, 23.39091], [79.6, 23.40469]]]},
          width_km: 90, center: {lat: 23.0, lon: 79.6}}
   t1:                        # the revision -- structurally identical to
-                              # T3a's (same two horizons, same t6) with the
-                              # "t2" claimant horizon RECENTRED -- THE FLIP --
-                              # directly onto the two claimant services
-                              # (d0462, d0212) instead of 110km away. The t6
-                              # horizon (storm-svc-1's own corridor) is
+                              # T3a's (same two horizons, same t6, and now
+                              # the same t2-to-t6 distance) with the "t2"
+                              # claimant horizon centred -- THE FLIP --
+                              # directly ON the two claimant services (d0462,
+                              # d0212) instead of 129.3 km away. The t6 horizon
+                              # (storm-svc-1's own corridor) is
                               # BYTE-IDENTICAL to T3a's.
     t2: {cone: {type: Polygon, coordinates: [[[79.08537, 25.03233], [79.20059, 25.01854], [79.30796, 24.97811], [79.40016, 24.9138], [79.47091, 24.82998], [79.51539, 24.73238], [79.53056, 24.62763], [79.51539, 24.52289], [79.47091, 24.42529], [79.40016, 24.34147], [79.30796, 24.27716], [79.20059, 24.23673], [79.08537, 24.22294], [78.97014, 24.23673], [78.86277, 24.27716], [78.77057, 24.34147], [78.69982, 24.42529], [78.65535, 24.52289], [78.64018, 24.62763], [78.65535, 24.73238], [78.69982, 24.82998], [78.77057, 24.9138], [78.86277, 24.97811], [78.97014, 25.01854], [79.08537, 25.03233]]]},
          width_km: 90, center: {lat: 24.627633, lon: 79.08536699999999}}
          # centred DIRECTLY ON the two claimants (offset=0) -> p_cut=0.8834
-         # (probe: cut_probability(0.0, 90.0, 74.0) = 0.8834)
+         # (probe: cut_probability(0.0, 90.0, 74.0) = 0.8834), and
+         # 228.0754620624 km from the t6 centre -- the value T3a's rebuilt t2
+         # centre was placed to match exactly.
     t6: {cone: {type: Polygon, coordinates: [[[81.32778, 26.29447], [81.73821, 26.24544], [82.12068, 26.10169], [82.44911, 25.87302], [82.70113, 25.57501], [82.85955, 25.22797], [82.91358, 24.85555], [82.85955, 24.48313], [82.70113, 24.1361], [82.44911, 23.83809], [82.12068, 23.60942], [81.73821, 23.46567], [81.32778, 23.41664], [80.91734, 23.46567], [80.53487, 23.60942], [80.20644, 23.83809], [79.95443, 24.1361], [79.796, 24.48313], [79.74197, 24.85555], [79.796, 25.22797], [79.95443, 25.57501], [80.20644, 25.87302], [80.53487, 26.10169], [80.91734, 26.24544], [81.32778, 26.29447]]]},
          width_km: 320, center: {lat: 24.855553333333333, lon: 81.32777666666667}}
          # EQUAL to T3a's t6 -- see T3a.yaml's comment
@@ -45,33 +55,42 @@ gold:
     demand on this real network).
     candidate_0 (ip_reroute, reuse storm-svc-1's own working lightpath
     unchanged, 0 spare pairs) leaves it on the exposed corridor; real cost =
-    p_cut(offset=0, width=320, damage_radius=74) = 0.3410 -> 102.3 G given up
-    now by staying in place.
+    p_cut(offset=0, width=320, damage_radius=74) = 0.3410052087 -> 102.3 G
+    given up now by staying in place. That number, and storm-svc-1's own
+    offset from the NEAR cone (228.075 km), are both EQUAL in the two halves,
+    so nothing keyed on storm-svc-1's own geometry separates them.
     candidate_4 (optical_reroute via jabalpur, 1 spare pair -- the last one on
     hand) physically clears both storm-svc-1's working AND protection
     corridors, validated disjoint under basis=risk_group/level=risk_group.
-    T3a: 2 claimants (d0462, d0212, 100G each) at p_cut=0.2226 -> 44.5 G
-      expected capacity at risk later. 102.3 G > 44.5 G. Correct: A.
-    T3b: 2 claimants (same d0462, d0212, 100G each) at p_cut=0.8834 (probe:
-      cut_probability(0.0, 90.0, 74.0)) -> 2*100*0.8834 = 176.7 G expected
-      capacity at risk later.
-      102.3 G given up now < 176.7 G expected later. Correct: B (commit
+    T3a: the near cone lands 129.3 km south-west of the claimants -- d0462
+      0.1207, d0212 0.1207, d0363 0.2639, everything else 0.5 G -> 51.0 G
+      expected capacity at risk later. 102.3 G > 51.0 G. Correct: A.
+    T3b: the near cone lands ON d0462/d0212.
+      d0462  100G  p_cut 0.8834 -> 88.3 G
+      d0212  100G  p_cut 0.8834 -> 88.3 G
+      d0363  100G  p_cut 0.0547 ->  5.5 G
+      everything else, summed   ->  0.6 G
+      total expected capacity at risk later -> 182.8 G
+      102.3 G given up now < 182.8 G expected later. Correct: B (commit
       candidate_0, keep the last spare pair for the far more valuable future
       claim -- spending it now on candidate_4 would leave nothing on hand
       when the claimants' own restoration needs it).
-    Neither the claimant COUNT (2, equal in both halves), the MENU (identical
-    in both halves), nor storm-svc-1's own re-exposure cost (102.3 G, equal
-    in both halves) separates T3a from T3b -- only the PRODUCT of the two
-    claimants' rate (100G, equal here) and exposure probability (0.2226 vs
-    0.8834, the actual flip) does.
+    Neither the claimant COUNT (3, equal in both halves), the MENU (identical
+    in both halves), storm-svc-1's own re-exposure cost (102.3 G, equal in
+    both halves), nor its own near-horizon offset (228.075 km, equal in both
+    halves) separates T3a from T3b -- only the PRODUCT of the claimants' rate
+    (100G each) and their exposure probability (51.0 G total vs 182.8 G total,
+    the actual flip) does.
 flip_variable: [claimant, expected, rate, probability]
 metadata:
   label_rule: chosen_lever_at_decision_hour
   label_by_lever: {optical_reroute: A, hybrid: A, ip_reroute: B}
   coherence: {term: transponders, higher_priority_in: T3b}
   cone_width_km: 320           # EQUAL to T3a
-  cone_motion_kmh: 271.7       # EQUAL to T3a
-  n_future_claimants: 2        # EQUAL to T3a
+  cone_motion_kmh: 271.7       # EQUAL to T3a -- and NOT the same quantity as
+                                # derived.within_issuance_cone_motion_kmh,
+                                # which is 228.0754620624 in both halves
+  n_future_claimants: 3        # EQUAL to T3a -- d0462, d0212, d0363
   exposure_horizon_hours: 2    # EQUAL to T3a
   spares_on_hand: 1            # EQUAL to T3a
   widest_avoid_feasible: true  # EQUAL to T3a

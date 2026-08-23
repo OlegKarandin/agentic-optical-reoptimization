@@ -10,48 +10,92 @@ lead_time_hours: 1
 spares_on_hand: 1            # transponder PAIRS: one new lightpath each
 damage_radius_km: 74
 reference_avoid: {}          # neutral third value: current exposure only
+# GEOMETRY REBUILT 2026-08-23 -- see T1a.yaml's header comment for the full
+# statement of the confound (whole-branch review finding C2) and of the
+# mirror construction. The one-line version: this half's t+3 cone used to be
+# centred on storm-svc-1 ITSELF (p_cut 0.8834) while T1a's was centred 126 km
+# away (p_cut 0.1349), so `threshold:sut_p_cut_at_exposure_horizon<0.509` --
+# one number, no comparison, no reasoning -- solved the pair 2/2. It now sits
+# at the MIRROR IMAGE of T1a's centre about storm-svc-1's own meridian, so
+# storm-svc-1's offset (120.62584410267883 km) and p_cut (0.1614014761182878)
+# at t+3 are the SAME FLOATS T1a's cone gives it, and the only thing that
+# differs is where the claimants fall relative to the axis.
 forecast:
   t0:                        # BYTE-IDENTICAL to T1a -- both services ambiguous
-    t3: {cone: {type: Polygon, coordinates: [[[81.16389, 25.80747], [81.27984, 25.79368], [81.38789, 25.75325], [81.48068, 25.68894], [81.55188, 25.60512], [81.59663, 25.50752], [81.6119, 25.40278], [81.59663, 25.29803], [81.55188, 25.20043], [81.48068, 25.11661], [81.38789, 25.0523], [81.27984, 25.01187], [81.16389, 24.99808], [81.04793, 25.01187], [80.93988, 25.0523], [80.8471, 25.11661], [80.7759, 25.20043], [80.73114, 25.29803], [80.71588, 25.40278], [80.73114, 25.50752], [80.7759, 25.60512], [80.8471, 25.68894], [80.93988, 25.75325], [81.04793, 25.79368], [81.16389, 25.80747]]]},
-         width_km: 90, center: {lat: 25.402776666666668, lon: 81.16388833333332}}
+    # See T1a.yaml's comment on this entry: on storm-svc-1's own meridian (the
+    # mirror axis), at the latitude where storm-svc-1 and the claimants are
+    # equidistant, so both read offset 65.299 km / p_cut 0.5716 here, and both
+    # halves' t+3 centres are the SAME distance (95.040 km) from it.
+    t3: {cone: {type: Polygon, coordinates: [[[81.32778, 25.8475], [81.44377, 25.83371], [81.55186, 25.79328], [81.64467, 25.72896], [81.71589, 25.64515], [81.76067, 25.54754], [81.77594, 25.4428], [81.76067, 25.33806], [81.71589, 25.24045], [81.64467, 25.15664], [81.55186, 25.09232], [81.44377, 25.0519], [81.32778, 25.03811], [81.21178, 25.0519], [81.1037, 25.09232], [81.01088, 25.15664], [80.93966, 25.24045], [80.89489, 25.33806], [80.87962, 25.4428], [80.89489, 25.54754], [80.93966, 25.64515], [81.01088, 25.72896], [81.1037, 25.79328], [81.21178, 25.83371], [81.32778, 25.8475]]]},
+         width_km: 90, center: {lat: 25.442800716819043, lon: 81.32777666666667}}
   t1:                        # the revision -- this is what WAIT-past-here does NOT buy
     # BYTE-IDENTICAL to T1a -- see T1a.yaml's comment on this entry for why
-    # it is needed (a shared near-term nowcast so storm-svc-1's raw geometric
+    # it is there (a shared near-term nowcast so storm-svc-1's raw geometric
     # exposure, not just its p_cut, is the same in both halves).
     t2: {cone: {type: Polygon, coordinates: [[[81.32778, 25.26025], [81.44321, 25.24646], [81.55078, 25.20603], [81.64315, 25.14172], [81.71403, 25.0579], [81.75859, 24.9603], [81.77378, 24.85555], [81.75859, 24.75081], [81.71403, 24.65321], [81.64315, 24.56939], [81.55078, 24.50508], [81.44321, 24.46465], [81.32778, 24.45086], [81.21234, 24.46465], [81.10477, 24.50508], [81.0124, 24.56939], [80.94152, 24.65321], [80.89697, 24.75081], [80.88177, 24.85555], [80.89697, 24.9603], [80.94152, 25.0579], [81.0124, 25.14172], [81.10477, 25.20603], [81.21234, 25.24646], [81.32778, 25.26025]]]},
          width_km: 90, center: {lat: 24.855553333333333, lon: 81.32777666666667}}
-    t3: {cone: {type: Polygon, coordinates: [[[81.32778, 25.26025], [81.44321, 25.24646], [81.55078, 25.20603], [81.64315, 25.14172], [81.71403, 25.0579], [81.75859, 24.9603], [81.77378, 24.85555], [81.75859, 24.75081], [81.71403, 24.65321], [81.64315, 24.56939], [81.55078, 24.50508], [81.44321, 24.46465], [81.32778, 24.45086], [81.21234, 24.46465], [81.10477, 24.50508], [81.0124, 24.56939], [80.94152, 24.65321], [80.89697, 24.75081], [80.88177, 24.85555], [80.89697, 24.9603], [80.94152, 25.0579], [81.0124, 25.14172], [81.10477, 25.20603], [81.21234, 25.24646], [81.32778, 25.26025]]]},
-         width_km: 90, center: {lat: 24.855553333333333, lon: 81.32777666666667}}
+    # THE FLIP. Same width, same latitude, same distance from the t0 axis
+    # (95.040 km) and the same distance from storm-svc-1 (120.62584410267883
+    # km -> p_cut 0.1614014761182878) as T1a's t+3 cone -- it is T1a's cone
+    # reflected across storm-svc-1's meridian. What differs is the BEARING:
+    # the track resolves EAST instead of west, 135.7 km from the two claimants
+    # -> p_cut 0.0956 each. Nobody is left with a serious claim on the one
+    # spare.
+    t3: {cone: {type: Polygon, coordinates: [[[82.26935, 25.93474], [82.38543, 25.92095], [82.49359, 25.88052], [82.58648, 25.81621], [82.65775, 25.73239], [82.70255, 25.63479], [82.71783, 25.53004], [82.70255, 25.4253], [82.65775, 25.3277], [82.58648, 25.24388], [82.49359, 25.17957], [82.38543, 25.13914], [82.26935, 25.12535], [82.15327, 25.13914], [82.04511, 25.17957], [81.95222, 25.24388], [81.88095, 25.3277], [81.83615, 25.4253], [81.82086, 25.53004], [81.83615, 25.63479], [81.88095, 25.73239], [81.95222, 25.81621], [82.04511, 25.88052], [82.15327, 25.92095], [82.26935, 25.93474]]]},
+         width_km: 90, center: {lat: 25.53004453777238, lon: 82.26934977407878}}
 realized:
   t3: [fiber_satna_rewa_0]
 gold:
-  # d0029, not the literal alias "svc-b" -- the harness's own service roster
-  # (get_services(), simulate_ip_routing's dropped list) only ever uses real
-  # ids; "svc-b" never appears anywhere the scoring code looks, so a literal
-  # "svc-b" here could never be found in `survived` regardless of outcome.
-  # svc-b is never realized-cut in T1b (see `realized` above -- only
-  # storm-svc-1's own fiber is), so it trivially survives in every replay;
-  # naming it correctly here is just precision, not a load-bearing check.
-  survived: [storm-svc-1, d0029]
+  # Real service ids, not the narrative alias "svc-b" -- the harness's own
+  # service roster (get_services(), simulate_ip_routing's dropped list) only
+  # ever uses real ids, so a literal "svc-b" here could never be found in
+  # `survived` regardless of outcome. Neither claimant is realized-cut in T1b
+  # (see `realized` above -- only storm-svc-1's own fiber is), so both
+  # trivially survive in every replay; naming them correctly here is
+  # precision, not a load-bearing check.
+  survived: [storm-svc-1, d0029, d0348]
   max_spares_wasted: 0
   decision_at_t0: wait
   label: act
   rationale: |
-    At t1, issued_t1 centres the t+3 cone on storm-svc-1 -- the positions are
-    exchanged from T1a.
-      p_cut(storm-svc-1)  = 0.8834 -> expected loss 0.8834 * 300G  = 265.0 G
-      p_cut(svc-b)        = 0.1346 -> expected loss 0.1346 * 100G  = 13.5 G
-    One spare pair between them. The lead time (1h) expires in 2h at exposure,
-    so waiting past t1 forecloses the optical reroute; storm-svc-1's own claim
-    (265.0G expected loss) now dominates svc-b's (13.5G). Correct: act by t+2
-    on storm-svc-1.
-    Realized: storm-svc-1 is cut at t3 (fiber_satna_rewa_0).
+    storm-svc-1's OWN exposure at t+3 is the SAME here as in T1a -- offset
+    120.62584410267883 km, p_cut = 0.1614014761182878, bit for bit -- so no
+    threshold on storm-svc-1's own numbers can tell the halves apart. What the
+    revision changes is who ELSE is in the way:
+      storm-svc-1 (300G)           p_cut 0.1614 -> 48.4 G expected loss
+      d0029 (100G)                 p_cut 0.0956 ->  9.6 G
+      d0348 (100G)                 p_cut 0.0956 ->  9.6 G
+      the two named claimants together           -> 19.1 G
+      every other service, summed                ->  2.4 G (d0361, 0.0235)
+      total expected capacity at risk elsewhere  -> 21.5 G
+    One spare pair between them. The track resolved east, away from the
+    allahabad<->kanpur corridor, so the claim that dominated in T1a has
+    collapsed from 107.6 G to 21.5 G -- well under half of storm-svc-1's own
+    48.4 G. The lead time (1 h) means an optical_reroute committed at t1 is
+    effective at t2, strictly before the t3 cut, and no further issuance
+    arrives (t2 and t3 carry t1's forward), so waiting past t1 buys no
+    information and only erodes the margin. With no better claimant for the
+    spare and storm-svc-1 holding the largest single expected loss on the
+    board, correct: act by t+2 on storm-svc-1.
+    At t0 this half is byte-identical to T1a (storm-svc-1 and both claimants
+    all at offset 65.299 km, p_cut 0.5716) and the t+3 exposure is 3 hours out
+    against a 1 h lead time, so waiting into t1 is free:
+    gold.decision_at_t0 = wait.
+    Realized: storm-svc-1 is cut at t3 (fiber_satna_rewa_0). 0.1614 is a
+    minority outcome, and that is the point -- `realized` is scripted ground
+    truth, not the modal draw, and the label is graded on the DECISION the
+    expected values justify, not on the coin that came up.
 flip_variable: [svc-b, cone, centre, spare]
 metadata:
   label_rule: timing_at_decision_hour
-  cone_width_km: 90          # EQUAL to T1a
-  cone_motion_kmh: 63.0      # EQUAL to T1a -- offset(t0 centre, t1 centre) / 1h
-  n_future_claimants: 1      # EQUAL to T1a
+  cone_width_km: 90          # EQUAL to T1a -- every horizon, both halves
+  cone_motion_kmh: 95.0      # EQUAL to T1a -- offset(t0 centre, t1's t+3
+                              # centre) / 1h, = 95.04036836557925 km, the same
+                              # float in both halves because the t0 centre is
+                              # on the mirror axis
+  n_future_claimants: 2      # EQUAL to T1a -- d0029 and d0348, the same two
+                              # services in both halves; only their exposure
+                              # differs (0.4715 in T1a, 0.0956 here)
   exposure_horizon_hours: 2  # EQUAL to T1a
   spares_on_hand: 1          # EQUAL to T1a
   widest_avoid_feasible: true
