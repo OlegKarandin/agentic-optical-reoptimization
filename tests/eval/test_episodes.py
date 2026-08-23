@@ -199,6 +199,12 @@ def test_t1_non_flip_decisions_are_non_binding(
 # empty exclusion by route_service (confirmed against the real server), so
 # using this fixed gold constraints/objective pair at every hour is safe --
 # no crash, just a wasted retry loop at hours other than t1.
+#
+# Re-probed and unchanged after T2's 2026-08-23 rebuild (whole-branch review
+# finding C1): that rebuild moved only the t1 issuance's NEAR (t2) horizon
+# centre, and neither gold candidate's menu depends on it -- T2a's wide avoid
+# names the FAR (t6) risk group, whose asset list is byte-identical across the
+# halves and unchanged from the reviewed version, and T2b's is avoid={}.
 _T2_NON_FLIP_GOLD_DECISIONS = {
     "T2a": (
         TimingDecision("act", "gold"),
@@ -366,15 +372,20 @@ class _WidensOnDisjointnessRejection:
     real recovery mechanic ("widening avoid and re-calling route_service", per
     the design) without touching the shared, already-reviewed baseline.
 
-    Confirmed against the real server (see task-15-report.md): storm-svc-1's
-    STATIC protection lightpath uses satna<->jhansi<->allahabad. Avoiding only
-    the near/currently-exposed corridor (satna<->rewa) leaves every one of
-    route_service's 9 candidates colliding with that protection leg under
+    Confirmed against the real server: storm-svc-1's STATIC protection
+    lightpath uses satna<->jhansi<->allahabad. The exposed-horizon avoid this
+    wrapper inherits from ForecastBlindBaseline therefore leaves every one of
+    route_service's candidates colliding with that protection leg under
     basis=physical/level=link -- a REAL, first-try rejection, not fabricated.
     Widening with the violation's own shared_assets (which name the specific
     jhansi<->allahabad fiber/amp/oms/roadm ids) finds a genuinely disjoint,
-    longer route via jabalpur that validates cleanly on the very next
-    iteration."""
+    longer route that validates cleanly on a later iteration.
+
+    Note this wrapper names no fiber id of its own: it reads them out of the
+    violation the server reports, so T2's 2026-08-23 rebuild (which moved the
+    near-horizon cone off storm-svc-1, making t6 rather than t2 the nearest
+    exposed horizon the inherited constraints() keys on) needed no edit
+    here -- see docs/superpowers/rehearsals/T2.md's Q3."""
 
     def __init__(self) -> None:
         self._inner = ForecastBlindBaseline("immediate")
@@ -407,15 +418,14 @@ class _WidensOnDisjointnessRejection:
 def test_t2a_carries_a_real_validate_plan_rejection(
     loaded_state_path, local_server_command, local_server_env,
 ):
-    """storm-svc-1's first-choice candidate under the near-horizon-only avoid
+    """storm-svc-1's first-choice candidate under a forecast-blind avoid
     genuinely fails validate_plan (disjointness_collapse against its own
     static protection leg, which shares the satna<->jhansi<->allahabad
     corridor with every cheap alternative to the exposed satna<->rewa
     corridor) -- a real rejection, not fabricated. Recovery means widening
     avoid with the violation's own shared_assets and re-calling route_service,
     which is what makes recovered_from_rejection a metric that can actually
-    fire. See docs/superpowers/rehearsals/T2.md and task-15-report.md for the
-    full derivation."""
+    fire. See docs/superpowers/rehearsals/T2.md for the full derivation."""
     t2a = load_all_scenarios()["T2a"]
 
     async def _run():

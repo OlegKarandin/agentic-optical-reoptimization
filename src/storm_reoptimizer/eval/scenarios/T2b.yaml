@@ -14,21 +14,31 @@ forecast:
   t0:                        # BYTE-IDENTICAL to T2a -- see T2a.yaml's comment
     t6: {cone: {type: Polygon, coordinates: [[[79.6, 23.40469], [79.71379, 23.39091], [79.81982, 23.35048], [79.91088, 23.28616], [79.98074, 23.20235], [80.02466, 23.10474], [80.03964, 23.0], [80.02466, 22.89526], [79.98074, 22.79765], [79.91088, 22.71384], [79.81982, 22.64952], [79.71379, 22.60909], [79.6, 22.59531], [79.48621, 22.60909], [79.38018, 22.64952], [79.28912, 22.71384], [79.21926, 22.79765], [79.17534, 22.89526], [79.16036, 23.0], [79.17534, 23.10474], [79.21926, 23.20235], [79.28912, 23.28616], [79.38018, 23.35048], [79.48621, 23.39091], [79.6, 23.40469]]]},
          width_km: 90, center: {lat: 23.0, lon: 79.6}}
-  t1:                        # the revision -- structurally identical to T2a's
-                              # (same two horizons, same centre) with a +0.2km
-                              # width epsilon on each so the issuance TEXT
-                              # differs at the decision hour (assert_issuance_
-                              # prefix_shared's requirement) without changing
-                              # which fibers each horizon exposes (still
-                              # satna<->rewa at the near horizon, satna<->rewa
-                              # + satna<->jhansi at the far one -- see T2a.yaml's
-                              # comment for why the centres are unmoved). The
-                              # real flip -- svc-c's groomability -- lives
-                              # outside this forecast entirely.
-    t2: {cone: {type: Polygon, coordinates: [[[81.32778, 25.26115], [81.44347, 25.24733], [81.55128, 25.20681], [81.64385, 25.14235], [81.71489, 25.05835], [81.75954, 24.96053], [81.77478, 24.85555], [81.75954, 24.75058], [81.71489, 24.65276], [81.64385, 24.56876], [81.55128, 24.5043], [81.44347, 24.46378], [81.32778, 24.44996], [81.21208, 24.46378], [81.10428, 24.5043], [81.0117, 24.56876], [80.94066, 24.65276], [80.89601, 24.75058], [80.88078, 24.85555], [80.89601, 24.96053], [80.94066, 25.05835], [81.0117, 25.14235], [81.10428, 25.20681], [81.21208, 25.24733], [81.32778, 25.26115]]]},
-         width_km: 90.2, center: {lat: 24.855553333333333, lon: 81.32777666666667}}
-    t6: {cone: {type: Polygon, coordinates: [[[81.32778, 25.75577], [81.58456, 25.7251], [81.82384, 25.63517], [82.02931, 25.49211], [82.18698, 25.30566], [82.28609, 25.08855], [82.3199, 24.85555], [82.28609, 24.62256], [82.18698, 24.40544], [82.02931, 24.219], [81.82384, 24.07594], [81.58456, 23.98601], [81.32778, 23.95533], [81.071, 23.98601], [80.83172, 24.07594], [80.62624, 24.219], [80.46857, 24.40544], [80.36946, 24.62256], [80.33566, 24.85555], [80.36946, 25.08855], [80.46857, 25.30566], [80.62624, 25.49211], [80.83172, 25.63517], [81.071, 25.7251], [81.32778, 25.75577]]]},
-         width_km: 200.2, center: {lat: 24.855553333333333, lon: 81.32777666666667}}
+  t1:                        # the revision -- the SAME two horizons as T2a, at
+                              # the SAME two widths (60 near, 200 far), with the
+                              # SAME far centre (storm-svc-1's own point, so the
+                              # far horizon exposes satna<->rewa AND
+                              # satna<->jhansi in both halves and mints an
+                              # identical wide avoid group).  ONLY the near
+                              # horizon's CENTRE differs from T2a's, and it
+                              # differs along the 300.0 km circle about
+                              # storm-svc-1's point (|delta| 1.1e-13 km), so
+                              # storm-svc-1's own derived exposure -- its p_cut
+                              # at the exposure horizon, the within-issuance
+                              # cone motion, every horizon's width -- is EQUAL
+                              # across the halves and no threshold on any of
+                              # them can separate the pair.
+                              #
+                              # What DOES differ is where the eight kanpur/agra
+                              # claimants fall: this centre is 47 km deeper into
+                              # that cluster than T2a's, taking them from
+                              # p_cut 0.076-0.085 (71.1 G at risk) to
+                              # 0.294-0.454 (347.4 G).  See
+                              # docs/superpowers/rehearsals/T2.md.
+    t2: {cone: {type: Polygon, coordinates: [[[78.62893, 26.30806], [78.70665, 26.29887], [78.77907, 26.27191], [78.84126, 26.22904], [78.88898, 26.17316], [78.91897, 26.10809], [78.92921, 26.03826], [78.91897, 25.96843], [78.88898, 25.90337], [78.84126, 25.84749], [78.77907, 25.80461], [78.70665, 25.77766], [78.62893, 25.76847], [78.55122, 25.77766], [78.4788, 25.80461], [78.41661, 25.84749], [78.36889, 25.90337], [78.33889, 25.96843], [78.32866, 26.03826], [78.33889, 26.10809], [78.36889, 26.17316], [78.41661, 26.22904], [78.4788, 26.27191], [78.55122, 26.29887], [78.62893, 26.30806]]]},
+         width_km: 60, center: {lat: 26.0382632644897, lon: 78.62893218613868}}
+    t6: {cone: {type: Polygon, coordinates: [[[81.32778, 25.75487], [81.5843, 25.72423], [81.82334, 25.63439], [82.02861, 25.49147], [82.18612, 25.30521], [82.28513, 25.08831], [82.31891, 24.85555], [82.28513, 24.62279], [82.18612, 24.40589], [82.02861, 24.21964], [81.82334, 24.07672], [81.5843, 23.98688], [81.32778, 23.95623], [81.07125, 23.98688], [80.83221, 24.07672], [80.62694, 24.21964], [80.46943, 24.40589], [80.37042, 24.62279], [80.33665, 24.85555], [80.37042, 25.08831], [80.46943, 25.30521], [80.62694, 25.49147], [80.83221, 25.63439], [81.07125, 25.72423], [81.32778, 25.75487]]]},
+         width_km: 200, center: {lat: 24.855553333333333, lon: 81.32777666666667}}
 realized: {}                 # EQUAL to T2a -- nothing realized-cut this episode
 gold:
   survived: [storm-svc-1]
@@ -36,35 +46,59 @@ gold:
   decision_at_t0: wait
   label: narrow
   rationale: |
-    Wide avoid costs the last spare pair; narrow avoid is an ip_reroute that
-    costs none but sits inside the t+3 cone with P(re-exposure) = 0.3.
-    T2a: svc-c has groomable survivors (probe: route_service(svc-c) returns an
-      ip_reroute candidate), so the spare has no competing claim. Insurance
-      costs ~0 and removes 0.3 * 300 G = 90 G of expected loss. Correct: wide.
-    T2b: svc-c has no groomable survivor (probe: route_service(svc-c) returns
-      optical_reroute only), so the spare is certainly claimed. Insurance costs
-      1.0 * 300 G later to remove 0.3 * 300 G now. Correct: narrow.
+    ONE spare transponder pair, two claims on it.
+      * Spend it now on insurance for storm-svc-1 (WIDE avoid: route clear of
+        the full far-horizon group -- an optical_reroute via jabalpur costing
+        1 pair) and its 0.5198630338 x 300 G = 156.0 G of expected loss at t6
+        goes away.
+      * Hold it (NARROW avoid: avoid={}, an ip_reroute that reuses the current
+        lightpath and costs nothing) and it stays available for the claimants
+        the t2 cone lands on -- which are cut an hour BEFORE storm-svc-1's own
+        exposure at t6, so they reach the pair first.
+    Both halves publish the SAME far horizon and therefore the SAME 156.0 G;
+    only the near horizon's centre moves, and with it the competing claim.
 
-    Real numbers, this half: route_service(storm-svc-1, avoid={}, basis=
-    physical, level=link) returns candidate_0 -- an ip_reroute reusing
-    storm-svc-1's own EXISTING working lightpath (lp-cand-storm-svc-1-0,
-    satna<->rewa<->allahabad) unchanged, restored_gbps=300, 0 spare pairs --
-    confirmed against the real server to validate cleanly (it stays disjoint
-    from the static protection leg because nothing physically moved). It sits
-    inside both the t2 and t6 cones -- no insurance bought -- which is
-    correct here because svc-c will certainly need the one spare.
-flip_variable: [svc-c, groom, spare, re-exposed]
+    Real numbers, this half: the t2 cone (300.0 km from storm-svc-1, width 60)
+    sits ON the kanpur/agra cluster.  Its eight 100 G services are exposed at
+    p_cut 0.2941 (d0004, d0301), 0.4510 (d0028, d0123) and 0.4537 (d0188,
+    d0189, d0349, d0350) -- 330.5 G, or 347.4 G summed over every one of the
+    572 non-SUT services.  347.4 G > 156.0 G (2.23x): the pair is far more
+    valuable held for the hour-earlier claimants than spent on insurance for
+    storm-svc-1.  Correct: NARROW.
+
+    The t6 cone also sits on five further services (d0361 0.3973, d0029 and
+    d0348 0.2814, d0212 and d0462 0.0693 -- 128.4 G).  That number is
+    IDENTICAL in both halves (the far horizon is byte-identical), so it cannot
+    discriminate; and those services are cut in the same hour as storm-svc-1
+    itself, where a 300 G service outranks a 100 G one for the last pair
+    whichever way this decision goes.  Only the t2 claimants -- cut an hour
+    EARLIER -- actually compete for it.
+
+    route_service(storm-svc-1, avoid={}, basis=physical, level=link) returns
+    candidate_0 -- an ip_reroute reusing storm-svc-1's own EXISTING working
+    lightpath (lp-cand-storm-svc-1-0, satna<->rewa<->allahabad) unchanged,
+    restored_gbps=300, 0 spare pairs -- confirmed against the real server to
+    validate cleanly (it stays disjoint from the static protection leg because
+    nothing physically moved).  It sits inside the t6 cone -- no insurance
+    bought -- which is correct here because the pair is worth more to the
+    claimants.
+flip_variable: [claimant, spare, near, horizon]
 metadata:
   label_rule: avoid_horizon_at_decision_hour
   wide_avoid_risk_group: rg_T2b_t1_t6   # matches the runner's rg_{scenario}_{issued}_{horizon} minting
   widest_avoid_feasible: true           # EQUAL to T2a -- see rehearsal doc Q1;
                                          # do NOT reintroduce the discarded
                                          # draft's false/true split
-  cone_width_km: 90            # EQUAL to T2a (declared value; this half's
-                                # actual near-horizon width is 90.2, an
-                                # epsilon needed only for the issuance-prefix
-                                # inequality -- see the t1 forecast comment)
-  cone_motion_kmh: 0.0         # EQUAL to T2a
-  n_future_claimants: 1        # EQUAL to T2a -- svc-c
-  exposure_horizon_hours: 2    # EQUAL to T2a
+  cone_width_km: 60            # EQUAL to T2a (the near horizon's declared
+                                # width; the far horizon's 200 is equal too and
+                                # is checked directly by the derived-geometry
+                                # assertion, which reads EVERY horizon's width)
+  cone_motion_kmh: 300.0       # EQUAL to T2a -- the WITHIN-issuance motion
+                                # (t2 centre -> t6 centre, one hour-label index
+                                # step), the quantity derived.py measures
+  n_future_claimants: 8        # EQUAL to T2a -- d0004, d0028, d0123, d0188,
+                                # d0189, d0301, d0349, d0350 are the services
+                                # over p_cut 0.05 at the t2 horizon in BOTH
+                                # halves; only their p_cut differs
+  exposure_horizon_hours: 2    # EQUAL to T2a (t1 -> t6 is two hour-label steps)
   spares_on_hand: 1            # EQUAL to T2a
