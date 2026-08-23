@@ -11,7 +11,8 @@ from storm_reoptimizer.eval.assertions import (
 )
 from storm_reoptimizer.eval.derived import derived_scalars_for
 from storm_reoptimizer.eval.rules import (
-    OBSERVABLE_VARS, best_rule, candidate_rules, score_rule,
+    OBSERVABLE_VARS, _distinct_within_tolerance, best_rule, candidate_rules,
+    score_rule,
 )
 from storm_reoptimizer.eval.scenario_file import load_all_scenarios
 from storm_reoptimizer.mcp_client import connect_server
@@ -27,6 +28,21 @@ def test_the_enumerated_observables_are_the_five_the_spec_names():
     assert OBSERVABLE_VARS == (
         "cone_width_km", "cone_motion_kmh", "n_future_claimants",
         "exposure_horizon_hours", "spares_on_hand")
+
+
+def test_distinct_within_tolerance_collapses_float_noise_not_real_gaps():
+    """Regression for the failure mode found rebuilding T1's geometry
+    (whole-branch fix, Step 2): two derived values that agree to ~1e-13 --
+    well inside DERIVED_TOLERANCE=1e-6, real float slack from a numerical
+    solve, not a real difference -- must collapse to ONE split-point
+    candidate, or a threshold rule can sit on the noise and falsely "solve"
+    a pair that was built to be unsolvable. A gap that is actually
+    meaningful (1e-3, three orders above the tolerance) must NOT collapse --
+    the check still has to catch a real confound."""
+    assert _distinct_within_tolerance(
+        [0.1349420979, 0.1349420979 + 1e-13], tol=1e-6) == [0.1349420979]
+    assert _distinct_within_tolerance(
+        [0.5, 0.5 + 1e-3], tol=1e-6) == pytest.approx([0.5, 0.501])
 
 
 def test_the_enumeration_includes_parameter_free_greedy_policies():

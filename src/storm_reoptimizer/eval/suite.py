@@ -161,12 +161,12 @@ def main() -> None:
     import os
     from contextlib import asynccontextmanager
 
+    from .derived import derived_scalars_for
     from ..mcp_client import connect_server
 
     topology = (Path(__file__).parent.parent / "data"
                 / "toy_india_topology.json")
     episodes = load_all_scenarios()
-    assert_no_single_variable_rule_solves(list(episodes.values()))
     # state_file is recorded relative to the repo root (see scenario_file.py's
     # module docstring and every scenario YAML's "eval/states/..." value), not
     # relative to the current working directory -- resolve it against
@@ -193,6 +193,19 @@ def main() -> None:
         async with connect_server(
             topology, env=env, extra_args=["--state", str(state)]) as client:
             yield client
+
+    async def _derived_scalars() -> dict[str, dict[str, float]]:
+        async with _connect() as client:
+            return await derived_scalars_for(
+                client, list(episodes.values()), topology_path=topology)
+
+    # Widened with DERIVED (not just author-declared) geometry -- the
+    # declared-only check is exactly what missed T1's p_cut confound for
+    # three rounds of review (whole-branch review, finding C2). The entry
+    # point that prints Claim 2 below must be backed by the same enumeration
+    # that closed the finding, not the weaker one that missed it.
+    assert_no_single_variable_rule_solves(
+        list(episodes.values()), asyncio.run(_derived_scalars()))
 
     results = asyncio.run(run_suite(
         _connect, topology_path=topology,

@@ -292,7 +292,7 @@ async def assert_non_flip_decisions_non_binding(
                     f"lost it.")
 
 
-async def assert_declared_scalars_match_derived_geometry(
+async def assert_pair_derived_geometry_is_equal(
     client_a: Client, client_b: Client, a: ScenarioFile, b: ScenarioFile, *,
     topology_path: str | Path,
 ) -> None:
@@ -375,6 +375,20 @@ def _derived_mismatches(a: ScenarioFile, derived_a: DerivedGeometry,
             problems.append(
                 f"width_km at horizon {horizon!r}: {widths_a[horizon]!r} "
                 f"({a.id}) vs {widths_b[horizon]!r} ({b.id})")
+    # The SUT's own exposure at EVERY horizon, not just the declared exposure
+    # one (scoped re-review, Important #3): a pair whose flip lives in a
+    # horizon other than exposure_horizon_hours could otherwise move the
+    # SUT's exposure there unchecked.
+    exposure_a = derived_a.sut_exposure_by_horizon
+    exposure_b = derived_b.sut_exposure_by_horizon
+    for horizon in sorted(set(exposure_a) & set(exposure_b)):
+        offset_a, p_cut_a = exposure_a[horizon]
+        offset_b, p_cut_b = exposure_b[horizon]
+        if abs(p_cut_a - p_cut_b) > DERIVED_TOLERANCE:
+            problems.append(
+                f"sut_p_cut at horizon {horizon!r}: {p_cut_a!r} ({a.id}) vs "
+                f"{p_cut_b!r} ({b.id}), offsets {offset_a:.3f}km/{offset_b:.3f}km, "
+                f"|delta| = {abs(p_cut_a - p_cut_b):.6g} > {DERIVED_TOLERANCE:g}")
     return problems
 
 

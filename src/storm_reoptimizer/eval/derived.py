@@ -84,6 +84,18 @@ class DerivedGeometry:
     sut_p_cut_at_exposure_horizon: float
     within_issuance_cone_motion_kmh: float
     horizon_widths_km: dict[str, float]
+    # (offset_km, p_cut) for the SUT at EVERY horizon the decision-hour
+    # issuance publishes, not just `exposure_horizon`. Added 2026-08-23
+    # (scoped re-review, Important #3): `sut_p_cut_at_exposure_horizon` alone
+    # only holds the SUT's exposure equal at the ONE horizon `metadata.
+    # exposure_horizon_hours` names -- a pair whose flip moved a DIFFERENT
+    # horizon (the way T2's near horizon does) could in principle change the
+    # SUT's exposure THERE without this check ever looking. The shipped
+    # suite happens to keep every horizon's SUT exposure equal already (T2/T3
+    # because the far horizon IS the SUT's own point in both halves), but
+    # that was never checked, only true by construction of these three
+    # specific pairs.
+    sut_exposure_by_horizon: dict[str, tuple[float, float]]
 
     def scalars(self) -> dict[str, float]:
         """The flat name -> number view `rules.py` and the pair assertion
@@ -178,6 +190,24 @@ def sut_p_cut_at_exposure_horizon(
                                    scenario.damage_radius_km)
 
 
+def sut_exposure_by_horizon(
+    scenario: ScenarioFile, sut_point: tuple[float, float]
+) -> dict[str, tuple[float, float]]:
+    """`(offset_km, p_cut)` for the service under test at EVERY horizon the
+    decision-hour issuance publishes -- not just the one `exposure_horizon_
+    hours` names. Same `radial_offset_km` -> `cut_probability` chain as
+    `sut_p_cut_at_exposure_horizon`, run once per horizon, so a pair whose
+    flip lives in a horizon OTHER than the declared exposure one still has
+    the SUT's own exposure there held to account."""
+    issuance = decision_issuance(scenario)
+    out: dict[str, tuple[float, float]] = {}
+    for horizon, cone in issuance.horizons.items():
+        offset = radial_offset_km(cone.center["lat"], cone.center["lon"], *sut_point)
+        out[horizon] = (offset, cut_probability(offset, cone.width_km,
+                                                 scenario.damage_radius_km))
+    return out
+
+
 def derived_geometry_from_point(
     scenario: ScenarioFile, sut_point: tuple[float, float]
 ) -> DerivedGeometry:
@@ -193,7 +223,8 @@ def derived_geometry_from_point(
         sut_offset_km=offset,
         sut_p_cut_at_exposure_horizon=p_cut,
         within_issuance_cone_motion_kmh=within_issuance_cone_motion_kmh(scenario),
-        horizon_widths_km=horizon_widths_km(scenario))
+        horizon_widths_km=horizon_widths_km(scenario),
+        sut_exposure_by_horizon=sut_exposure_by_horizon(scenario, sut_point))
 
 
 async def derived_geometry(client: "Client", scenario: ScenarioFile, *,

@@ -75,7 +75,7 @@ def _distinct_within_tolerance(values, tol: float = DERIVED_TOLERANCE) -> list[f
     still differ as raw floats, and a threshold rule can split exactly
     between them -- a real failure mode hit while rebuilding T1's geometry
     (whole-branch fix, Step 2): a numerically-solved pair that passed
-    `assert_declared_scalars_match_derived_geometry`'s 1e-6 equality check
+    `assert_pair_derived_geometry_is_equal`'s 1e-6 equality check
     was still reported "solved 1.00" by a threshold sitting on the last
     mantissa bits. `DERIVED_TOLERANCE` is already the tolerance the pair
     assertion uses to call two derived values "equal"; a rule search that

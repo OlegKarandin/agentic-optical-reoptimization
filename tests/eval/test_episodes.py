@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from storm_reoptimizer.eval.assertions import (
-    assert_declared_scalars_match_derived_geometry,
+    assert_pair_derived_geometry_is_equal,
     assert_each_baseline_variant_ties, assert_gold_choices_differ,
     assert_issuance_prefix_shared, assert_menus_identical,
     assert_non_flip_decisions_non_binding, assert_shared_scalars_equal,
@@ -74,7 +74,7 @@ async def _derived(a, b, state_path, server_command, server_env):
             yield client
 
     async with _connect() as client_a, _connect() as client_b:
-        await assert_declared_scalars_match_derived_geometry(
+        await assert_pair_derived_geometry_is_equal(
             client_a, client_b, a, b, topology_path=TOPOLOGY_PATH)
 
 
