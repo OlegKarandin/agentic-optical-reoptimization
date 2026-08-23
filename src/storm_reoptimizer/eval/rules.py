@@ -23,7 +23,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Callable
 
-from .derived import DERIVED_VARS
+from .derived import DERIVED_TOLERANCE, DERIVED_VARS
 from .scenario_file import ScenarioFile
 
 # What an episode's AUTHOR declared.
@@ -66,13 +66,38 @@ class Rule:
     side: Callable[[ScenarioFile], str]
 
 
+def _distinct_within_tolerance(values, tol: float = DERIVED_TOLERANCE) -> list[float]:
+    """Collapse values that agree to within `tol` into one representative,
+    instead of treating every bit-pattern as its own distinct value.
+
+    Without this, two derived quantities that are equal BY CONSTRUCTION (e.g.
+    two cone centres solved numerically to agree to 1e-13, not bit-for-bit)
+    still differ as raw floats, and a threshold rule can split exactly
+    between them -- a real failure mode hit while rebuilding T1's geometry
+    (whole-branch fix, Step 2): a numerically-solved pair that passed
+    `assert_declared_scalars_match_derived_geometry`'s 1e-6 equality check
+    was still reported "solved 1.00" by a threshold sitting on the last
+    mantissa bits. `DERIVED_TOLERANCE` is already the tolerance the pair
+    assertion uses to call two derived values "equal"; a rule search that
+    uses a tighter bar than the equality check it's supposed to validate
+    against is checking floating-point noise, not the episode."""
+    ordered = sorted(values)
+    distinct: list[float] = []
+    for v in ordered:
+        if not distinct or v - distinct[-1] > tol:
+            distinct.append(v)
+    return distinct
+
+
 def threshold_rules(episodes: list[ScenarioFile], var: str,
                     derived: DerivedMap | None = None) -> list[Rule]:
     """Every split point over the suite for one observable. Split points are
     the midpoints between adjacent distinct values -- exhaustive, because the
-    episode set is small enough to score every one of them."""
+    episode set is small enough to score every one of them. Values within
+    `DERIVED_TOLERANCE` of each other are treated as one value, not two (see
+    `_distinct_within_tolerance`)."""
     seen = [observables(e, derived) for e in episodes]
-    values = sorted({v[var] for v in seen if var in v})
+    values = _distinct_within_tolerance([v[var] for v in seen if var in v])
     thresholds = [(lo + hi) / 2.0 for lo, hi in zip(values, values[1:])]
     rules = []
     for threshold in thresholds:
