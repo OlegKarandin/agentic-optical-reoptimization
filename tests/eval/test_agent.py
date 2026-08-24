@@ -1,11 +1,20 @@
 """The LLM decider (agent decider design spec, 2026-08-24). Unit tests only:
 a fake Anthropic client, no network, no cost, and no `anthropic` install."""
+import ast
 import json
+from pathlib import Path
 
 import pytest
 
+from storm_reoptimizer.eval import agent as agent_module
 from storm_reoptimizer.eval.agent import (
-    P_CUT_ENUMERATION_THRESHOLD, project_observation,
+    CONSTRAINT_TOOL, DEFAULT_MODEL, OBJECTIVE_TOOL, P_CUT_ENUMERATION_THRESHOLD,
+    SYSTEM_PROMPT, TIMING_TOOL, ClaudeDecider, project_observation,
+    strict_tool_schema,
+)
+from storm_reoptimizer.eval.decisions import (
+    CONSTRAINT_JSON_SCHEMA, COST_TERMS, OBJECTIVE_JSON_SCHEMA,
+    TIMING_JSON_SCHEMA,
 )
 from storm_reoptimizer.eval.observation import Observation
 from storm_reoptimizer.eval.scenario_file import ConeAtHorizon, Issuance
@@ -127,3 +136,262 @@ def test_projection_bounds_the_prompt_against_a_full_573_service_roster():
     assert payload["n_services_total"] == 572
     assert payload["omitted_services"]["count"] == 571
     assert len(json.dumps(payload)) < 5_000
+
+
+MENU = {
+    "status": "solution",
+    "candidates": [
+        {"lever": "optical_reroute", "reused_lightpaths": [],
+         "new_lightpaths": [{"oms_sequence": ["oms_1"], "lam": 0,
+                             "mode_id": "300G@4.8dB", "gsnr_db": 12.0,
+                             "bitrate_gbps": 300.0}],
+         "restored_gbps": 300.0, "shortfall_gbps": 0.0,
+         "cost_vector": {"dropped_traffic": 0.0, "transponders": 40.0,
+                         "services_at_risk": 0, "total_margin": 5.0,
+                         "added_latency": 9.0, "spectrum_used": 20,
+                         "max_util": 0.7}},
+        {"lever": "ip_reroute", "reused_lightpaths": ["lp-x"],
+         "new_lightpaths": [], "restored_gbps": 250.0, "shortfall_gbps": 50.0,
+         "cost_vector": {"dropped_traffic": 50.0, "transponders": 38.0,
+                         "services_at_risk": 0, "total_margin": 5.0,
+                         "added_latency": 4.0, "spectrum_used": 18,
+                         "max_util": 0.8}},
+    ],
+    "pairs": [],
+}
+
+
+class FakeToolUse:
+    """Mimics exactly the four attributes the decider reads off a real
+    anthropic tool_use block. The real SDK types are unavailable here --
+    `anthropic` is deliberately not a hard dependency of this package."""
+    type = "tool_use"
+
+    def __init__(self, name, payload, block_id="toolu_test"):
+        self.id = block_id
+        self.name = name
+        self.input = payload
+
+
+class FakeText:
+    type = "text"
+
+    def __init__(self, text):
+        self.text = text
+
+
+class FakeThinking:
+    type = "thinking"
+
+    def __init__(self, thinking=""):
+        self.thinking = thinking
+
+
+class FakeResponse:
+    def __init__(self, *content):
+        self.content = list(content)
+
+
+class FakeMessages:
+    def __init__(self, responses):
+        self.queued = list(responses)
+        self.calls = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        if not self.queued:
+            raise AssertionError(
+                "the decider made more API calls than the test queued "
+                f"responses for ({len(self.calls)} calls)")
+        return self.queued.pop(0)
+
+
+class FakeAnthropic:
+    def __init__(self, *responses):
+        self.messages = FakeMessages(responses)
+
+
+TIMING_OK = {"action": "wait", "reasoning": "the far cone is 2h out"}
+CONSTRAINT_OK = {"avoid": {"risk_groups": ["rg_T3a_t1_t3"]},
+                 "reasoning": "route around the t3 cone",
+                 "protected": False, "best_effort": False,
+                 "basis": "physical", "level": "link"}
+OBJECTIVE_OK = {"choice": "candidate_1",
+                "priority": ["transponders", "dropped_traffic"],
+                "reasoning": "the ip_reroute costs no spare pairs"}
+
+
+def _decider(*responses, model=DEFAULT_MODEL, **kwargs):
+    client = FakeAnthropic(*responses)
+    return ClaudeDecider(model=model, client=client, **kwargs), client
+
+
+def test_the_decider_name_namespaces_the_model():
+    decider, _ = _decider()
+    assert decider.name == "agent:claude-sonnet-5"
+    assert ClaudeDecider(model="claude-opus-5",
+                         client=object()).name == "agent:claude-opus-5"
+
+
+def test_the_default_client_is_built_lazily_so_construction_needs_no_sdk():
+    # suite.py builds the decider before any rollout starts, and every unit
+    # test here constructs one. `anthropic` is an optional extra, so nothing
+    # may import it until a real API call is actually made.
+    assert ClaudeDecider()._client is None
+
+
+def test_anthropic_is_never_imported_at_module_scope():
+    tree = ast.parse(Path(agent_module.__file__).read_text(encoding="utf-8"))
+    names = set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            names |= {a.name for a in node.names}
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            names.add(node.module)
+    assert not any(n.split(".")[0] == "anthropic" for n in names)
+
+
+def test_strict_tool_schemas_drop_the_keywords_the_api_rejects():
+    # Strict tool use supports neither `minLength` nor a type-union list.
+    # decisions.py's schemas use both, so sending them raw is a 400 on the
+    # very first real call.
+    assert strict_tool_schema(TIMING_JSON_SCHEMA) == {
+        "type": "object", "additionalProperties": False,
+        "required": ["action", "reasoning"],
+        "properties": {
+            "action": {"type": "string", "enum": ["act", "wait"]},
+            "reasoning": {"type": "string"},
+        },
+    }
+    priority = strict_tool_schema(
+        OBJECTIVE_JSON_SCHEMA)["properties"]["priority"]
+    assert priority == {"anyOf": [
+        {"type": "array",
+         "items": {"type": "string", "enum": list(COST_TERMS)}},
+        {"type": "null"},
+    ]}
+    avoid = strict_tool_schema(CONSTRAINT_JSON_SCHEMA)["properties"]["avoid"]
+    assert avoid["additionalProperties"] is False
+    assert sorted(avoid["properties"]) == ["assets", "risk_groups", "srlgs"]
+
+
+def test_the_canonical_schemas_are_not_mutated_by_adaptation():
+    strict_tool_schema(TIMING_JSON_SCHEMA)
+    assert TIMING_JSON_SCHEMA["properties"]["reasoning"]["minLength"] == 1
+
+
+def test_timing_forces_its_own_tool_and_parses_the_action():
+    decider, client = _decider(
+        FakeResponse(FakeThinking(), FakeToolUse(TIMING_TOOL, TIMING_OK)))
+    decision = decider.timing(_obs(others=CLAIMANTS))
+    assert decision.action == "wait"
+    assert decision.reasoning == "the far cone is 2h out"
+    assert client.messages.calls[0]["tool_choice"] == {
+        "type": "tool", "name": TIMING_TOOL, "disable_parallel_tool_use": True}
+
+
+def test_constraints_forces_its_own_tool_and_parses_the_posture():
+    decider, client = _decider(
+        FakeResponse(FakeToolUse(CONSTRAINT_TOOL, CONSTRAINT_OK)))
+    decision = decider.constraints(_obs(others=CLAIMANTS))
+    assert decision.avoid == {"risk_groups": ["rg_T3a_t1_t3"]}
+    assert (decision.protected, decision.best_effort, decision.basis,
+            decision.level) == (False, False, "physical", "link")
+    assert client.messages.calls[0]["tool_choice"]["name"] == CONSTRAINT_TOOL
+
+
+def test_objective_forces_its_own_tool_and_parses_the_choice():
+    decider, client = _decider(
+        FakeResponse(FakeToolUse(OBJECTIVE_TOOL, OBJECTIVE_OK)))
+    decision = decider.objective(_obs(others=CLAIMANTS), MENU)
+    assert decision.choice == "candidate_1"
+    assert decision.priority == ("transponders", "dropped_traffic")
+    assert client.messages.calls[0]["tool_choice"]["name"] == OBJECTIVE_TOOL
+
+
+def test_every_request_declares_all_three_tools_so_one_cache_prefix_serves():
+    # Cache invalidation hierarchy: changing `tool_choice` does NOT
+    # invalidate the tools+system prefix, but changing TOOL DEFINITIONS does.
+    # One tool per decision point would give three separate prefixes across
+    # an hour-loop; declaring all three gives one.
+    decider, client = _decider(
+        FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)),
+        FakeResponse(FakeToolUse(CONSTRAINT_TOOL, CONSTRAINT_OK)))
+    obs = _obs(others=CLAIMANTS)
+    decider.timing(obs)
+    decider.constraints(obs)
+    first, second = client.messages.calls
+    assert [t["name"] for t in first["tools"]] == [
+        TIMING_TOOL, CONSTRAINT_TOOL, OBJECTIVE_TOOL]
+    assert first["tools"] == second["tools"]
+    assert first["system"] == second["system"]
+
+
+def test_the_system_block_is_cached_and_thinking_is_adaptive():
+    decider, client = _decider(
+        FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)))
+    decider.timing(_obs(others=CLAIMANTS))
+    call = client.messages.calls[0]
+    assert call["system"] == [{"type": "text", "text": SYSTEM_PROMPT,
+                               "cache_control": {"type": "ephemeral"}}]
+    assert call["thinking"] == {"type": "adaptive"}
+    assert call["model"] == "claude-sonnet-5"
+
+
+def test_no_parameter_sonnet_5_rejects_is_ever_sent():
+    # Sonnet 5 returns 400 for temperature/top_p/top_k and for
+    # thinking.budget_tokens. A unit test is the only place this gets caught
+    # before a real run burns a rollout.
+    decider, client = _decider(
+        FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)))
+    decider.timing(_obs(others=CLAIMANTS))
+    call = client.messages.calls[0]
+    for banned in ("temperature", "top_p", "top_k"):
+        assert banned not in call
+    assert "budget_tokens" not in call["thinking"]
+
+
+def test_the_user_turn_carries_the_projection_not_the_raw_observation():
+    decider, client = _decider(
+        FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)))
+    decider.timing(_obs(others=CLAIMANTS + BELOW_THRESHOLD))
+    content = client.messages.calls[0]["messages"][0]["content"]
+    assert "d0363" in content            # a claimant above the threshold
+    assert "d0001" not in content        # one below it
+    assert "omitted_services" in content
+    assert "n_services_total" in content
+
+
+def test_the_objective_prompt_states_each_candidates_own_spare_cost():
+    # cost_vector["transponders"] is 2.0 * the WHOLE network's lightpath
+    # count on a clone (ledger.py's docstring); the candidate's own cost is
+    # len(new_lightpaths). Handing the model the precomputed figure is the
+    # only reliable way it reasons about spares correctly.
+    decider, client = _decider(
+        FakeResponse(FakeToolUse(OBJECTIVE_TOOL, OBJECTIVE_OK)))
+    decider.objective(_obs(others=CLAIMANTS), MENU)
+    content = client.messages.calls[0]["messages"][0]["content"]
+    menu = json.loads(content.split("\n\n")[0])["menu"]
+    assert [c["pairs_needed"] for c in menu["candidates"]] == [1, 0]
+    assert [c["candidate_label"] for c in menu["candidates"]] == [
+        "candidate_0", "candidate_1"]
+
+
+def test_the_system_prompt_warns_that_transponders_is_a_network_wide_count():
+    assert "transponders" in SYSTEM_PROMPT
+    assert "pairs_needed" in SYSTEM_PROMPT
+
+
+def test_the_system_prompt_never_leaks_scoring_internals():
+    # Coaching the model toward cites_flip_variable would pass a
+    # NECESSARY-NOT-SUFFICIENT check while destroying its only purpose.
+    lowered = SYSTEM_PROMPT.lower()
+    for leak in ("flip_variable", "flip variable", "pair_solved", "gold",
+                 "cites_", "label_correct", "scoring"):
+        assert leak not in lowered
+
+
+def test_the_system_prompt_clears_sonnet_5s_minimum_cacheable_prefix():
+    # Sonnet 5 will not create a cache entry below 1024 tokens -- silently,
+    # with no error. ~4 chars/token is the working estimate.
+    assert len(SYSTEM_PROMPT) > 4 * 1024
