@@ -16,6 +16,11 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.5"]
+# Only eval/agent.py needs this, and only when --include-agent is passed.
+# Keeping it out of `dependencies` is what lets the whole test suite -- and a
+# plain `python -m storm_reoptimizer.eval.suite` -- run with no SDK and no
+# credentials.
+agent = ["anthropic>=0.40"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

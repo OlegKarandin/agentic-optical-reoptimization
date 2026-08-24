@@ -2,6 +2,7 @@
 a fake Anthropic client, no network, no cost, and no `anthropic` install."""
 import ast
 import json
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -12,12 +13,14 @@ from storm_reoptimizer.eval.agent import (
     P_CUT_ENUMERATION_THRESHOLD, SYSTEM_PROMPT, TIMING_TOOL, ClaudeDecider,
     project_observation, strict_tool_schema,
 )
+from storm_reoptimizer.eval.baseline import ForecastBlindBaseline
 from storm_reoptimizer.eval.decisions import (
     CONSTRAINT_JSON_SCHEMA, COST_TERMS, DecisionError, OBJECTIVE_JSON_SCHEMA,
     TIMING_JSON_SCHEMA,
 )
 from storm_reoptimizer.eval.observation import Observation
 from storm_reoptimizer.eval.scenario_file import ConeAtHorizon, Issuance
+from storm_reoptimizer.eval.suite import build_arg_parser, build_deciders
 
 HORIZON = "t3"
 
@@ -528,3 +531,62 @@ def test_no_audit_file_is_written_when_none_is_configured(tmp_path):
     decider, _ = _decider(FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)))
     decider.timing(_obs(others=CLAIMANTS))
     assert list(tmp_path.iterdir()) == []
+
+
+PYPROJECT = Path(__file__).parents[2] / "pyproject.toml"
+
+
+def _names(argv):
+    return [d.name
+            for d in build_deciders(build_arg_parser().parse_args(argv))]
+
+
+def test_a_plain_suite_run_stays_free_and_keyless():
+    # `python -m storm_reoptimizer.eval.suite` must not spend API credits or
+    # need credentials unless it was asked to.
+    assert _names([]) == ["baseline:immediate", "baseline:at_deadline"]
+
+
+def test_include_agent_appends_exactly_one_claude_decider():
+    assert _names(["--include-agent"]) == [
+        "baseline:immediate", "baseline:at_deadline", "agent:claude-sonnet-5"]
+
+
+def test_the_agent_model_is_overridable_from_the_command_line():
+    assert _names(["--include-agent", "--agent-model", "claude-opus-5"])[-1] \
+        == "agent:claude-opus-5"
+
+
+def test_naming_a_model_without_the_flag_still_runs_baselines_only():
+    assert _names(["--agent-model", "claude-opus-5"]) == [
+        "baseline:immediate", "baseline:at_deadline"]
+
+
+def test_the_agent_decider_is_not_collapsed_to_a_single_rollout():
+    # collapse_deterministic special-cases ForecastBlindBaseline only, which
+    # is what gives the agent its intended N=3 runs per episode for free.
+    agent = build_deciders(
+        build_arg_parser().parse_args(["--include-agent"]))[-1]
+    assert not isinstance(agent, ForecastBlindBaseline)
+
+
+def test_the_agent_name_survives_the_trace_filename_sanitizer():
+    # run_suite writes traces via name.replace(":", "_"); a colon would be an
+    # illegal Windows filename.
+    agent = build_deciders(
+        build_arg_parser().parse_args(["--include-agent"]))[-1]
+    assert agent.name.replace(":", "_") == "agent_claude-sonnet-5"
+
+
+def test_the_agent_arm_writes_its_audit_under_eval_traces():
+    agent = build_deciders(
+        build_arg_parser().parse_args(["--include-agent"]))[-1]
+    assert agent._audit_path.name == "agent-calls.jsonl"
+    assert agent._audit_path.parent.name == "traces"
+
+
+def test_the_anthropic_sdk_is_an_optional_extra_not_a_hard_dependency():
+    data = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
+    project = data["project"]
+    assert project["optional-dependencies"]["agent"] == ["anthropic>=0.40"]
+    assert not any(d.startswith("anthropic") for d in project["dependencies"])

@@ -14,11 +14,13 @@ pairs it takes values in {0, 1/3, 2/3, 1}. That is enough to tell a working
 harness from a broken one and NOT enough to separate luck from skill."""
 from __future__ import annotations
 
+import argparse
 import asyncio
 import copy
 import statistics
 from pathlib import Path
 
+from .agent import ClaudeDecider, DEFAULT_MODEL
 from .assertions import assert_no_single_variable_rule_solves
 from .baseline import ForecastBlindBaseline
 from .runner import run_episode
@@ -29,6 +31,7 @@ RUNS_PER_EPISODE = 3
 # src/storm_reoptimizer/eval/suite.py -> eval -> storm_reoptimizer -> src -> repo root
 REPO_ROOT = Path(__file__).parent.parent.parent.parent
 TRACES_DIR = REPO_ROOT / "eval" / "traces"
+AGENT_AUDIT_PATH = TRACES_DIR / "agent-calls.jsonl"
 
 
 def _redact_volatile_ids(trace_dict: dict) -> dict:
@@ -157,12 +160,43 @@ def render_results_table(results: dict) -> str:
     return "\n".join(lines)
 
 
-def main() -> None:
+def build_arg_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="storm_reoptimizer.eval.suite",
+        description="Run every eval episode against the deciders and print "
+                    "the results table.")
+    p.add_argument(
+        "--include-agent", action="store_true",
+        help="Also run the LLM decider. Requires the `agent` extra "
+             "(pip install -e '.[agent]') and API credentials in the "
+             "environment; costs money. Off by default so a plain run stays "
+             "free and keyless.")
+    p.add_argument(
+        "--agent-model", default=DEFAULT_MODEL,
+        help=f"Model for --include-agent (default: {DEFAULT_MODEL}).")
+    return p
+
+
+def build_deciders(args: argparse.Namespace) -> list:
+    """The decider list one suite run drives. Split out of main() so the flag
+    is testable without a server, a network, or an API key -- main() itself
+    launches the real MCP subprocess."""
+    deciders = [ForecastBlindBaseline("immediate"),
+                ForecastBlindBaseline("at_deadline")]
+    if args.include_agent:
+        deciders.append(ClaudeDecider(model=args.agent_model,
+                                      audit_path=AGENT_AUDIT_PATH))
+    return deciders
+
+
+def main(argv: list[str] | None = None) -> None:
     import os
     from contextlib import asynccontextmanager
 
     from .derived import derived_scalars_for
     from ..mcp_client import connect_server
+
+    args = build_arg_parser().parse_args(argv)
 
     topology = (Path(__file__).parent.parent / "data"
                 / "toy_india_topology.json")
@@ -208,9 +242,7 @@ def main() -> None:
         list(episodes.values()), asyncio.run(_derived_scalars()))
 
     results = asyncio.run(run_suite(
-        _connect, topology_path=topology,
-        deciders=[ForecastBlindBaseline("immediate"),
-                  ForecastBlindBaseline("at_deadline")]))
+        _connect, topology_path=topology, deciders=build_deciders(args)))
     print(render_results_table(results))
 
 
