@@ -1,3 +1,4 @@
+# src/storm_reoptimizer/eval/agent.py
 """The LLM decider (agent decider design spec, 2026-08-24, build order step
 6). One class behind the `Decider` protocol decisions.py already defines, so
 runner.py needs no change at all -- that was the whole point of the
