@@ -8,12 +8,12 @@ import pytest
 
 from storm_reoptimizer.eval import agent as agent_module
 from storm_reoptimizer.eval.agent import (
-    CONSTRAINT_TOOL, DEFAULT_MODEL, OBJECTIVE_TOOL, P_CUT_ENUMERATION_THRESHOLD,
-    SYSTEM_PROMPT, TIMING_TOOL, ClaudeDecider, project_observation,
-    strict_tool_schema,
+    CONSTRAINT_TOOL, DEFAULT_MODEL, MAX_ATTEMPTS, OBJECTIVE_TOOL,
+    P_CUT_ENUMERATION_THRESHOLD, SYSTEM_PROMPT, TIMING_TOOL, ClaudeDecider,
+    project_observation, strict_tool_schema,
 )
 from storm_reoptimizer.eval.decisions import (
-    CONSTRAINT_JSON_SCHEMA, COST_TERMS, OBJECTIVE_JSON_SCHEMA,
+    CONSTRAINT_JSON_SCHEMA, COST_TERMS, DecisionError, OBJECTIVE_JSON_SCHEMA,
     TIMING_JSON_SCHEMA,
 )
 from storm_reoptimizer.eval.observation import Observation
@@ -395,3 +395,136 @@ def test_the_system_prompt_clears_sonnet_5s_minimum_cacheable_prefix():
     # Sonnet 5 will not create a cache entry below 1024 tokens -- silently,
     # with no error. ~4 chars/token is the working estimate.
     assert len(SYSTEM_PROMPT) > 4 * 1024
+
+
+TIMING_BAD_ACTION = {"action": "hedge", "reasoning": "neither act nor wait"}
+TIMING_NO_REASONING = {"action": "wait", "reasoning": "   "}
+
+
+def test_three_attempts_is_the_contract():
+    assert MAX_ATTEMPTS == 3
+
+
+def test_an_invalid_payload_is_returned_as_an_error_tool_result_and_retried():
+    decider, client = _decider(
+        FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_BAD_ACTION,
+                                 block_id="toolu_first")),
+        FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)))
+    assert decider.timing(_obs(others=CLAIMANTS)).action == "wait"
+    retry = client.messages.calls[1]["messages"]
+    assert [m["role"] for m in retry] == ["user", "assistant", "user"]
+    result = retry[2]["content"][0]
+    assert result["type"] == "tool_result"
+    assert result["tool_use_id"] == "toolu_first"
+    assert result["is_error"] is True
+    assert "action" in result["content"]
+
+
+def test_the_retry_echoes_the_assistant_content_so_thinking_blocks_survive():
+    # Adaptive thinking means the assistant turn carries a thinking block
+    # alongside the tool_use. Continuing the same turn requires echoing it
+    # back unchanged, so the whole content list goes back, not just the text.
+    thinking = FakeThinking("weighing the near cone against the spare")
+    tool_use = FakeToolUse(TIMING_TOOL, TIMING_BAD_ACTION)
+    decider, client = _decider(
+        FakeResponse(thinking, tool_use),
+        FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)))
+    decider.timing(_obs(others=CLAIMANTS))
+    echoed = client.messages.calls[1]["messages"][1]
+    assert echoed["role"] == "assistant"
+    assert echoed["content"] == [thinking, tool_use]
+
+
+def test_a_response_with_no_tool_use_block_is_retried_as_a_correction():
+    decider, client = _decider(
+        FakeResponse(FakeText("I would rather discuss this in prose.")),
+        FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)))
+    assert decider.timing(_obs(others=CLAIMANTS)).action == "wait"
+    retry = client.messages.calls[1]["messages"]
+    assert [m["role"] for m in retry] == ["user", "assistant", "user"]
+    # No tool_use block means no tool_use_id to answer, so the correction is
+    # a plain user turn rather than a tool_result.
+    assert isinstance(retry[2]["content"], str)
+    assert TIMING_TOOL in retry[2]["content"]
+
+
+def test_a_tool_use_block_naming_a_different_tool_is_not_accepted():
+    decider, client = _decider(
+        FakeResponse(FakeToolUse(OBJECTIVE_TOOL, OBJECTIVE_OK)),
+        FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)))
+    assert decider.timing(_obs(others=CLAIMANTS)).action == "wait"
+    assert len(client.messages.calls) == 2
+
+
+def test_recovery_on_the_third_attempt_still_returns_a_decision():
+    decider, client = _decider(
+        FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_BAD_ACTION)),
+        FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_NO_REASONING)),
+        FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)))
+    assert decider.timing(_obs(others=CLAIMANTS)).action == "wait"
+    assert len(client.messages.calls) == 3
+
+
+def test_exhausting_every_attempt_raises_rather_than_degrading():
+    decider, client = _decider(
+        *[FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_BAD_ACTION))
+          for _ in range(MAX_ATTEMPTS)])
+    with pytest.raises(DecisionError, match="action"):
+        decider.timing(_obs(others=CLAIMANTS))
+    assert len(client.messages.calls) == MAX_ATTEMPTS
+
+
+def test_a_response_that_never_calls_the_tool_raises_a_decision_error():
+    # Exactly one exception type ever escapes this decider, so runner.py's
+    # "a decider exception kills the rollout" contract stays legible.
+    decider, _ = _decider(
+        *[FakeResponse(FakeText("no")) for _ in range(MAX_ATTEMPTS)])
+    with pytest.raises(DecisionError, match="no tool_use block"):
+        decider.timing(_obs(others=CLAIMANTS))
+
+
+def test_each_decision_starts_a_fresh_conversation():
+    # suite.py reuses ONE decider across all 7 episodes and every run.
+    # Anything carried on self would leak one rollout's context into another.
+    decider, client = _decider(
+        FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_BAD_ACTION)),
+        FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)),
+        FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)))
+    obs = _obs(others=CLAIMANTS)
+    decider.timing(obs)
+    decider.timing(obs)
+    assert len(client.messages.calls[2]["messages"]) == 1
+    assert client.messages.calls[2]["messages"][0]["role"] == "user"
+
+
+def test_the_audit_sidecar_records_what_the_model_was_shown(tmp_path):
+    audit = tmp_path / "agent-calls.jsonl"
+    decider, _ = _decider(
+        FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)), audit_path=audit)
+    decider.timing(_obs(others=CLAIMANTS + BELOW_THRESHOLD))
+    record = json.loads(audit.read_text(encoding="utf-8").strip())
+    assert record["decider"] == "agent:claude-sonnet-5"
+    assert record["scenario_id"] == "T3a"
+    assert record["hour"] == "t1"
+    assert record["decision"] == TIMING_TOOL
+    assert record["attempts"] == 1
+    assert record["shown_services"] == ["d0212", "d0363", "d0462",
+                                        "storm-svc-1"]
+    assert record["omitted_services"]["count"] == 2
+    assert record["n_services_total"] == 6
+    assert record["result"] == TIMING_OK
+
+
+def test_the_audit_records_how_many_attempts_a_decision_took(tmp_path):
+    audit = tmp_path / "agent-calls.jsonl"
+    decider, client = _decider(
+        FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_BAD_ACTION)),
+        FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)), audit_path=audit)
+    decider.timing(_obs(others=CLAIMANTS))
+    assert json.loads(audit.read_text(encoding="utf-8"))["attempts"] == 2
+
+
+def test_no_audit_file_is_written_when_none_is_configured(tmp_path):
+    decider, _ = _decider(FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)))
+    decider.timing(_obs(others=CLAIMANTS))
+    assert list(tmp_path.iterdir()) == []

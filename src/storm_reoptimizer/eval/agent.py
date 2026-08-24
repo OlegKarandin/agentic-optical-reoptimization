@@ -149,6 +149,9 @@ DEFAULT_MODEL = "claude-sonnet-5"
 # Thinking tokens count against max_tokens. A generous cap costs nothing
 # (billing is on tokens actually produced) and avoids a truncated tool call.
 MAX_TOKENS = 16000
+# Self-correction rounds for a schema/validation failure. Transient API
+# failures are the SDK's own max_retries' concern, not this loop's.
+MAX_ATTEMPTS = 3
 
 TIMING_TOOL = "submit_timing_decision"
 CONSTRAINT_TOOL = "submit_constraint_decision"
@@ -383,14 +386,79 @@ class ClaudeDecider:
         )
 
     def _decide(self, tool_name, decision_cls, obs, payload, user_content):
-        messages = [{"role": "user", "content": user_content}]
-        response = self._create(messages, tool_name)
-        block = next((b for b in response.content
-                      if getattr(b, "type", None) == "tool_use"
-                      and b.name == tool_name), None)
-        if block is None:
-            raise DecisionError(f"{tool_name}: no tool_use block in response")
-        return decision_cls.from_dict(block.input)
+        """One decision, with up to MAX_ATTEMPTS self-correction rounds.
+
+        Only schema/validation failures are retried here. Transient API
+        failures (429, 5xx, connection errors) belong to the SDK's own
+        `max_retries` and are deliberately not caught: this loop exists for
+        the class of failure the SDK cannot see.
+
+        On the final failure the DecisionError propagates. run_episode never
+        catches a decider exception, so a decider that cannot produce a valid
+        decision kills the rollout visibly instead of silently substituting a
+        degraded default that would then be scored as if it were a
+        judgement."""
+        messages: list[dict] = [{"role": "user", "content": user_content}]
+        failure: DecisionError | None = None
+        for attempt in range(MAX_ATTEMPTS):
+            response = self._create(messages, tool_name)
+            block = next((b for b in response.content
+                          if getattr(b, "type", None) == "tool_use"
+                          and b.name == tool_name), None)
+            if block is None:
+                failure = DecisionError(
+                    f"{tool_name}: no tool_use block in response")
+                # No tool_use id to answer, so the correction cannot be a
+                # tool_result; it has to be a plain user turn.
+                messages.append(
+                    {"role": "assistant", "content": response.content})
+                messages.append({"role": "user", "content": (
+                    f"That response contained no `{tool_name}` tool call. "
+                    f"Call `{tool_name}` with your decision.")})
+                continue
+            try:
+                decision = decision_cls.from_dict(block.input)
+            except DecisionError as exc:
+                failure = exc
+                # Echo the assistant content back unchanged -- with adaptive
+                # thinking it carries a thinking block that must survive the
+                # turn -- then answer its tool_use with the validation error.
+                messages.append(
+                    {"role": "assistant", "content": response.content})
+                messages.append({"role": "user", "content": [{
+                    "type": "tool_result", "tool_use_id": block.id,
+                    "is_error": True, "content": str(exc)}]})
+                continue
+            self._audit(obs, payload, tool_name, decision, attempt + 1)
+            return decision
+        raise failure
+
+    def _audit(self, obs, payload, tool_name, decision, attempts) -> None:
+        """Write-only telemetry: exactly what this call showed the model.
+
+        It cannot ride inside the decision itself -- tests/eval/
+        test_decisions.py asserts *Decision.to_dict() equals an exact dict,
+        so an extra field would break that round-trip -- so it lands in a
+        JSONL sidecar instead. This is what makes the projection auditable:
+        a reader can check that every claimant an episode names was actually
+        shown, and that omitted_services never hid something material."""
+        if self._audit_path is None:
+            return
+        record = {
+            "decider": self.name,
+            "scenario_id": obs.scenario_id,
+            "hour": obs.hour,
+            "iteration": obs.iteration,
+            "decision": tool_name,
+            "attempts": attempts,
+            "shown_services": sorted(payload["exposure"]),
+            "omitted_services": payload["omitted_services"],
+            "n_services_total": payload["n_services_total"],
+            "result": decision.to_dict(),
+        }
+        self._audit_path.parent.mkdir(parents=True, exist_ok=True)
+        with self._audit_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, default=str) + "\n")
 
     def timing(self, obs: Observation) -> TimingDecision:
         payload = project_observation(
