@@ -243,6 +243,53 @@ def test_the_before_aggregate_sums_only_strictly_earlier_horizons(
         flip.claimant_ecar_before_exposure_horizon)
 
 
+def test_the_min_aggregate_picks_the_other_horizon_than_the_peak(
+        example_scenario_yaml, write_scenario):
+    """`claimant_ecar_min_over_horizons` reads the SMALLEST horizon, which on
+    this fixture is the exposure horizon rather than the earlier one the peak
+    reads. That is the whole point of the variant (added 2026-08-26): which
+    horizon it reads is decided by the VALUES, not fixed in advance, so it can
+    follow a pair's discriminating horizon around without being told where it
+    is -- which is how it solved the shipped suite 6/6 when the other three
+    variants could not."""
+    scenario = _two_horizon_scenario(example_scenario_yaml, write_scenario)
+    points = {"storm-svc-1": (25.2, 81.0), "svc-b": (25.0, 81.0)}
+    demands = {"storm-svc-1": 300.0, "svc-b": 100.0}
+
+    flip = flip_scalars_from_points(scenario, points=points,
+                                    demands_gbps=demands)
+
+    assert (flip.claimant_ecar_min_over_horizons
+            < flip.claimant_ecar_peak_over_horizons)
+    # The peak is the t2 (earlier) horizon here, so the min must be the t3
+    # (exposure) one -- a different horizon, from the same two numbers.
+    assert flip.claimant_ecar_min_over_horizons == pytest.approx(
+        flip.claimant_ecar_at_exposure_horizon)
+    assert flip.claimant_ecar_peak_over_horizons == pytest.approx(
+        flip.claimant_ecar_before_exposure_horizon)
+
+
+def test_the_min_and_peak_aggregates_coincide_on_a_single_horizon(
+        example_scenario_yaml, write_scenario):
+    """One horizon means one value, so min == max == that value -- and it is
+    the exposure horizon's, since the issuance publishes nothing else. (This
+    is T1's shape after Task 4 deleted its dominating `t2` nowcast.)"""
+    scenario = load_scenario(write_scenario(example_scenario_yaml))
+    flip = flip_scalars_from_points(
+        scenario, points={"storm-svc-1": (25.2, 81.0), "svc-b": (25.0, 81.0)},
+        demands_gbps={"storm-svc-1": 300.0, "svc-b": 100.0})
+
+    assert flip.earlier_horizons == ()
+    assert flip.claimant_ecar_min_over_horizons > 0.0
+    # Deliberately NOT chained through pytest.approx: `a == approx(b) ==
+    # approx(c)` would compare two approx objects in its second link, which is
+    # not the assertion intended here.
+    assert flip.claimant_ecar_min_over_horizons == pytest.approx(
+        flip.claimant_ecar_peak_over_horizons)
+    assert flip.claimant_ecar_min_over_horizons == pytest.approx(
+        flip.claimant_ecar_at_exposure_horizon)
+
+
 def test_a_single_horizon_issuance_has_no_before_aggregate(
         example_scenario_yaml, write_scenario):
     scenario = load_scenario(write_scenario(example_scenario_yaml))
@@ -262,6 +309,14 @@ def test_the_flip_values_view_carries_exactly_the_swept_scalars(
         demands_gbps={"storm-svc-1": 300.0})
 
     assert set(flip.values()) == set(FLIP_VARS)
+    # Named explicitly, not just "whatever FLIP_VARS says": enumerating three
+    # of these four and believing the enumeration complete is exactly the
+    # mistake that let a solving policy sit in the shipped suite (see
+    # derived.py's module docstring).
+    assert set(FLIP_VARS) == {"claimant_ecar_at_exposure_horizon",
+                              "claimant_ecar_before_exposure_horizon",
+                              "claimant_ecar_peak_over_horizons",
+                              "claimant_ecar_min_over_horizons"}
 
 
 def test_a_missing_sut_point_raises_rather_than_silently_zeroing(

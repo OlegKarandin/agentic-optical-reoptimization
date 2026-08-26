@@ -186,6 +186,14 @@ _SOLVED = {
 }
 # T2a moved above T1a's conserve value: the values interleave, so no single
 # threshold separates the labels under either global orientation.
+#
+# This stopped being hypothetical on 2026-08-26. These two dicts are stylised
+# (their conserve tail is not any one real column), but the SHAPE is exactly
+# what the shipped suite did: `derived.claimant_ecar_min_over_horizons` really
+# did solve all six halves at 89.35 G with T2a at 71.1 G, and T2a's near-cone
+# retune really did fix it by lifting that one value past a CONSERVE half's --
+# to 124.0 G, above T1a's 107.6 G and below T2b's 128.4 G. See derived.py's
+# module docstring.
 _INTERLEAVED = {**_SOLVED, "T2a": 125.0}
 
 
@@ -234,12 +242,19 @@ def t1b():
 
 
 def _flip(scenario_id, *, at, sut_by_horizon, before=0.0, exposure="t3"):
+    earlier = tuple(h for h in sut_by_horizon if h != exposure)
+    # peak/min are over the PUBLISHED horizons' claimant values. With no
+    # earlier horizon there is only one of them, so both collapse onto `at` --
+    # `before` is 0.0 there because it sums an empty tuple, not because some
+    # horizon really carries no claim, and feeding that 0.0 into `min` would
+    # invent a horizon the issuance never published.
     return FlipScalars(
         scenario_id=scenario_id, exposure_horizon=exposure,
-        earlier_horizons=tuple(h for h in sut_by_horizon if h != exposure),
+        earlier_horizons=earlier,
         claimant_ecar_at_exposure_horizon=at,
         claimant_ecar_before_exposure_horizon=before,
-        claimant_ecar_peak_over_horizons=max(at, before),
+        claimant_ecar_peak_over_horizons=max(at, before) if earlier else at,
+        claimant_ecar_min_over_horizons=min(at, before) if earlier else at,
         sut_ecar_by_horizon=dict(sut_by_horizon))
 
 

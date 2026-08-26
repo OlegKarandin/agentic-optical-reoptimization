@@ -66,47 +66,79 @@ number ends up feeding. `FlipScalars.values()` is hard-restricted to exactly
 `FLIP_VARS` (`{name: getattr(self, name) for name in FLIP_VARS}`) for the
 same reason.
 
-**What running the whole-suite check actually found (2026-08-26).** When
-`assert_no_global_policy_solves_the_suite` was first built and run against
-the live server sweeping all three `FLIP_VARS` uniformly across all six twin
-halves, it found no solving policy on the first run -- it already passed.
-That is not evidence the claimant scalar is well-behaved; it is a structural
-artifact, root-caused per variable:
+**What running the whole-suite check actually found -- the real history, in
+order (2026-08-26).** This section was rewritten twice, and the first version
+was wrong in a way worth preserving as a warning, because the mistake was
+not arithmetic: it was believing an enumeration complete.
 
-  * `claimant_ecar_at_exposure_horizon` is TIED (to `DERIVED_TOLERANCE`) on
-    TWO separate pairs -- between T2's two halves AND between T3's two
-    halves (confirmed directly against `T2a.yaml`/`T2b.yaml`'s and
-    `T3a.yaml`/`T3b.yaml`'s `forecast.t1.t6` blocks: byte-identical
-    coordinates and width in each pair) -- because T2 and T3 each hold a
-    byte-identical far/exposure horizon across their halves by design -- the
-    flip in both pairs lives before that horizon, not at it. That is two
-    tied pairs for one variable, not one; it caps this variable at 4/6, one
-    worse than the other two.
-  * `claimant_ecar_before_exposure_horizon` is TIED between T1's two halves.
-    Historically because T1's `t1` issuance carried a byte-identical `t2`
-    nowcast in both halves; today, trivially, because Task 4 deleted that
-    nowcast, so T1's `t1` issuance now publishes ONLY `t3` (confirmed
-    directly against `T1a.yaml`'s `forecast.t1` block, a single horizon) --
-    `earlier_horizons` is empty in both halves, so this scalar is `0.0` in
-    both, not a residual nonzero byte-identical value. Either way it is
-    still a tie by construction, not by geometry.
-  * `claimant_ecar_peak_over_horizons` is TIED between T3's two halves, for
-    the same far-horizon reason as the first bullet.
+  1. The claimant-side aggregate was built with THREE variants:
+     `..._at_exposure_horizon`, `..._before_exposure_horizon`,
+     `..._peak_over_horizons`.
+  2. `assert_no_global_policy_solves_the_suite` was built and run live over
+     those three, and PASSED on the first run. This section then said so, and
+     root-caused the pass to a structural tie in each variant.
+  3. Task 4 deleted T1's dominating `t2` nowcast (an unrelated finding, F2).
+  4. A final whole-branch code review asked what the `min` over the same
+     per-horizon map does. It solves the suite 6/6 -- confirmed live, at
+     full precision, at a single global threshold of 89.35 G, lo -> spend and
+     hi -> conserve. That reproduces, almost to the decimal, the eval design
+     spec's own predicted "89.4 G, 6/6" finding, which this docstring had
+     dismissed as an artifact of mixed per-pair reading. It was not: `min`
+     performs that mixed reading MECHANICALLY, with one rule, applied
+     uniformly. The three-variant sweep passing was never evidence about the
+     geometry -- it was evidence about the list.
+  5. `claimant_ecar_min_over_horizons` was added to `FLIP_VARS`, the check
+     was observed genuinely FAILING -- exactly what the original remediation
+     plan had predicted all along, before (2)'s false green made the retune
+     it prescribed look unnecessary -- and T2's near-horizon geometry was
+     retuned until the check genuinely passes.
 
-A tied pair predicts the SAME label for both halves under any threshold and
-any orientation, which caps that variable below 6/6 regardless of how the
-geometry is tuned -- retuning one pair's own near-horizon values cannot
-remove a tie that exists because a DIFFERENT pair's far horizon is shared by
-design. This is also why the eval design spec's own claim that "one global
-threshold at 89.4 G answers 6/6" does not survive a uniformly-applied sweep:
-that number was reached by reading, per pair, whichever of {at-horizon,
-before-horizon} happens to be that pair's own discriminating value -- a
-mixed, per-pair-selected reading, not a single scalar applied the same way
-everywhere. `assert_no_global_policy_solves_the_suite` sweeps one scalar,
-one threshold, one orientation, uniformly; that is a different and stronger
-claim than "some column of numbers admits a split point," and the four tied
-pairs above (two on `claimant_ecar_at_exposure_horizon`, one each on the
-other two variables) are why no single column clears it.
+**Why `min` bites where the other three cannot.** T2 and T3 each hold their
+FAR horizon byte-identical across their halves and put the flip in the near
+one; T1's decision-hour issuance publishes a single horizon and puts the flip
+there. So any summary that always reads a FIXED horizon reads a shared one on
+some pair, and ties there. `min` reads whichever horizon happens to be
+smaller, which can be a different horizon in different halves, so it follows
+each pair's discriminating value around without being told where it is.
+
+**Where each variable stands now, measured live against the retuned suite:**
+
+  * `claimant_ecar_at_exposure_horizon` -- TIED (to `DERIVED_TOLERANCE`) on
+    TWO separate pairs: T2's halves (both 128.380 G) and T3's halves (both
+    283.950 G). Both pairs publish a byte-identical far/exposure horizon by
+    design, and in both the flip lives BEFORE that horizon, not at it. Two
+    tied pairs caps this variable at 4/6.
+  * `claimant_ecar_before_exposure_horizon` -- TIED between T1's halves
+    (both 0.0). Historically because T1's `t1` issuance carried a
+    byte-identical `t2` nowcast in both halves; today, trivially, because
+    Task 4 deleted that nowcast, so T1's `t1` issuance publishes only `t3`
+    and `earlier_horizons` is empty in both halves. Either way, a tie by
+    construction rather than by geometry. Caps at 5/6.
+  * `claimant_ecar_peak_over_horizons` -- TIED between T3's halves (both
+    283.950 G), for the same shared-far-horizon reason. Caps at 5/6.
+  * `claimant_ecar_min_over_horizons` -- NOT tied anywhere, and not blocked
+    by a tie. It is blocked by a genuine INTERLEAVE, which is the outcome
+    `assert_no_global_policy_solves_the_suite`'s own failure message asks
+    for: T1b 21.5 (spend), T3a 51.0 (spend), T1a 107.6 (CONSERVE), T2a 124.0
+    (SPEND), T2b 128.4 (conserve), T3b 182.8 (conserve). A conserve value
+    sits below a spend value, so neither orientation survives at any
+    threshold.
+
+That interleave is what the T2 retune bought. T2a's near cone was moved
+outward along its 300.0 km radial-offset circle about `storm-svc-1` (bearing
+288.0 -> 290.2 deg; only the bearing changed, the offset is held so every
+scalar `assert_pair_derived_geometry_is_equal` reads stays equal), lifting
+its claimant aggregate from 71.1 G to 124.0 G -- above T1a's 107.6 G, which
+is a CONSERVE half, and below T2's own shared far value of 128.4 G, so `min`
+still reads T2a's near horizon. The price is T2a's own decision margin,
+156.0/124.0 = 1.26x, down from 2.19x; that is a real and accepted cost, and
+it is documented in `T2a.yaml` and `docs/superpowers/rehearsals/T2.md`.
+
+A tie caps a variable below 6/6 regardless of how any geometry is tuned:
+retuning one pair's near-horizon values cannot remove a tie that exists
+because a DIFFERENT pair's far horizon is shared by design. An interleave is
+the stronger property but it is not free -- it has to be engineered, and it
+was.
 """
 from __future__ import annotations
 
@@ -285,9 +317,27 @@ def sut_exposure_by_horizon(
 # The claimant-side scalars W1.2's WHOLE-SUITE check sweeps. Deliberately
 # NOT in DERIVED_VARS and NOT in DerivedGeometry.scalars(): see this module's
 # docstring on the two-check doctrine. Order is the sweep order.
+#
+# `claimant_ecar_min_over_horizons` (added 2026-08-26, final whole-branch
+# review) is the one that actually bites, and the reason it does is worth
+# stating: `min` is not a fourth arbitrary summary, it is the mechanical
+# equivalent of the "read whichever horizon happens to discriminate in THIS
+# pair" reading the eval design spec used to reach its "89.4 G answers 6/6"
+# claim. For a pair whose near horizon is BELOW the shared far one, `min`
+# returns the near, informative value; for a pair whose near horizon is ABOVE
+# it, `min` returns the shared far one instead. That switches which horizon
+# the scalar reads PER HALF, with no advance knowledge of which horizon
+# carries that pair's flip -- something neither "always read the exposure
+# horizon" (`..._at_exposure_horizon`) nor "always read the horizons before
+# it" (`..._before_exposure_horizon`) nor "always read the largest"
+# (`..._peak_over_horizons`) can do. Enumerating only those three was an
+# INCOMPLETE enumeration, and the suite passed the whole-suite check on the
+# strength of it until a review thought to try the fourth. See the module
+# docstring.
 FLIP_VARS = ("claimant_ecar_at_exposure_horizon",
              "claimant_ecar_before_exposure_horizon",
-             "claimant_ecar_peak_over_horizons")
+             "claimant_ecar_peak_over_horizons",
+             "claimant_ecar_min_over_horizons")
 
 
 @dataclass(frozen=True)
@@ -306,6 +356,12 @@ class FlipScalars:
     claimant_ecar_at_exposure_horizon: float
     claimant_ecar_before_exposure_horizon: float
     claimant_ecar_peak_over_horizons: float
+    # The `min` counterpart of `..._peak_over_horizons`. Not decorative: it
+    # is the variant that reads a DIFFERENT horizon in each half depending on
+    # which one is smaller, which is exactly the "mixed, per-pair-selected
+    # reading" the design spec's 89.4 G claim rested on -- see the FLIP_VARS
+    # comment above and the module docstring.
+    claimant_ecar_min_over_horizons: float
     # SUT-own expected capacity at risk at EVERY horizon of the decision-hour
     # issuance. Not a claimant quantity -- it is here because W1.5's
     # flip-dominance check needs both sides of the same comparison and
@@ -392,6 +448,8 @@ def flip_scalars_from_points(
             per_horizon[h] for h in earlier),
         claimant_ecar_peak_over_horizons=max(per_horizon.values(),
                                              default=0.0),
+        claimant_ecar_min_over_horizons=min(per_horizon.values(),
+                                            default=0.0),
         sut_ecar_by_horizon=sut_ecar)
 
 
