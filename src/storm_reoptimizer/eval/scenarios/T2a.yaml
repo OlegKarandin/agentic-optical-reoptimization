@@ -118,3 +118,9 @@ metadata:
                                 # halves; only their p_cut differs
   exposure_horizon_hours: 2    # EQUAL in T2b (t1 -> t6 is two hour-label steps)
   spares_on_hand: 1            # EQUAL in T2b
+  # W1.2's whole-suite check needs ONE global orientation, but the three pairs
+  # draw gold labels from three vocabularies (act/wait, wide/narrow, A/B).
+  # This is the common axis. Deliberately NOT in rules.OBSERVABLE_VARS or
+  # assertions.SHARED_SCALARS: it is categorical and it IS the label, so
+  # enumerating it would trivially solve every pair.
+  gold_spare_action: spend      # gold label "wide": the optical_reroute costs 1 pair

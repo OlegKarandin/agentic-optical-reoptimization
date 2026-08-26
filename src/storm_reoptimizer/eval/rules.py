@@ -89,6 +89,17 @@ def _distinct_within_tolerance(values, tol: float = DERIVED_TOLERANCE) -> list[f
     return distinct
 
 
+def split_points(values: list[float],
+                 tol: float = DERIVED_TOLERANCE) -> list[float]:
+    """Every threshold worth testing over a set of values: the midpoints
+    between adjacent DISTINCT values, where "distinct" means further apart
+    than `tol`. Extracted from `threshold_rules` so the whole-suite check
+    (assertions.assert_no_global_policy_solves_the_suite) sweeps exactly the
+    same split points the per-pair check does, and cannot drift from them."""
+    distinct = _distinct_within_tolerance(values, tol)
+    return [(lo + hi) / 2.0 for lo, hi in zip(distinct, distinct[1:])]
+
+
 def threshold_rules(episodes: list[ScenarioFile], var: str,
                     derived: DerivedMap | None = None) -> list[Rule]:
     """Every split point over the suite for one observable. Split points are
@@ -97,8 +108,7 @@ def threshold_rules(episodes: list[ScenarioFile], var: str,
     `DERIVED_TOLERANCE` of each other are treated as one value, not two (see
     `_distinct_within_tolerance`)."""
     seen = [observables(e, derived) for e in episodes]
-    values = _distinct_within_tolerance([v[var] for v in seen if var in v])
-    thresholds = [(lo + hi) / 2.0 for lo, hi in zip(values, values[1:])]
+    thresholds = split_points([v[var] for v in seen if var in v])
     rules = []
     for threshold in thresholds:
         rules.append(Rule(

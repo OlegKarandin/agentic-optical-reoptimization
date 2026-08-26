@@ -8,9 +8,10 @@ from pathlib import Path
 import pytest
 
 from storm_reoptimizer.eval.assertions import (
-    assert_pair_derived_geometry_is_equal,
+    PairInvalid, assert_pair_derived_geometry_is_equal,
     assert_each_baseline_variant_ties, assert_gold_choices_differ,
     assert_issuance_prefix_shared, assert_menus_identical,
+    assert_no_global_policy_solves_the_suite,
     assert_non_flip_decisions_non_binding, assert_shared_scalars_equal,
 )
 from storm_reoptimizer.eval.baseline import ForecastBlindBaseline
@@ -480,3 +481,28 @@ def test_the_claimant_aggregates_are_derivable_for_every_twin_half(
         f"peak={f.claimant_ecar_peak_over_horizons:9.1f}  "
         f"sut={f.sut_ecar_by_horizon}"
         for sid, f in sorted(flips.items())))
+
+
+def test_report_the_global_policy_sweep_over_the_shipped_suite(
+        loaded_state_path, local_server_command, local_server_env):
+    """GATE A. Expected to REPORT a solving policy until W1.3's retune lands.
+    Converted into a real assertion by Task 6."""
+    episodes = [load_scenario(SCENARIOS / f"{n}.yaml")
+                for n in ("T1a", "T1b", "T2a", "T2b", "T3a", "T3b")]
+
+    async def _run():
+        async with connect_server(
+            TOPOLOGY_PATH, server_command=local_server_command,
+            env=local_server_env,
+            extra_args=["--state", str(loaded_state_path)],
+        ) as client:
+            return await flip_scalars_for(client, episodes,
+                                          topology_path=TOPOLOGY_PATH)
+
+    flips = asyncio.run(_run())
+    flip_values = {sid: f.values() for sid, f in flips.items()}
+    try:
+        assert_no_global_policy_solves_the_suite(episodes, flip_values)
+        print("GATE A: no global policy solves the suite.")
+    except PairInvalid as exc:
+        print(f"GATE A (expected until W1.3): {exc}")

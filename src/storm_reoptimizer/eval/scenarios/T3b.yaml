@@ -94,3 +94,9 @@ metadata:
   exposure_horizon_hours: 2    # EQUAL to T3a
   spares_on_hand: 1            # EQUAL to T3a
   widest_avoid_feasible: true  # EQUAL to T3a
+  # W1.2's whole-suite check needs ONE global orientation, but the three pairs
+  # draw gold labels from three vocabularies (act/wait, wide/narrow, A/B).
+  # This is the common axis. Deliberately NOT in rules.OBSERVABLE_VARS or
+  # assertions.SHARED_SCALARS: it is categorical and it IS the label, so
+  # enumerating it would trivially solve every pair.
+  gold_spare_action: conserve   # gold label "B": candidate_0 ip_reroute, 0 pairs

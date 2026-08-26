@@ -28,6 +28,7 @@ other for a TIMING reason -- 0/2, not 1/2. The exactly-50% arithmetic holds
 only when the baseline's constant answer IS one of the two gold answers."""
 from __future__ import annotations
 
+from collections import defaultdict
 from pathlib import Path
 
 from mcp.client import Client
@@ -35,7 +36,7 @@ from mcp.client import Client
 from ..mcp_client import call_tool_json
 from .baseline import BASELINE_VARIANTS, ForecastBlindBaseline, ScriptedDecider
 from .decisions import ConstraintDecision, ObjectiveDecision, TimingDecision
-from .derived import DERIVED_TOLERANCE, DerivedGeometry, derived_geometry
+from .derived import DERIVED_TOLERANCE, FLIP_VARS, DerivedGeometry, derived_geometry
 from .runner import run_episode
 from .scenario_file import ScenarioFile
 from .scoring import decision_label, episode_metrics
@@ -390,6 +391,100 @@ def _derived_mismatches(a: ScenarioFile, derived_a: DerivedGeometry,
                 f"{p_cut_b!r} ({b.id}), offsets {offset_a:.3f}km/{offset_b:.3f}km, "
                 f"|delta| = {abs(p_cut_a - p_cut_b):.6g} > {DERIVED_TOLERANCE:g}")
     return problems
+
+
+# The common axis W1.2's ONE global orientation is scored against. Declared
+# per half in `metadata.gold_spare_action`, because the three pairs draw gold
+# labels from three vocabularies (act/wait, wide/narrow, A/B) and a single
+# orientation needs a single vocabulary.
+SPARE_ACTIONS = ("spend", "conserve")
+
+
+def assert_no_global_policy_solves_the_suite(
+    episodes: list[ScenarioFile],
+    flip_values: dict[str, dict[str, float]],
+) -> None:
+    """No ONE fixed threshold, on ONE claimant-side scalar, under ONE fixed
+    orientation, answers every twin half.
+
+    This is the second half of the two-check doctrine -- see rules.py's module
+    docstring. `assert_no_single_variable_rule_solves` asks whether any scalar
+    the halves are supposed to SHARE differs; it is per-pair, and the flip
+    variable must be EXCLUDED from it (with two values per pair, per-pair
+    orientation makes any differing variable score 1.0, permanently and
+    unfixably). This one asks the opposite question over the whole suite, and
+    the flip variable must be ENUMERATED in it.
+
+    **Why the orientation rule differs from `rules.score_rule`.** That
+    function grants per-pair orientation deliberately: for a confound check,
+    generosity makes a surviving pair strong evidence. It is wrong here. A
+    fixed policy an operator could actually deploy has ONE orientation, not
+    one per pair, so granting per-pair orientation would let this check pass a
+    rule that is a genuine cheat.
+
+    `flip_values` is `{scenario_id: {var: value}}`, the shape
+    `derived.FlipScalars.values()` produces. Only episodes belonging to a pair
+    are scored -- diagnostic episodes have no twin and no flip."""
+    from .rules import split_points       # lazy: see the import note below
+
+    halves = [e for e in episodes if e.pair]
+    if not halves:
+        return
+
+    actions: dict[str, str] = {}
+    for episode in halves:
+        action = episode.metadata.get("gold_spare_action")
+        if action not in SPARE_ACTIONS:
+            raise PairInvalid(
+                f"{episode.id}: metadata.gold_spare_action must be one of "
+                f"{list(SPARE_ACTIONS)}, got {action!r}. W1.2 needs one "
+                f"common axis across pairs whose gold labels use three "
+                f"different vocabularies.")
+        actions[episode.id] = action
+
+    by_pair: dict[str, set[str]] = defaultdict(set)
+    for episode in halves:
+        by_pair[episode.pair].add(actions[episode.id])
+    for pair, declared in sorted(by_pair.items()):
+        if len(declared) < 2:
+            raise PairInvalid(
+                f"pair {pair}: both halves declare gold_spare_action="
+                f"{declared.pop()!r}. A twin pair's halves must land on "
+                f"opposite sides of the one spare pair, or there is no flip.")
+
+    for var in FLIP_VARS:
+        values = {e.id: flip_values.get(e.id, {}).get(var) for e in halves}
+        supplied = [v for v in values.values() if v is not None]
+        if not supplied:
+            # Nobody supplied this var at all -- not swept, not a partial
+            # sweep. `derived.FlipScalars.values()` (the real caller) always
+            # populates all of FLIP_VARS together, so this branch only ever
+            # fires for a synthetic/unit-test `flip_values` that deliberately
+            # exercises one variable at a time.
+            continue
+        if len(supplied) < len(values):
+            missing = sorted(k for k, v in values.items() if v is None)
+            raise PairInvalid(
+                f"{var}: no value supplied for {missing}; the whole-suite "
+                f"check cannot be run on a partial sweep")
+        for threshold in split_points(list(values.values())):
+            for lo_action in SPARE_ACTIONS:
+                hi_action = ("conserve" if lo_action == "spend" else "spend")
+                predicted = {
+                    eid: (lo_action if value < threshold else hi_action)
+                    for eid, value in values.items()}
+                if predicted == actions:
+                    raise PairInvalid(
+                        f"a fixed global policy solves the suite {len(halves)}"
+                        f"/{len(halves)}: one global threshold at "
+                        f"{threshold:.4g} on {var}, with lo -> {lo_action} and "
+                        f"hi -> {hi_action}. Values: "
+                        f"{ {k: round(v, 1) for k, v in sorted(values.items())} }. "
+                        f"Such a policy never reads the service under test and "
+                        f"performs no comparison, so an agent scoring "
+                        f"{len(halves)}/{len(halves)} would prove nothing. "
+                        f"Retune the geometry until the values INTERLEAVE "
+                        f"across the labels.")
 
 
 def assert_no_single_variable_rule_solves(

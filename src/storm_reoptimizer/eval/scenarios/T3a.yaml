@@ -181,3 +181,9 @@ metadata:
   widest_avoid_feasible: true  # EQUAL in T3b -- both candidates commit
                                 # cleanly under the SAME fixed avoid={} in
                                 # both halves (constraints is non-flip here)
+  # W1.2's whole-suite check needs ONE global orientation, but the three pairs
+  # draw gold labels from three vocabularies (act/wait, wide/narrow, A/B).
+  # This is the common axis. Deliberately NOT in rules.OBSERVABLE_VARS or
+  # assertions.SHARED_SCALARS: it is categorical and it IS the label, so
+  # enumerating it would trivially solve every pair.
+  gold_spare_action: spend      # gold label "A": optical_reroute, 1 pair

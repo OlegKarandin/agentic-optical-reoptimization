@@ -12,7 +12,7 @@ from storm_reoptimizer.eval.assertions import (
 from storm_reoptimizer.eval.derived import derived_scalars_for
 from storm_reoptimizer.eval.rules import (
     OBSERVABLE_VARS, _distinct_within_tolerance, best_rule, candidate_rules,
-    score_rule,
+    score_rule, split_points,
 )
 from storm_reoptimizer.eval.scenario_file import load_all_scenarios
 from storm_reoptimizer.mcp_client import connect_server
@@ -43,6 +43,16 @@ def test_distinct_within_tolerance_collapses_float_noise_not_real_gaps():
         [0.1349420979, 0.1349420979 + 1e-13], tol=1e-6) == [0.1349420979]
     assert _distinct_within_tolerance(
         [0.5, 0.5 + 1e-3], tol=1e-6) == pytest.approx([0.5, 0.501])
+
+
+def test_split_points_are_midpoints_between_adjacent_distinct_values():
+    assert split_points([1.0, 3.0, 7.0]) == [2.0, 5.0]
+
+
+def test_split_points_collapse_values_inside_the_tolerance():
+    # The float-noise failure mode _distinct_within_tolerance exists for: two
+    # values equal BY CONSTRUCTION but not bit-for-bit must not yield a split.
+    assert split_points([1.0, 1.0 + 1e-12, 3.0]) == [2.0]
 
 
 def test_the_enumeration_includes_parameter_free_greedy_policies():
