@@ -8,10 +8,10 @@ from pathlib import Path
 import pytest
 
 from storm_reoptimizer.eval.assertions import (
-    assert_flip_dominates, assert_pair_derived_geometry_is_equal,
+    PairInvalid, assert_flip_dominates, assert_pair_derived_geometry_is_equal,
     assert_each_baseline_variant_ties, assert_gold_choices_differ,
-    assert_issuance_prefix_shared, assert_menus_identical,
-    assert_no_global_policy_solves_the_suite,
+    assert_gold_spare_action_is_grounded, assert_issuance_prefix_shared,
+    assert_menus_identical, assert_no_global_policy_solves_the_suite,
     assert_non_flip_decisions_non_binding, assert_shared_scalars_equal,
     assert_wait_gold_has_no_free_escape,
 )
@@ -571,55 +571,47 @@ def test_the_flip_dominates_every_equal_signal(pair, loaded_state_path,
     assert_flip_dominates(a, b, flips[a.id], flips[b.id])
 
 
-# W1.6 FINDING (task 5, 2026-08-26), not anticipated by the brief: the brief
-# expected T1a to PASS here now that Task 4 deleted the dominating `t2`
-# nowcast (and therefore `rg_T1a_t1_t2`). Live, it does not -- ALL THREE
-# conserve halves fail identically, and for a reason that has nothing to do
-# with that deleted risk group:
+# W1.6 FINDING (task 5, 2026-08-26), NARROWED (Finding #5, 2026-08-26
+# re-review). The original write-up here reported that ALL THREE shipped
+# conserve halves fail this check identically -- a bare "moves the service"
+# predicate on `_check_no_free_escape` flagged every one of them, since
+# storm-svc-1's own static protection lightpath (`lp-prot-storm-svc-1-0`) is
+# always a free (0-pair) `ip_reroute` candidate under the near-neutral
+# `reference_avoid: {}` every one of these three halves declares, and it never
+# reuses the service's current working lightpath (`lp-cand-storm-svc-1-0`) in
+# any of them. That much is still true. What the original write-up never
+# checked is whether committing that free candidate would actually change the
+# GRADED LABEL each half is scored on -- and traced through each half's own
+# `label_rule` (`scoring.decision_label`), only ONE of the three genuinely
+# does:
 #
-#   T1a: candidate_2 (ip_reroute) reuses ['lp-prot-storm-svc-1-0'], not the
-#        current working lightpath ['lp-cand-storm-svc-1-0']
-#   T2b: candidate_2 (ip_reroute) reuses ['lp-prot-storm-svc-1-0'], not
-#        ['lp-cand-storm-svc-1-0']
-#   T3b: candidate_2 (ip_reroute) reuses ['lp-prot-storm-svc-1-0'], not
-#        ['lp-cand-storm-svc-1-0']
+#   * T1a (`timing_at_decision_hour`, gold `wait`): committing ANYTHING at the
+#     decision hour requires having acted, so the label reads "act" --
+#     WRONG against gold `wait`. A REAL, live integrity hazard.
+#   * T2b (`avoid_horizon_at_decision_hour`, gold `narrow`): the free
+#     candidate is offered under `reference_avoid={}`, so its `risk_groups`
+#     is empty and the label still reads "narrow" -- gold-CORRECT. The
+#     original predicate's flag here was a FALSE POSITIVE.
+#   * T3b (`chosen_lever_at_decision_hour`,
+#     `label_by_lever: {ip_reroute: B}`, gold `B`): the free candidate IS an
+#     `ip_reroute`, so the label still reads "B" -- also gold-correct, also a
+#     FALSE POSITIVE.
 #
-# Confirmed structural, not a call-ordering bug in the assertion: all three
-# halves' `realized` blocks are empty (T2b/T3b) or name only the t3 hour
-# (T1a), strictly AFTER their shared decision_hour t1 -- so
-# `_current_working_lightpaths` and `menu_at_decision_hour` read the SAME,
-# un-mutated server state in every case. The free candidate is
-# `route_service`'s own "switch onto the service's pre-provisioned static
-# protection lightpath" option, which this suite's storm-svc-1 (a PROTECTED
-# service) offers at zero transponder pairs under the near-neutral
-# `reference_avoid: {}` every one of these three halves declares --
-# independent of forecast geometry, independent of which pair or which
-# horizon is doing the flipping. That makes it a property of the shipped
-# service/menu, not of any one episode's authoring, and it means every
-# conserve-gold half in the CURRENT suite fails W1.6's check, not just the
-# two the brief allowed for.
-#
-# Per this task's scope (touch assertions.py and tests/ only; do not fix
-# scenario YAML or the underlying menu), this is recorded as a finding and
-# flagged for W2/W3/W4 rather than repaired here -- see task-5-report.md.
-# Kept as xfail (not skip) rather than narrowed out entirely: the check is
-# correct and should keep running live so an eventual fix (e.g. exempting a
-# genuine protection-switch from "moves the service", or reshaping
-# reference_avoid/the menu so the escape isn't offered) shows up as an
-# unexpected XPASS instead of silently vanishing.
-@pytest.mark.xfail(
-    reason="W1.6 finding (task 5, 2026-08-26): every shipped conserve half "
-           "(T1a/T2b/T3b) offers a free ip_reroute onto storm-svc-1's own "
-           "static protection lightpath under reference_avoid={} -- a real, "
-           "structural free escape independent of forecast geometry, not "
-           "fixed by Task 4's nowcast deletion. Flagged for W2/W3/W4; not "
-           "this task's scope to repair the scenario/menu.",
-    strict=False)
-@pytest.mark.parametrize("scenario_id", ("T1a", "T2b", "T3b"))
-def test_a_conserve_gold_has_no_free_escape(
+# `_check_no_free_escape` (assertions.py) now checks the label directly (see
+# its own docstring and `_label_if_committed`), so T2b/T3b are expected to
+# PASS this check for real and T1a is expected to keep failing it -- both
+# confirmed against the live server below. The free `ip_reroute` onto the
+# protection lightpath still exists in all three menus (that part of the
+# original finding is unchanged, and still worth a separate look for T1a's
+# sake), but only T1a's exposure to it is a genuine confound.
+@pytest.mark.parametrize("scenario_id", ("T2b", "T3b"))
+def test_a_conserve_gold_with_an_unexploitable_free_escape_passes(
     scenario_id, loaded_state_path, local_server_command, local_server_env,
 ):
-    """W1.6, over every half whose gold declines to spend the pair."""
+    """T2b/T3b: the free `ip_reroute` onto storm-svc-1's static protection
+    lightpath exists in the menu, but taking it reads the SAME label gold
+    does under each half's own `label_rule` -- not exploitable, so this must
+    pass, not xfail."""
     scenario = load_scenario(SCENARIOS / f"{scenario_id}.yaml")
 
     async def _run():
@@ -629,5 +621,125 @@ def test_a_conserve_gold_has_no_free_escape(
             extra_args=["--state", str(loaded_state_path)],
         ) as client:
             await assert_wait_gold_has_no_free_escape(client, scenario)
+
+    asyncio.run(_run())
+
+
+def _unwrap_lone_exception(exc: BaseException) -> BaseException:
+    """`connect_server`'s `stdio_client` (anyio, over an asyncio TaskGroup)
+    wraps ANY exception raised inside its `async with` body in one or more
+    nested `ExceptionGroup`s on cleanup -- confirmed live (Finding #3,
+    2026-08-26 re-review): a bare `PairInvalid` raised by an assertion inside
+    that body reaches `asyncio.run(_run())`'s caller as `ExceptionGroup(
+    ExceptionGroup(PairInvalid))`, not a plain `PairInvalid`. Without this
+    unwrap, `pytest.mark.xfail(raises=PairInvalid)` can never match ANYTHING
+    in this environment -- it isn't narrowing to the known finding, it is
+    unconditionally converting the xfail into a hard FAIL, the opposite of
+    what Finding #3 asked for. Peel off only SINGLE-exception nesting (a
+    concurrent failure -- more than one exception in a group -- is a
+    genuinely different situation and is left as the group, unmatched by
+    `raises=PairInvalid`, exactly as it should be)."""
+    while isinstance(exc, BaseExceptionGroup) and len(exc.exceptions) == 1:
+        exc = exc.exceptions[0]
+    return exc
+
+
+# Kept as xfail (not skip): the check is correct and should keep running live
+# so an eventual fix (e.g. exempting a genuine protection-switch from "moves
+# the service", or reshaping reference_avoid/the menu so the escape isn't
+# offered) shows up as an unexpected XPASS instead of silently vanishing.
+# `raises=PairInvalid` (Finding #3, 2026-08-26 re-review) so an UNRELATED
+# failure here -- a launch/protocol error from `connect_server`, or
+# `_current_working_lightpaths` raising `PairInvalid` because "the server
+# reports no service X" -- surfaces as a real failure instead of being
+# silently absorbed as "the expected known finding". The bare decorator only
+# narrows by exception TYPE; `test_the_raised_message_names_the_specific_
+# lightpath_and_reason` (test_assertions.py) pins the exact message content
+# at the pure-unit level, since xfail's own `raises=` cannot match on it.
+# `_unwrap_lone_exception` is required for `raises=` to work at all here --
+# see its own docstring; confirmed live that without it this test hard-FAILs
+# instead of xfailing, on the very finding it is supposed to track.
+@pytest.mark.xfail(
+    reason="W1.6 finding (task 5, 2026-08-26; narrowed by Finding #5, "
+           "2026-08-26 re-review): T1a offers a free ip_reroute onto "
+           "storm-svc-1's own static protection lightpath under "
+           "reference_avoid={}, and committing it reads label 'act' where "
+           "gold says 'wait' -- a real, structural free escape, independent "
+           "of forecast geometry. Flagged for W2/W3/W4; not this dispatch's "
+           "scope to repair the scenario/menu.",
+    strict=False, raises=PairInvalid)
+def test_a_conserve_gold_has_no_free_escape(
+    loaded_state_path, local_server_command, local_server_env,
+):
+    """W1.6, T1a only -- see the module-level comment above for why T2b/T3b
+    were split out into their own, non-xfail test."""
+    scenario = load_scenario(SCENARIOS / "T1a.yaml")
+
+    async def _run():
+        async with connect_server(
+            TOPOLOGY_PATH, server_command=local_server_command,
+            env=local_server_env,
+            extra_args=["--state", str(loaded_state_path)],
+        ) as client:
+            await assert_wait_gold_has_no_free_escape(client, scenario)
+
+    try:
+        asyncio.run(_run())
+    except BaseExceptionGroup as eg:
+        raise _unwrap_lone_exception(eg) from None
+
+
+# Finding #4 (2026-08-26 re-review): `gold_spare_action` was never checked
+# against what the harness's own gold-decision replay would actually commit.
+# `committed_lever` is the LEVER each half's own gold.rationale text names as
+# the one that actually gets committed; `None` for a half whose gold never
+# commits anything at all (a pure-wait timing half). See `assert_gold_spare_
+# action_is_grounded`'s docstring for the full investigation: T2a/T3a/T2b/T3b
+# already tie this down structurally via test_episodes.py's own non-flip gold
+# fixtures and their scenario YAMLs' rationale prose; T1 did not, and T1b in
+# particular declares "spend" while `_T1_NON_FLIP_GOLD_DECISIONS` uses
+# candidate_0 (an ip_reroute, 0 pairs) for BOTH halves -- a deliberate,
+# non-representative placeholder for testing that T1's objective decision is
+# non-binding, not a claim about what T1b's real committed action costs.
+_GOLD_COMMITTED_LEVER = {
+    "T1a": None,                 # gold never acts here; see assert_wait_gold_
+                                  # has_no_free_escape for the separate check
+                                  # that DOES cover this half
+    "T1b": "optical_reroute",    # gold.rationale: "an optical_reroute
+                                  # committed at t1 is effective at t2..."
+    "T2a": "optical_reroute",    # gold.rationale: "an optical_reroute via
+                                  # jabalpur costing 1 pair"; matches
+                                  # _T2_NON_FLIP_GOLD_DECISIONS' candidate_2
+    "T2b": "ip_reroute",         # gold.rationale: "an ip_reroute that reuses
+                                  # the current lightpath"; matches
+                                  # _T2_NON_FLIP_GOLD_DECISIONS' candidate_0
+    "T3a": "optical_reroute",    # gold.rationale: candidate_4, optical_reroute
+                                  # via jabalpur; matches label_by_lever's "A"
+    "T3b": "ip_reroute",         # gold.rationale: candidate_0, ip_reroute;
+                                  # matches label_by_lever's "B"
+}
+
+
+@pytest.mark.parametrize(
+    "scenario_id", ("T1a", "T1b", "T2a", "T2b", "T3a", "T3b"))
+def test_gold_spare_action_is_grounded_in_a_real_candidate(
+    scenario_id, loaded_state_path, local_server_command, local_server_env,
+):
+    """The test that would have caught Finding #4: for every half, the
+    declared `metadata.gold_spare_action` must be achievable by a REAL
+    candidate on the live menu carrying the lever gold's own rationale names
+    as the one that gets committed -- not merely asserted in metadata and
+    never checked against anything real."""
+    scenario = load_all_scenarios()[scenario_id]
+
+    async def _run():
+        async with connect_server(
+            TOPOLOGY_PATH, server_command=local_server_command,
+            env=local_server_env,
+            extra_args=["--state", str(loaded_state_path)],
+        ) as client:
+            await assert_gold_spare_action_is_grounded(
+                client, scenario,
+                committed_lever=_GOLD_COMMITTED_LEVER[scenario_id])
 
     asyncio.run(_run())

@@ -197,7 +197,23 @@ _TWO_HORIZON_T1 = textwrap.dedent("""
 
 
 def _two_horizon_scenario(example_scenario_yaml, write_scenario):
-    old = "\n".join(example_scenario_yaml.splitlines()[18:20])   # the single-horizon t1 block
+    # Locate the t1 issuance's own single-horizon block by CONTENT, not a
+    # hardcoded line-index slice (Finding #10, 2026-08-26 re-review: the
+    # original `splitlines()[18:20]` would silently break if an unrelated
+    # edit to `example_scenario_yaml` shifted its line count -- contained
+    # blast radius, since a wrong slice makes `earlier_horizons` come out
+    # empty and a downstream assertion like `earlier_horizons == ("t2",)`
+    # then fails loudly, but a content anchor survives the edit instead of
+    # merely failing safely after it). "  t1:" (exactly two-space indent) is
+    # the forecast issuance header for hour t1 -- unique in this fixture; the
+    # per-hour issuance headers under `forecast:` are the only lines at that
+    # indent, and every OTHER "t1" token in the fixture (decision_hour: t1,
+    # the t0 issuance's own "t1:" horizon key) sits at a different indent or
+    # column. Take that header line plus its immediately-following horizon
+    # line -- the whole single-horizon block this fixture declares for t1.
+    lines = example_scenario_yaml.splitlines()
+    start = next(i for i, line in enumerate(lines) if line == "  t1:")
+    old = "\n".join(lines[start:start + 2])
     # The dedented replacement above lands at 0/2-space indent; re-indent by
     # 2 to match `old`'s own 2/4-space nesting under `forecast:` -- a plain
     # `.strip("\n")` swap (as first drafted) collapses "  t1:" to "t1:" and

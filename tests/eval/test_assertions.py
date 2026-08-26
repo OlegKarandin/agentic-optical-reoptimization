@@ -300,16 +300,31 @@ def test_an_unequal_sut_signal_is_not_this_checks_business(t1a, t1b):
 # label while satisfying every other scoring criterion (it committed an
 # ip_reroute with pairs_needed = 0, so gold.survived and
 # gold.max_spares_wasted: 0 both held).
+#
+# Finding #5 (2026-08-26 re-review): the predicate now ALSO requires that
+# committing the free candidate would flip the graded label away from gold's
+# -- "moves the service" alone is necessary but not sufficient, and two of the
+# suite's three shipped conserve halves (T2b, T3b) were false positives under
+# the old, broader check. `_T1_KW`/etc. below fix the label_rule/gold_label
+# a T1a-shaped half needs; the new tests exercise T2/T3-shaped halves whose
+# free escape does NOT flip the label.
+_T1_KW = dict(label_rule="timing_at_decision_hour", gold_label="wait",
+             reference_avoid={})
+
+
 def test_a_free_candidate_that_moves_the_service_defeats_a_conserve_gold():
     """The T1a failure mode: a 0-pair candidate the agent can take to improve
     its own position while keeping the spare. Gold says "don't spend"; the
-    label rule reads "acted"; both are satisfiable at once."""
+    label rule reads "acted"; both are satisfiable at once -- and for
+    `timing_at_decision_hour`, ANY commit reads "act", so this is a genuine
+    escape regardless of lever."""
     menu = {"status": "solution", "candidates": [
         {"lever": "ip_reroute", "reused_lightpaths": ["lp-somewhere-else"],
          "new_lightpaths": [], "restored_gbps": 300.0,
          "shortfall_gbps": 0.0, "cost_vector": {}}]}
     with pytest.raises(PairInvalid, match="free lever"):
-        _check_no_free_escape("T1a", menu, current={"lp-current-working-0"})
+        _check_no_free_escape("T1a", menu, current={"lp-current-working-0"},
+                              **_T1_KW)
 
 
 def test_a_free_candidate_that_only_stays_put_is_safe():
@@ -317,7 +332,8 @@ def test_a_free_candidate_that_only_stays_put_is_safe():
         {"lever": "ip_reroute", "reused_lightpaths": ["lp-current-working-0"],
          "new_lightpaths": [], "restored_gbps": 300.0,
          "shortfall_gbps": 0.0, "cost_vector": {}}]}
-    _check_no_free_escape("T1a", menu, current={"lp-current-working-0"})
+    _check_no_free_escape("T1a", menu, current={"lp-current-working-0"},
+                          **_T1_KW)
 
 
 def test_candidates_that_cost_a_pair_are_not_this_checks_business():
@@ -325,4 +341,91 @@ def test_candidates_that_cost_a_pair_are_not_this_checks_business():
         {"lever": "optical_reroute", "reused_lightpaths": [],
          "new_lightpaths": [{"oms_sequence": ["oms_1"]}],
          "restored_gbps": 300.0, "shortfall_gbps": 0.0, "cost_vector": {}}]}
-    _check_no_free_escape("T1a", menu, current={"lp-current-working-0"})
+    _check_no_free_escape("T1a", menu, current={"lp-current-working-0"},
+                          **_T1_KW)
+
+
+def test_the_raised_message_names_the_specific_lightpath_and_reason():
+    """Finding #3's more precise ask: the live xfail test relies on
+    `raises=PairInvalid` alone to identify the known T1a finding, so this
+    pure unit test pins the message content that finding's own report quotes
+    ("costs ZERO pairs" and the specific lightpath id) -- a regression that
+    changed the WRONG PairInvalid message would still satisfy `raises=
+    PairInvalid` on the live test, but would fail this one."""
+    menu = {"status": "solution", "candidates": [
+        {"lever": "ip_reroute", "reused_lightpaths": ["lp-prot-storm-svc-1-0"],
+         "new_lightpaths": [], "restored_gbps": 300.0,
+         "shortfall_gbps": 0.0, "cost_vector": {}}]}
+    with pytest.raises(PairInvalid, match="costs ZERO.*lp-prot-storm-svc-1-0"):
+        _check_no_free_escape(
+            "T1a", menu, current={"lp-cand-storm-svc-1-0"}, **_T1_KW)
+
+
+def test_a_free_escape_that_does_not_flip_an_avoid_horizon_label_is_safe():
+    """T2b-shaped false positive (Finding #5): the free candidate is offered
+    under a neutral `reference_avoid={}`, so its `risk_groups` is empty and
+    `avoid_horizon_at_decision_hour` still reads "narrow" -- unchanged from
+    gold. The old, broader predicate (any zero-pair, service-moving
+    candidate) would have flagged this; the label-aware one must not."""
+    menu = {"status": "solution", "candidates": [
+        {"lever": "ip_reroute", "reused_lightpaths": ["lp-prot-storm-svc-1-0"],
+         "new_lightpaths": [], "restored_gbps": 300.0,
+         "shortfall_gbps": 0.0, "cost_vector": {}}]}
+    _check_no_free_escape(
+        "T2b", menu, current={"lp-cand-storm-svc-1-0"},
+        label_rule="avoid_horizon_at_decision_hour", gold_label="narrow",
+        reference_avoid={}, wide_avoid_risk_group="rg_T2b_t1_t6")
+
+
+def test_a_free_escape_that_would_flip_an_avoid_horizon_label_still_raises():
+    """The mirror case: if the free candidate's `reference_avoid` DID name the
+    wide risk group, committing it would read "wide" -- a real escape against
+    a "narrow" gold, and the check must still catch it."""
+    menu = {"status": "solution", "candidates": [
+        {"lever": "ip_reroute", "reused_lightpaths": ["lp-prot-storm-svc-1-0"],
+         "new_lightpaths": [], "restored_gbps": 300.0,
+         "shortfall_gbps": 0.0, "cost_vector": {}}]}
+    with pytest.raises(PairInvalid, match="GRADED LABEL"):
+        _check_no_free_escape(
+            "T2b", menu, current={"lp-cand-storm-svc-1-0"},
+            label_rule="avoid_horizon_at_decision_hour", gold_label="narrow",
+            reference_avoid={"risk_groups": ["rg_T2b_t1_t6"]},
+            wide_avoid_risk_group="rg_T2b_t1_t6")
+
+
+def test_a_free_escape_that_does_not_flip_a_chosen_lever_label_is_safe():
+    """T3b-shaped false positive (Finding #5): the free candidate IS an
+    ip_reroute, and `label_by_lever` already maps ip_reroute to gold's own
+    label "B" -- committing it reads the SAME label, not a different one."""
+    menu = {"status": "solution", "candidates": [
+        {"lever": "ip_reroute", "reused_lightpaths": ["lp-prot-storm-svc-1-0"],
+         "new_lightpaths": [], "restored_gbps": 300.0,
+         "shortfall_gbps": 0.0, "cost_vector": {}}]}
+    _check_no_free_escape(
+        "T3b", menu, current={"lp-cand-storm-svc-1-0"},
+        label_rule="chosen_lever_at_decision_hour", gold_label="B",
+        reference_avoid={},
+        label_by_lever={"optical_reroute": "A", "hybrid": "A",
+                        "ip_reroute": "B"})
+
+
+def test_a_free_escape_that_would_flip_a_chosen_lever_label_still_raises():
+    """The mirror case: an optical_reroute free escape against a "B" gold
+    would read "A" -- a real, catchable escape."""
+    menu = {"status": "solution", "candidates": [
+        {"lever": "optical_reroute", "reused_lightpaths": ["lp-elsewhere"],
+         "new_lightpaths": [{"oms_sequence": ["oms_1"]}],
+         "restored_gbps": 300.0, "shortfall_gbps": 0.0, "cost_vector": {}}]}
+    # NOTE: pairs_needed reads len(new_lightpaths), so this candidate is not
+    # actually zero-pair and would be skipped by the real predicate -- this
+    # fixture exists only to exercise _label_if_committed's chosen_lever
+    # branch directly, via the module-private helper, not through
+    # _check_no_free_escape's pairs_needed gate.
+    from storm_reoptimizer.eval.assertions import _label_if_committed
+    label = _label_if_committed(
+        label_rule="chosen_lever_at_decision_hour",
+        candidate=menu["candidates"][0], avoid_used={},
+        wide_avoid_risk_group=None,
+        label_by_lever={"optical_reroute": "A", "hybrid": "A",
+                        "ip_reroute": "B"})
+    assert label == "A"

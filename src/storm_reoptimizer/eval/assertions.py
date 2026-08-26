@@ -36,7 +36,10 @@ from mcp.client import Client
 from ..mcp_client import call_tool_json
 from .baseline import BASELINE_VARIANTS, ForecastBlindBaseline, ScriptedDecider
 from .decisions import ConstraintDecision, ObjectiveDecision, TimingDecision
-from .derived import DERIVED_TOLERANCE, FLIP_VARS, DerivedGeometry, derived_geometry
+from .derived import (
+    DERIVED_TOLERANCE, FLIP_VARS, DerivedGeometry, FlipScalars,
+    derived_geometry,
+)
 from .runner import run_episode
 from .scenario_file import ScenarioFile
 from .scoring import decision_label, episode_metrics
@@ -425,7 +428,14 @@ def assert_no_global_policy_solves_the_suite(
     `flip_values` is `{scenario_id: {var: value}}`, the shape
     `derived.FlipScalars.values()` produces. Only episodes belonging to a pair
     are scored -- diagnostic episodes have no twin and no flip."""
-    from .rules import split_points       # lazy: see the import note below
+    # Lazy, not for circular-import reasons (there are none: rules.py never
+    # imports this module, directly or transitively -- only suite.py imports
+    # assertions.py). It mirrors the equally-lazy `from .rules import
+    # best_rule` in assert_no_single_variable_rule_solves below, kept local
+    # so this module's own top-level import surface does not gain rules.py
+    # (and, through it, nothing new -- rules.py only adds derived.py, which
+    # this module already imports) for callers that never run either check.
+    from .rules import split_points
 
     halves = [e for e in episodes if e.pair]
     if not halves:
@@ -487,8 +497,98 @@ def assert_no_global_policy_solves_the_suite(
                         f"across the labels.")
 
 
+async def assert_gold_spare_action_is_grounded(
+    client: Client, scenario: ScenarioFile, *, committed_lever: str | None,
+) -> None:
+    """Cross-checks `metadata.gold_spare_action` against a REAL candidate on
+    the live menu, closing a gap Finding #4 (2026-08-26 whole-branch
+    re-review) found: nothing anywhere checked the declared "spend"/
+    "conserve" declaration against what the harness's own gold-decision
+    replay would actually commit.
+
+    **Why this was missing, and why T2/T3 do not need it as badly.**
+    `assert_no_global_policy_solves_the_suite` scores every episode against
+    `metadata.gold_spare_action`, but that field is author-typed and nothing
+    ever verified it against reality. T2/T3 tie it down structurally anyway:
+    `test_episodes.py`'s own non-flip gold fixtures
+    (`_T2_NON_FLIP_GOLD_DECISIONS`, `_T3_NON_FLIP_GOLD_DECISIONS`) NAME the
+    exact committed candidate for each half (T2a candidate_2 / T3a
+    candidate_4, both `optical_reroute`, 1 pair; T2b/T3b candidate_0, both
+    `ip_reroute`, 0 pairs), and each scenario's own YAML `gold.rationale`
+    spells out that candidate's lever and cost in prose -- confirmed by
+    reading every one of the six halves' rationale text. T1 has no such
+    anchor: `_T1_NON_FLIP_GOLD_DECISIONS` uses `candidate_0` for BOTH T1a and
+    T1b, but that is a deliberate, ARBITRARY placeholder -- T1's `label_rule`
+    is `timing_at_decision_hour`, so the objective decision provably cannot
+    bind T1's grade (see that constant's own comment and
+    `assert_non_flip_decisions_non_binding`'s docstring on why T1 is
+    "structurally vacuous" for the objective/constraints decisions) -- it is
+    NOT a claim about what T1b's real committed action costs. T1b's own
+    `gold.rationale` says otherwise: "an optical_reroute committed at t1 is
+    effective at t2, strictly before the t3 cut", describing a LEVER, not
+    `candidate_0`'s `ip_reroute`. Investigated rather than assumed: searched
+    the whole module and runner/scoring for any OTHER place that reads
+    `gold_spare_action` or checks `pairs_needed` against it -- there is none;
+    `assert_no_global_policy_solves_the_suite` is the only consumer, and it
+    trusts the declaration verbatim.
+
+    `committed_lever` is the LEVER gold's own rationale names as the one that
+    actually gets committed in this half, supplied by the caller per half (not
+    read from scenario metadata -- there is no such field, by design, to keep
+    this fix's footprint to assertions.py/tests rather than the scenario
+    files). `None` means gold never commits anything in this half at all (a
+    pure-wait timing half, e.g. T1a): trivially "conserve", and separately
+    guarded already by `assert_wait_gold_has_no_free_escape`.
+
+    Deliberately checks EXISTENCE of a same-lever candidate at the declared
+    cost under `reference_avoid`, not the exact candidate index test_
+    episodes.py's non-flip fixtures use -- T2a's REAL gold avoid (the wide
+    risk-group set) differs from `reference_avoid` (neutral), so the SAME
+    candidate index would not necessarily appear under `reference_avoid`.
+    That is not a gap here: `pairs_needed` in this harness is a property of
+    the LEVER (`ip_reroute` costs 0, `optical_reroute` costs one new
+    lightpath, regardless of which avoid produced the candidate -- confirmed
+    against `ledger.pairs_needed`'s own contract, "one pair per new
+    lightpath"), not of which specific avoid produced it, so the neutral
+    `reference_avoid` menu is enough to confirm the declared action is
+    achievable at all, without needing the exact gold avoid reproduced here."""
+    action = scenario.metadata.get("gold_spare_action")
+    if committed_lever is None:
+        if action != "conserve":
+            raise PairInvalid(
+                f"{scenario.id}: gold never commits anything in this half "
+                f"(committed_lever=None) but metadata.gold_spare_action="
+                f"{action!r}; a half that never acts cannot 'spend'")
+        return
+
+    from .ledger import pairs_needed
+
+    menu = await menu_at_decision_hour(client, scenario)
+    candidates = [c for c in menu.get("candidates") or []
+                 if c.get("lever") == committed_lever]
+    if not candidates:
+        raise PairInvalid(
+            f"{scenario.id}: no {committed_lever!r} candidate exists in the "
+            f"real menu under reference_avoid {scenario.reference_avoid!r}; "
+            f"gold_spare_action {action!r} cannot be grounded against reality")
+
+    costs = {pairs_needed(c) for c in candidates}
+    if action == "spend" and not any(cost > 0 for cost in costs):
+        raise PairInvalid(
+            f"{scenario.id}: every real {committed_lever!r} candidate under "
+            f"reference_avoid costs 0 pairs ({sorted(costs)}), but metadata."
+            f"gold_spare_action='spend' -- the declaration is not grounded "
+            f"in a real spend")
+    if action == "conserve" and not any(cost == 0 for cost in costs):
+        raise PairInvalid(
+            f"{scenario.id}: every real {committed_lever!r} candidate under "
+            f"reference_avoid costs more than 0 pairs ({sorted(costs)}), but "
+            f"metadata.gold_spare_action='conserve' -- the declaration is "
+            f"not grounded in a real zero-cost lever")
+
+
 def assert_flip_dominates(a: ScenarioFile, b: ScenarioFile,
-                          flip_a: "FlipScalars", flip_b: "FlipScalars") -> None:
+                          flip_a: FlipScalars, flip_b: FlipScalars) -> None:
     """The largest EQUAL-IN-BOTH-HALVES signal about the service under test
     must not outweigh the flip itself.
 
@@ -527,33 +627,101 @@ def assert_flip_dominates(a: ScenarioFile, b: ScenarioFile,
             f"enlarge the flip.")
 
 
-def _check_no_free_escape(scenario_id: str, menu: dict,
-                          current: set[str]) -> None:
-    """The pure half of W1.6: given a menu and the service's CURRENT working
-    lightpath ids, no zero-pair candidate may move the service.
+def _label_if_committed(*, label_rule: str, candidate: dict,
+                        avoid_used: dict, wide_avoid_risk_group: str | None,
+                        label_by_lever: dict | None) -> str | None:
+    """The label `scoring.decision_label` would read off a HYPOTHETICAL commit
+    of `candidate` under `avoid_used`, without a trace or a rollout -- the same
+    three `label_rule` branches that function implements, applied to one
+    candidate instead of a replayed hour's `iterations` record.
 
-    **Why the cheap variant.** The strict version needs each candidate's own
-    exposure, which means recomputing a representative point from its OMS
-    sequence -- reimplementing `runner.service_points` against hypothetical
-    paths. The cheap version captures the distinction that matters: a 0-pair
-    candidate that does not move you buys nothing, so gold is safe."""
+    Added for Finding #5 (2026-08-26 re-review of W1.6): `_check_no_free_
+    escape` used to flag any zero-pair, service-moving candidate regardless of
+    whether committing it would actually change the graded label, and two of
+    the three episodes it flagged (T2b, T3b) turned out to be FALSE POSITIVES
+    once traced through their own `label_rule` -- see that function's updated
+    docstring for the per-half trace.
+
+    `timing_at_decision_hour` is unconditionally "act": there is no candidate
+    commit in this harness without having acted at that hour (`run_episode`
+    only ever commits following a timing decision of "act"), so a candidate
+    reaching this function under that rule always reads "act" if taken."""
+    if label_rule == "timing_at_decision_hour":
+        return "act"
+    if label_rule == "avoid_horizon_at_decision_hour":
+        chosen = avoid_used.get("risk_groups", [])
+        return "wide" if wide_avoid_risk_group in chosen else "narrow"
+    if label_rule == "chosen_lever_at_decision_hour":
+        return (label_by_lever or {}).get(candidate.get("lever"))
+    raise ValueError(f"unknown label_rule {label_rule!r}")
+
+
+def _check_no_free_escape(scenario_id: str, menu: dict, current: set[str], *,
+                          label_rule: str, gold_label: str,
+                          reference_avoid: dict,
+                          wide_avoid_risk_group: str | None = None,
+                          label_by_lever: dict | None = None) -> None:
+    """The pure half of W1.6: given a menu and the service's CURRENT working
+    lightpath ids, no zero-pair candidate that would actually flip the GRADED
+    LABEL away from gold's may exist.
+
+    **Why the label check, not just "moves the service" (Finding #5, 2026-
+    08-26 re-review).** A zero-pair candidate that does not reuse the current
+    working lightpath is necessary but not sufficient evidence of a real
+    escape: whether it is exploitable depends on whether committing it would
+    actually change what `scoring.decision_label` reads for this half, which
+    depends on `label_rule` and is NOT the same question for all three pairs.
+    Traced against the shipped suite's own three `gold_spare_action=conserve`
+    halves:
+
+      * T1a (`timing_at_decision_hour`, gold `wait`): ANY commit reads "act"
+        (see `_label_if_committed`) -- REAL escape, since gold is "wait".
+      * T2b (`avoid_horizon_at_decision_hour`, gold `narrow`): the free
+        candidate is offered under `reference_avoid={}`, so `risk_groups`
+        is empty and the label still reads "narrow" -- gold-CORRECT, not an
+        escape. The old, broader predicate flagged this as a false positive.
+      * T3b (`chosen_lever_at_decision_hour`,
+        `label_by_lever: {ip_reroute: B}`, gold `B`): the free candidate IS
+        an `ip_reroute`, so the label still reads "B" -- also gold-correct,
+        also a false positive under the old predicate.
+
+    So only T1a is a genuine, live integrity hazard; see
+    `test_a_conserve_gold_has_no_free_escape` in test_episodes.py, restructured
+    to reflect that.
+
+    **Why the cheap variant, otherwise.** The strict version would need each
+    candidate's own exposure, which means recomputing a representative point
+    from its OMS sequence -- reimplementing `runner.service_points` against
+    hypothetical paths. The cheap version captures the distinction that
+    matters: a 0-pair candidate that does not move you buys nothing, so gold
+    is safe regardless of label_rule."""
     from .ledger import pairs_needed
 
     for index, candidate in enumerate(menu.get("candidates") or []):
         if pairs_needed(candidate) != 0:
             continue
         reused = set(candidate.get("reused_lightpaths") or ())
-        if not current <= reused:
-            raise PairInvalid(
-                f"{scenario_id}: gold declines to spend the pair, but "
-                f"candidate_{index} ({candidate.get('lever')}) costs ZERO "
-                f"pairs and does not reuse the service's current working "
-                f"lightpath(s) {sorted(current)} (it reuses "
-                f"{sorted(reused)}). A free lever that improves the service's "
-                f"position makes 'take the free thing and keep the pair' the "
-                f"correct answer -- which the label rule scores as WRONG. "
-                f"'Act' and 'spend' are different events; gold argues about "
-                f"spending and the label reads acting.")
+        if current <= reused:
+            continue
+        label = _label_if_committed(
+            label_rule=label_rule, candidate=candidate,
+            avoid_used=reference_avoid,
+            wide_avoid_risk_group=wide_avoid_risk_group,
+            label_by_lever=label_by_lever)
+        if label == gold_label:
+            continue    # free AND moves the service, but grades the same
+        raise PairInvalid(
+            f"{scenario_id}: gold declines to spend the pair, but "
+            f"candidate_{index} ({candidate.get('lever')}) costs ZERO "
+            f"pairs, does not reuse the service's current working "
+            f"lightpath(s) {sorted(current)} (it reuses {sorted(reused)}), "
+            f"and committing it under label_rule {label_rule!r} would read "
+            f"the GRADED LABEL as {label!r} where gold says {gold_label!r}. "
+            f"A free lever that improves the service's position makes 'take "
+            f"the free thing and keep the pair' the correct answer -- which "
+            f"the label rule scores as WRONG. 'Act' and 'spend' are "
+            f"different events; gold argues about spending and the label "
+            f"reads acting.")
 
 
 async def _current_working_lightpaths(client: Client,
@@ -576,9 +744,13 @@ async def _current_working_lightpaths(client: Client,
 
 async def assert_wait_gold_has_no_free_escape(client: Client,
                                               scenario: ScenarioFile) -> None:
-    """For a half whose gold declines to spend the spare pair, every zero-pair
-    candidate at the decision hour must REUSE the service's current working
-    lightpath -- i.e. no free candidate actually moves the service.
+    """For a half whose gold declines to spend the spare pair, no zero-pair
+    candidate at the decision hour may both move the service off its current
+    working lightpath AND flip the graded label away from gold's -- i.e. no
+    free candidate is a real, exploitable escape. See `_check_no_free_escape`
+    for the per-`label_rule` reasoning (Finding #5, 2026-08-26 re-review:
+    "moves the service" alone over-flagged two of the suite's three conserve
+    halves).
 
     Gold's reasoning is always "spending the pair isn't worth it", but ACT and
     SPEND are different events. A free lever that improves the SUT's position
@@ -586,13 +758,37 @@ async def assert_wait_gold_has_no_free_escape(client: Client,
     scores that as wrong -- which is exactly how the agent beat T1a's label
     while satisfying every other gold criterion (remediation spec, finding
     F2). The client must be freshly connected against this half's own state
-    file, the same contract `assert_menus_identical` has."""
+    file, the same contract `assert_menus_identical` has.
+
+    **Ordering (Finding #11, 2026-08-26 re-review).** The menu replay must
+    happen BEFORE `current` is read: `menu_at_decision_hour` replays this
+    half's realized cuts strictly before the decision hour, and if a future
+    scenario ever realizes a cut there, the service's current working
+    lightpath could change as a result. Reading `current` first would then
+    compare a PRE-replay lightpath id against a POST-replay menu -- silently
+    comparing two different network states. Inert for every half shipped
+    today (none realize a cut before their own decision hour -- see each
+    pair's own `realized` block), but asserted here rather than merely
+    ordered-and-hoped-for, so a future violation fails loudly instead of
+    silently misreading."""
     if scenario.metadata.get("gold_spare_action") != "conserve":
         return
+    d = scenario.hours.index(scenario.decision_hour)
+    assert not any(scenario.realized.get(hour) for hour in scenario.hours[:d]), (
+        f"{scenario.id}: realizes a cut strictly before its own decision "
+        f"hour {scenario.decision_hour!r}; `current` must be read AFTER "
+        f"menu_at_decision_hour's replay, not before -- update the ordering "
+        f"here instead of relying on this assumption")
+    menu = await menu_at_decision_hour(client, scenario)
     current = await _current_working_lightpaths(
         client, scenario.service_under_test)
-    menu = await menu_at_decision_hour(client, scenario)
-    _check_no_free_escape(scenario.id, menu, current)
+    _check_no_free_escape(
+        scenario.id, menu, current,
+        label_rule=scenario.metadata.get("label_rule"),
+        gold_label=scenario.gold.label,
+        reference_avoid=scenario.reference_avoid,
+        wide_avoid_risk_group=scenario.metadata.get("wide_avoid_risk_group"),
+        label_by_lever=scenario.metadata.get("label_by_lever"))
 
 
 def assert_no_single_variable_rule_solves(
@@ -627,7 +823,6 @@ def assert_no_single_variable_rule_solves(
        solves T3. No single rule reaches 6/6 = 1.0.
     3. Per-pair logic is defensible and stronger: it catches the design flaw
        (each pair reduces to one variable) that whole-suite logic couldn't prove."""
-    from collections import defaultdict
     from .rules import best_rule
 
     # Group by pair and check if any pair is completely solvable by a single rule

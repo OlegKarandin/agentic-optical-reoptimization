@@ -45,6 +45,16 @@ are collapsed to one real rollout per episode by `collapse_deterministic`; the
 budget line reports the nominal N=3 the same code path would use for a
 non-deterministic decider).
 
+---
+**Boundary (added 2026-08-26, Finding #9).** Everything ABOVE this line --
+the table and the budget line -- is what `render_results_table()` literally
+prints for a real run; re-pasting a fresh table here should only ever touch
+that part. Everything BELOW is hand-maintained analysis this plan worked to
+preserve (Claims 1/2, the `episodes correct` reading, the shared-shape
+discussion) -- it is not runtime output, and a mechanical re-paste of a fresh
+results table must not overwrite it.
+---
+
 **Claim 1 (provable).** The agent beats every fixed policy that does not read
 the forecast: the twins' menus and observables are identical by construction,
 so such a policy emits the same answer twice and scores exactly 50%.
@@ -124,11 +134,20 @@ tuning*, not by design alone -- and that four variants is an enumeration, not
 a proof: a fifth summary of the same per-horizon map (the aggregate at the
 earliest published horizon) also solved the pre-retune suite 6/6 and was
 found only by looking after the fact. The same retune closes it. (Separately,
-and out of scope for this claim: a related check found a different,
-structural free-lever escape common to all three conserve-gold episodes,
-currently `xfail` pending its own follow-up workstream -- Claim 2 is about
-the two checks above, not a claim that every shortcut in the suite is
-closed.)
+and out of scope for this claim: a related check (`assert_wait_gold_has_no_
+free_escape`, W1.6) found that storm-svc-1's own static protection lightpath
+is a free, zero-pair `ip_reroute` candidate under every conserve-gold half's
+near-neutral `reference_avoid={}` -- but tracing that escape through each
+half's own `label_rule` (2026-08-26 re-review, Finding #5) found it is only
+GENUINELY exploitable on ONE of the three, `T1a`: taking it there commits
+something and flips T1a's graded label from gold's `wait` to `act`. On the
+other two, `T2b` and `T3b`, taking the very same free candidate reads the
+SAME label gold does under their own `label_rule` (`narrow` and `B`
+respectively) -- not an exploitable escape, just an unused free option, and
+`test_a_conserve_gold_with_an_unexploitable_free_escape_passes` now confirms
+this live. Only `T1a`'s case remains `xfail`, pending its own follow-up
+workstream -- Claim 2 is about the two checks above, not a claim that every
+shortcut in the suite is closed.)
 
 `pair_solved` over three pairs takes values in {0, 1/3, 2/3, 1}: enough to tell
 a working harness from a broken one, not enough to separate luck from skill.
