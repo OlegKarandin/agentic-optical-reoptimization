@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from storm_reoptimizer.eval.assertions import (
-    PairInvalid, assert_flip_dominates, assert_pair_derived_geometry_is_equal,
+    assert_flip_dominates, assert_pair_derived_geometry_is_equal,
     assert_each_baseline_variant_ties, assert_gold_choices_differ,
     assert_issuance_prefix_shared, assert_menus_identical,
     assert_no_global_policy_solves_the_suite,
@@ -484,10 +484,42 @@ def test_the_claimant_aggregates_are_derivable_for_every_twin_half(
         for sid, f in sorted(flips.items())))
 
 
-def test_report_the_global_policy_sweep_over_the_shipped_suite(
+def test_no_global_policy_solves_the_shipped_suite(
         loaded_state_path, local_server_command, local_server_env):
-    """GATE A. Expected to REPORT a solving policy until W1.3's retune lands.
-    Converted into a real assertion by Task 6."""
+    """GATE A, as a real assertion: no ONE threshold, on ONE of
+    `derived.FLIP_VARS`, under ONE fixed orientation, answers all six twin
+    halves.
+
+    This was a reporting probe (try/except, print the exception) for as long
+    as W1.3's retune was outstanding. It is an assertion now because the
+    retune landed on 2026-08-26 -- and it landed because the sweep it guards
+    had, until that day, been running against an INCOMPLETE `FLIP_VARS`.
+    Three claimant-side variants were enumerated; the fourth,
+    `claimant_ecar_min_over_horizons`, was not, and it solved the shipped
+    suite 6/6 at a single threshold of 89.35 G. Adding it made this check
+    fail for real, T2a's near cone was moved outward along its 300.0 km
+    circle (bearing 288.0 -> 290.2 deg, claimant aggregate 71.1 -> 124.0 G)
+    until the six values INTERLEAVED, and the check now passes on its own
+    merits. All four variants are blocked live:
+
+      * `..._at_exposure_horizon`   -- tied on T2 (both 128.4 G) and on T3
+                                       (both 284.0 G): each pair publishes a
+                                       byte-identical far horizon.
+      * `..._before_exposure_horizon` -- tied on T1 (both 0.0): T1's
+                                       decision-hour issuance publishes only
+                                       its exposure horizon, so the sum is
+                                       over an empty set.
+      * `..._peak_over_horizons`   -- tied on T3 (both 284.0 G), the same
+                                       shared far horizon dominating both
+                                       halves.
+      * `..._min_over_horizons`    -- no tie; genuinely INTERLEAVED after the
+                                       retune: T1a 107.6 (conserve) < T2a
+                                       124.0 (spend) < T2b 128.4 (conserve).
+
+    A tied pair predicts the same label for both halves under any threshold
+    and any orientation. An interleave is the stronger outcome, and the only
+    one available to the min variant -- which is why it is T2's geometry that
+    had to move."""
     episodes = [load_scenario(SCENARIOS / f"{n}.yaml")
                 for n in ("T1a", "T1b", "T2a", "T2b", "T3a", "T3b")]
 
@@ -502,11 +534,7 @@ def test_report_the_global_policy_sweep_over_the_shipped_suite(
 
     flips = asyncio.run(_run())
     flip_values = {sid: f.values() for sid, f in flips.items()}
-    try:
-        assert_no_global_policy_solves_the_suite(episodes, flip_values)
-        print("GATE A: no global policy solves the suite.")
-    except PairInvalid as exc:
-        print(f"GATE A (expected until W1.3): {exc}")
+    assert_no_global_policy_solves_the_suite(episodes, flip_values)
 
 
 @pytest.mark.parametrize("pair", ("T1", "T2", "T3"))
