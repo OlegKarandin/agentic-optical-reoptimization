@@ -498,28 +498,39 @@ def test_no_global_policy_solves_the_shipped_suite(
     `claimant_ecar_min_over_horizons`, was not, and it solved the shipped
     suite 6/6 at a single threshold of 89.35 G. Adding it made this check
     fail for real, T2a's near cone was moved outward along its 300.0 km
-    circle (bearing 288.0 -> 290.2 deg, claimant aggregate 71.1 -> 124.0 G)
+    circle (bearing 288.0 -> 290.0 deg, claimant aggregate 71.1 -> 114.6 G)
     until the six values INTERLEAVED, and the check now passes on its own
-    merits. All four variants are blocked live:
+    merits. All four variants are blocked live. "Bound" below is what a tied
+    pair guarantees; "best" is what an exhaustive sweep of every threshold
+    under both orientations actually reaches. They are not always the same
+    number, and quoting the bound as if it were the measured score makes the
+    suite look closer to solvable than it is:
 
       * `..._at_exposure_horizon`   -- tied on T2 (both 128.4 G) and on T3
                                        (both 284.0 G): each pair publishes a
                                        byte-identical far horizon.
+                                       Bound 4/6, best 4/6.
       * `..._before_exposure_horizon` -- tied on T1 (both 0.0): T1's
                                        decision-hour issuance publishes only
                                        its exposure horizon, so the sum is
                                        over an empty set.
+                                       Bound 5/6, best 5/6.
       * `..._peak_over_horizons`   -- tied on T3 (both 284.0 G), the same
                                        shared far horizon dominating both
-                                       halves.
-      * `..._min_over_horizons`    -- no tie; genuinely INTERLEAVED after the
-                                       retune: T1a 107.6 (conserve) < T2a
-                                       124.0 (spend) < T2b 128.4 (conserve).
+                                       halves. Bound 5/6, best 4/6 -- the
+                                       tie is not the only thing limiting
+                                       this one.
+      * `..._min_over_horizons`    -- no tie at all; blocked by a genuine
+                                       INTERLEAVE after the retune: T1a
+                                       107.6 (conserve) < T2a 114.6 (spend)
+                                       < T2b 128.4 (conserve). Best 5/6.
 
     A tied pair predicts the same label for both halves under any threshold
     and any orientation. An interleave is the stronger outcome, and the only
     one available to the min variant -- which is why it is T2's geometry that
-    had to move."""
+    had to move. The one binding condition on that move is T1a's 107.563 G:
+    swept directly, the suite is solved at every T2a near value <= 107.5 G
+    and unsolved from 108 G up."""
     episodes = [load_scenario(SCENARIOS / f"{n}.yaml")
                 for n in ("T1a", "T1b", "T2a", "T2b", "T3a", "T3b")]
 

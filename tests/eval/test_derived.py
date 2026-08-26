@@ -269,6 +269,40 @@ def test_the_min_aggregate_picks_the_other_horizon_than_the_peak(
         flip.claimant_ecar_before_exposure_horizon)
 
 
+def test_the_min_aggregate_reads_the_EARLIER_horizon_when_that_is_smaller(
+        example_scenario_yaml, write_scenario):
+    """The mirror of the test above, and the direction the SHIPPED suite
+    actually turns on: T2's flip lives in its NEAR (earlier) horizon, which
+    is the smaller one, so `min` reads it and `..._at_exposure_horizon` --
+    which reads T2's byte-identical far horizon -- cannot see the flip at
+    all.
+
+    Same fixture, same two horizons; only the claimant's position moves, from
+    the `t2` centre to the `t3` centre. That alone swaps which horizon each
+    of `min`/`peak` reads, with no change to the code path -- which is the
+    property that makes this variable able to follow a pair's discriminating
+    horizon around, and the reason it solved the suite."""
+    scenario = _two_horizon_scenario(example_scenario_yaml, write_scenario)
+    # svc-b now sits on the t3 (exposure) centre rather than the t2 one, so
+    # the EXPOSURE horizon is its high-water mark and the earlier horizon is
+    # the small one.
+    points = {"storm-svc-1": (25.0, 81.0), "svc-b": (25.2, 81.0)}
+    demands = {"storm-svc-1": 300.0, "svc-b": 100.0}
+
+    flip = flip_scalars_from_points(scenario, points=points,
+                                    demands_gbps=demands)
+
+    assert flip.earlier_horizons == ("t2",)
+    assert (flip.claimant_ecar_before_exposure_horizon
+            < flip.claimant_ecar_at_exposure_horizon)
+    # min reads the EARLIER horizon here; peak reads the exposure one --
+    # exactly the opposite assignment to the previous test.
+    assert flip.claimant_ecar_min_over_horizons == pytest.approx(
+        flip.claimant_ecar_before_exposure_horizon)
+    assert flip.claimant_ecar_peak_over_horizons == pytest.approx(
+        flip.claimant_ecar_at_exposure_horizon)
+
+
 def test_the_min_and_peak_aggregates_coincide_on_a_single_horizon(
         example_scenario_yaml, write_scenario):
     """One horizon means one value, so min == max == that value -- and it is

@@ -192,9 +192,8 @@ _SOLVED = {
 # what the shipped suite did: `derived.claimant_ecar_min_over_horizons` really
 # did solve all six halves at 89.35 G with T2a at 71.1 G, and T2a's near-cone
 # retune really did fix it by lifting that one value past a CONSERVE half's --
-# to 124.0 G, above T1a's 107.6 G and below T2b's 128.4 G. See derived.py's
-# module docstring.
-_INTERLEAVED = {**_SOLVED, "T2a": 125.0}
+# to 114.6 G, clear of T1a's 107.6 G. See derived.py's module docstring.
+_INTERLEAVED = {**_SOLVED, "T2a": 114.6}
 
 
 def test_a_global_threshold_that_answers_every_half_is_rejected(six_halves):
@@ -243,11 +242,19 @@ def t1b():
 
 def _flip(scenario_id, *, at, sut_by_horizon, before=0.0, exposure="t3"):
     earlier = tuple(h for h in sut_by_horizon if h != exposure)
-    # peak/min are over the PUBLISHED horizons' claimant values. With no
-    # earlier horizon there is only one of them, so both collapse onto `at` --
-    # `before` is 0.0 there because it sums an empty tuple, not because some
-    # horizon really carries no claim, and feeding that 0.0 into `min` would
-    # invent a horizon the issuance never published.
+    # peak/min are over the PUBLISHED horizons' claimant values, so with no
+    # earlier horizon there is only one value and both collapse onto `at`.
+    # `before` is 0.0 in that case because it sums an empty tuple, not because
+    # a real horizon carries no claim, so `min(at, before)` would report 0.0
+    # for a claimant aggregate that is nowhere near zero.
+    #
+    # NOT a load-bearing guard for the three tests below: they all pass
+    # `before` at its 0.0 default, and `assert_flip_dominates` takes a max()
+    # over FLIP_VARS, so a spurious 0.0 in one variable could never lower the
+    # flip magnitude those tests assert on. It is here so this helper builds a
+    # FlipScalars that means what `flip_scalars_from_points` would mean --
+    # a future test that reads min/peak off it gets a truthful object rather
+    # than one that happens not to matter yet.
     return FlipScalars(
         scenario_id=scenario_id, exposure_horizon=exposure,
         earlier_horizons=earlier,
