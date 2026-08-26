@@ -17,8 +17,11 @@ from storm_reoptimizer.eval.baseline import ForecastBlindBaseline
 from storm_reoptimizer.eval.decisions import (
     ConstraintDecision, ObjectiveDecision, TimingDecision,
 )
+from storm_reoptimizer.eval.derived import flip_scalars_for
 from storm_reoptimizer.eval.runner import run_episode
-from storm_reoptimizer.eval.scenario_file import load_all_scenarios
+from storm_reoptimizer.eval.scenario_file import (
+    SCENARIOS_DIR as SCENARIOS, load_all_scenarios, load_scenario,
+)
 from storm_reoptimizer.eval.scoring import episode_metrics
 from storm_reoptimizer.mcp_client import connect_server
 
@@ -445,3 +448,35 @@ def test_t2a_carries_a_real_validate_plan_rejection(
         f"near-horizon avoid must genuinely collide with storm-svc-1's own "
         f"protection leg, or recovered_from_rejection can never fire")
     assert episode_metrics(t2a, trace)["recovered_from_rejection"]
+
+
+def test_the_claimant_aggregates_are_derivable_for_every_twin_half(
+        loaded_state_path, local_server_command, local_server_env):
+    """W1.1's acceptance: the numbers F1's arithmetic is built on, measured
+    against a live server rather than asserted from the spec."""
+    episodes = [load_scenario(SCENARIOS / f"{name}.yaml")
+                for name in ("T1a", "T1b", "T2a", "T2b", "T3a", "T3b")]
+
+    async def _run():
+        async with connect_server(
+            TOPOLOGY_PATH, server_command=local_server_command,
+            env=local_server_env,
+            extra_args=["--state", str(loaded_state_path)],
+        ) as client:
+            return await flip_scalars_for(client, episodes,
+                                          topology_path=TOPOLOGY_PATH)
+
+    flips = asyncio.run(_run())
+
+    assert set(flips) == {"T1a", "T1b", "T2a", "T2b", "T3a", "T3b"}
+    for scenario_id, flip in flips.items():
+        assert flip.claimant_ecar_peak_over_horizons > 0.0, scenario_id
+        assert flip.sut_ecar_by_horizon, scenario_id
+    # Record the measured values so the next task's sweep can be read against
+    # real numbers instead of the spec's table.
+    print("\n".join(
+        f"{sid:<5} at={f.claimant_ecar_at_exposure_horizon:9.1f}  "
+        f"before={f.claimant_ecar_before_exposure_horizon:9.1f}  "
+        f"peak={f.claimant_ecar_peak_over_horizons:9.1f}  "
+        f"sut={f.sut_ecar_by_horizon}"
+        for sid, f in sorted(flips.items())))

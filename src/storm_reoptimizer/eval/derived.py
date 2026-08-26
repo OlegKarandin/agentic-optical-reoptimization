@@ -41,7 +41,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .cone import cut_probability, radial_offset_km
+from ..mcp_client import call_tool_json
+from .cone import cut_probability, expected_capacity_at_risk_gbps, radial_offset_km
 from .observation import latest_issuance
 from .scenario_file import Issuance, ScenarioFile
 
@@ -206,6 +207,133 @@ def sut_exposure_by_horizon(
         out[horizon] = (offset, cut_probability(offset, cone.width_km,
                                                  scenario.damage_radius_km))
     return out
+
+
+# The claimant-side scalars W1.2's WHOLE-SUITE check sweeps. Deliberately
+# NOT in DERIVED_VARS and NOT in DerivedGeometry.scalars(): see this module's
+# docstring on the two-check doctrine. Order is the sweep order.
+FLIP_VARS = ("claimant_ecar_at_exposure_horizon",
+             "claimant_ecar_before_exposure_horizon",
+             "claimant_ecar_peak_over_horizons")
+
+
+@dataclass(frozen=True)
+class FlipScalars:
+    """The claimant side of the comparison every gold rationale makes.
+
+    Every gold rationale decides ONE comparison: the service under test's own
+    expected capacity at risk against the aggregate expected capacity at risk
+    of the other services competing for the one spare pair. The SUT side is
+    held equal within each pair by construction; the claimant side IS the
+    flip. Nothing enumerated it until this class existed, and a single global
+    threshold on it answered all six halves (remediation spec, finding F1)."""
+    scenario_id: str
+    exposure_horizon: str
+    earlier_horizons: tuple[str, ...]
+    claimant_ecar_at_exposure_horizon: float
+    claimant_ecar_before_exposure_horizon: float
+    claimant_ecar_peak_over_horizons: float
+    # SUT-own expected capacity at risk at EVERY horizon of the decision-hour
+    # issuance. Not a claimant quantity -- it is here because W1.5's
+    # flip-dominance check needs both sides of the same comparison and
+    # recomputing it from DerivedGeometry.sut_exposure_by_horizon would mean
+    # threading the SUT's demand a second time.
+    sut_ecar_by_horizon: dict[str, float]
+
+    def values(self) -> dict[str, float]:
+        """The flat name -> number view W1.2's sweep consumes. Exactly
+        FLIP_VARS, and nothing the per-pair enumeration is allowed to see."""
+        return {name: getattr(self, name) for name in FLIP_VARS}
+
+
+def _ecar_at_cone(scenario: ScenarioFile, cone, points, demands_gbps, *,
+                  exclude: str | None) -> float:
+    """Summed `p_cut x demand_gbps` over every service with a known point and
+    a known demand, optionally excluding one (the SUT)."""
+    total = 0.0
+    for service_id, point in points.items():
+        if service_id == exclude:
+            continue
+        demand = demands_gbps.get(service_id)
+        if demand is None:
+            continue
+        offset = radial_offset_km(cone.center["lat"], cone.center["lon"],
+                                  *point)
+        total += expected_capacity_at_risk_gbps(
+            cut_probability(offset, cone.width_km, scenario.damage_radius_km),
+            float(demand))
+    return total
+
+
+def flip_scalars_from_points(
+    scenario: ScenarioFile, *,
+    points: dict[str, tuple[float, float]],
+    demands_gbps: dict[str, float],
+) -> FlipScalars:
+    """The pure half of W1.1: the claimant aggregates, given every service's
+    representative point and demand. Split out from `flip_scalars_for` for the
+    same reason `derived_geometry_from_point` is -- so the arithmetic is
+    unit-testable without a server."""
+    issuance = decision_issuance(scenario)
+    exposure_horizon = exposure_horizon_hour(scenario)
+    exposure_index = scenario.hours.index(exposure_horizon)
+    sut = scenario.service_under_test
+
+    earlier = tuple(sorted(
+        (h for h in issuance.horizons
+         if scenario.hours.index(h) < exposure_index),
+        key=scenario.hours.index))
+
+    per_horizon = {
+        horizon: _ecar_at_cone(scenario, cone, points, demands_gbps,
+                               exclude=sut)
+        for horizon, cone in issuance.horizons.items()}
+
+    sut_demand = float(demands_gbps.get(sut, 0.0))
+    sut_ecar = {}
+    for horizon, cone in issuance.horizons.items():
+        point = points.get(sut)
+        if point is None:
+            sut_ecar[horizon] = 0.0
+            continue
+        offset = radial_offset_km(cone.center["lat"], cone.center["lon"],
+                                  *point)
+        sut_ecar[horizon] = expected_capacity_at_risk_gbps(
+            cut_probability(offset, cone.width_km, scenario.damage_radius_km),
+            sut_demand)
+
+    return FlipScalars(
+        scenario_id=scenario.id,
+        exposure_horizon=exposure_horizon,
+        earlier_horizons=earlier,
+        claimant_ecar_at_exposure_horizon=per_horizon[exposure_horizon],
+        claimant_ecar_before_exposure_horizon=sum(
+            per_horizon[h] for h in earlier),
+        claimant_ecar_peak_over_horizons=max(per_horizon.values(),
+                                             default=0.0),
+        sut_ecar_by_horizon=sut_ecar)
+
+
+async def flip_scalars_for(client: "Client", scenarios: list[ScenarioFile],
+                           *, topology_path: str | Path
+                           ) -> dict[str, FlipScalars]:
+    """`{scenario_id: FlipScalars}` for a whole suite off ONE server
+    connection, the same shape and the same one-state-file contract
+    `derived_scalars_for` has."""
+    from .runner import service_points          # lazy: see the module note
+
+    state_files = {s.state_file for s in scenarios}
+    if len(state_files) > 1:
+        raise DerivedGeometryError(
+            f"flip_scalars_for got episodes across {len(state_files)} "
+            f"different state files ({sorted(state_files)}) but only one "
+            f"server connection; call it once per state file")
+    points = await service_points(client, topology_path)
+    services = await call_tool_json(client, "get_services")
+    demands = {s["id"]: float(s["demand_gbps"]) for s in services["services"]}
+    return {s.id: flip_scalars_from_points(s, points=points,
+                                           demands_gbps=demands)
+            for s in scenarios}
 
 
 def derived_geometry_from_point(

@@ -14,9 +14,9 @@ import pytest
 
 from storm_reoptimizer.eval.cone import cut_probability, radial_offset_km
 from storm_reoptimizer.eval.derived import (
-    DERIVED_VARS, DerivedGeometryError, derived_geometry_from_point,
-    exposure_horizon_hour, horizon_widths_km, sut_p_cut_at_exposure_horizon,
-    within_issuance_cone_motion_kmh,
+    DERIVED_VARS, FLIP_VARS, DerivedGeometryError, derived_geometry_from_point,
+    exposure_horizon_hour, flip_scalars_from_points, horizon_widths_km,
+    sut_p_cut_at_exposure_horizon, within_issuance_cone_motion_kmh,
 )
 from storm_reoptimizer.eval.rules import (
     ENUMERATED_VARS, OBSERVABLE_VARS, best_rule, observables,
@@ -185,3 +185,80 @@ def test_derived_values_override_a_declaration_of_the_same_name(tmp_path):
 def test_the_enumeration_is_the_declared_list_plus_the_derived_list():
     assert DERIVED_VARS == ("sut_p_cut_at_exposure_horizon",)
     assert ENUMERATED_VARS == OBSERVABLE_VARS + DERIVED_VARS
+
+
+# One earlier horizon (t2) plus the exposure horizon (t3), so the
+# "before" aggregate is a real sum over a real horizon rather than 0.0.
+_TWO_HORIZON_T1 = textwrap.dedent("""
+      t1:
+        t2: {cone: {type: Polygon, coordinates: [[[81.0, 25.0], [81.1, 25.0], [81.1, 25.1], [81.0, 25.0]]]}, width_km: 90, center: {lat: 25.0, lon: 81.0}}
+        t3: {cone: {type: Polygon, coordinates: [[[81.0, 25.0], [81.1, 25.0], [81.1, 25.1], [81.0, 25.0]]]}, width_km: 90, center: {lat: 25.2, lon: 81.0}}
+""").rstrip("\n")
+
+
+def _two_horizon_scenario(example_scenario_yaml, write_scenario):
+    old = "\n".join(example_scenario_yaml.splitlines()[18:20])   # the single-horizon t1 block
+    # The dedented replacement above lands at 0/2-space indent; re-indent by
+    # 2 to match `old`'s own 2/4-space nesting under `forecast:` -- a plain
+    # `.strip("\n")` swap (as first drafted) collapses "  t1:" to "t1:" and
+    # silently unparents it from `forecast:`, confirmed by round-tripping
+    # this exact substitution through yaml.safe_load before trusting it.
+    new = textwrap.indent(_TWO_HORIZON_T1.strip("\n"), "  ")
+    return load_scenario(write_scenario(
+        example_scenario_yaml.replace(old, new)))
+
+
+def test_the_claimant_aggregate_excludes_the_service_under_test(
+        example_scenario_yaml, write_scenario):
+    scenario = _two_horizon_scenario(example_scenario_yaml, write_scenario)
+    points = {"storm-svc-1": (25.2, 81.0), "svc-b": (25.2, 81.0)}
+    demands = {"storm-svc-1": 300.0, "svc-b": 100.0}
+
+    flip = flip_scalars_from_points(scenario, points=points,
+                                    demands_gbps=demands)
+
+    # Both services sit on the SAME point, so the SUT's own exposure and the
+    # claimant's are the same p_cut. If the SUT leaked into the claimant sum
+    # the aggregate would be 4x svc-b's contribution, not 1x.
+    sut = flip.sut_ecar_by_horizon[flip.exposure_horizon]
+    assert flip.claimant_ecar_at_exposure_horizon == pytest.approx(sut / 3.0)
+
+
+def test_the_before_aggregate_sums_only_strictly_earlier_horizons(
+        example_scenario_yaml, write_scenario):
+    scenario = _two_horizon_scenario(example_scenario_yaml, write_scenario)
+    points = {"storm-svc-1": (25.2, 81.0), "svc-b": (25.0, 81.0)}
+    demands = {"storm-svc-1": 300.0, "svc-b": 100.0}
+
+    flip = flip_scalars_from_points(scenario, points=points,
+                                    demands_gbps=demands)
+
+    assert flip.exposure_horizon == "t3"
+    assert flip.earlier_horizons == ("t2",)
+    # svc-b sits exactly on the t2 cone centre, so its p_cut there is the
+    # highest it gets anywhere in this issuance.
+    assert (flip.claimant_ecar_before_exposure_horizon
+            > flip.claimant_ecar_at_exposure_horizon)
+    assert flip.claimant_ecar_peak_over_horizons == pytest.approx(
+        flip.claimant_ecar_before_exposure_horizon)
+
+
+def test_a_single_horizon_issuance_has_no_before_aggregate(
+        example_scenario_yaml, write_scenario):
+    scenario = load_scenario(write_scenario(example_scenario_yaml))
+    flip = flip_scalars_from_points(
+        scenario, points={"storm-svc-1": (25.2, 81.0), "svc-b": (25.0, 81.0)},
+        demands_gbps={"storm-svc-1": 300.0, "svc-b": 100.0})
+
+    assert flip.earlier_horizons == ()
+    assert flip.claimant_ecar_before_exposure_horizon == 0.0
+
+
+def test_the_flip_values_view_carries_exactly_the_swept_scalars(
+        example_scenario_yaml, write_scenario):
+    scenario = load_scenario(write_scenario(example_scenario_yaml))
+    flip = flip_scalars_from_points(
+        scenario, points={"storm-svc-1": (25.2, 81.0)},
+        demands_gbps={"storm-svc-1": 300.0})
+
+    assert set(flip.values()) == set(FLIP_VARS)
