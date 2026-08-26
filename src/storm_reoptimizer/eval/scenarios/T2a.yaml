@@ -30,20 +30,27 @@ forecast:
                               # This near-horizon CENTRE is the ONE place T2a
                               # and T2b differ.  Both centres sit at exactly
                               # 300.0 km from storm-svc-1's representative
-                              # point (T2a -7.4e-13 km, T2b -2.0e-13 km,
-                              # Newton-solved along a fixed bearing -- 290.2 deg
-                              # for T2a, 296.0 deg for T2b -- against
-                              # cone.radial_offset_km, which is NOT a lat/lon
-                              # circle: the cos(centre latitude) term makes the
-                              # metric move with the centre), so every scalar
-                              # the derived-geometry check reads --
-                              # storm-svc-1's own p_cut at the exposure
-                              # horizon, the within-issuance cone motion, and
-                              # every horizon's width -- is EQUAL across the
-                              # halves.  The flip lives entirely in how hard
-                              # the eight claimants are hit: p_cut 0.129-0.160
-                              # here (124.0 G expected capacity at risk) vs
-                              # 0.294-0.454 in T2b (347.4 G).
+                              # point (both err -2.2737367544323206e-13 km --
+                              # the SAME float, so the two offsets are bitwise
+                              # equal), placed along a fixed bearing: 290.0 deg
+                              # for T2a, 296.0 deg for T2b.  The bearing is
+                              # measured in cone.radial_offset_km's OWN frame
+                              # (north = R*dlat, east = R*dlon*cos(CENTRE
+                              # latitude)) -- not a lat/lon circle, because
+                              # that cos term moves with the centre.  In that
+                              # frame the placement is closed-form, not
+                              # iterative: lat = SUT.lat + degrees(d*cos(b)/R),
+                              # then lon = SUT.lon + degrees(d*sin(b)/
+                              # (R*cos(lat))), with R = events.geo.
+                              # EARTH_RADIUS_KM = 6371.0.  Because the offset
+                              # is held, every scalar the derived-geometry
+                              # check reads -- storm-svc-1's own p_cut at the
+                              # exposure horizon, the within-issuance cone
+                              # motion, and every horizon's width -- is EQUAL
+                              # across the halves.  The flip lives entirely in
+                              # how hard the eight claimants are hit: p_cut
+                              # 0.120-0.147 here (114.6 G expected capacity at
+                              # risk) vs 0.294-0.454 in T2b (347.4 G).
                               # See docs/superpowers/rehearsals/T2.md.
                               #
                               # RETUNED 2026-08-26 (Task 6, reopened).  This
@@ -54,18 +61,20 @@ forecast:
                               # the fourth claimant-side variant, which was
                               # missing from FLIP_VARS until that day, so
                               # `assert_no_global_policy_solves_the_suite`
-                              # had never swept it.  Moving to 290.2 deg lifts
-                              # this half's near value ABOVE T1a's 107.6 G
-                              # (a CONSERVE half) while keeping it BELOW T2's
-                              # own shared far value of 128.4 G, so the six
-                              # min-over-horizons values now INTERLEAVE across
-                              # the spend/conserve labels and no threshold can
-                              # separate them.  The cost is this half's own
-                              # decision margin: 156.0/124.0 = 1.26x, down
+                              # had never swept it.  The ONE binding condition
+                              # is that this half's near value clear T1a's
+                              # 107.6 G -- a CONSERVE half -- so the six
+                              # min-over-horizons values INTERLEAVE across the
+                              # spend/conserve labels.  Measured directly: the
+                              # suite is solved at every near value <= 107.5 G
+                              # and unsolved at every value >= 108 G.  290.0
+                              # deg puts it at 114.6 G, 7.1 G clear of that
+                              # edge, and costs this half the least decision
+                              # margin that buys it: 156.0/114.6 = 1.36x, down
                               # from 2.19x.  Only the BEARING changed; the
                               # 300.0 km radial offset is held.
-    t2: {cone: {type: Polygon, coordinates: [[[78.51818, 26.06332], [78.59574, 26.05413], [78.66801, 26.02718], [78.73007, 25.9843], [78.77769, 25.92843], [78.80762, 25.86336], [78.81784, 25.79353], [78.80762, 25.7237], [78.77769, 25.65863], [78.73007, 25.60275], [78.66801, 25.55988], [78.59574, 25.53292], [78.51818, 25.52373], [78.44063, 25.53292], [78.36836, 25.55988], [78.3063, 25.60275], [78.25868, 25.65863], [78.22874, 25.7237], [78.21853, 25.79353], [78.22874, 25.86336], [78.25868, 25.92843], [78.3063, 25.9843], [78.36836, 26.02718], [78.44063, 26.05413], [78.51818, 26.06332]]]},
-         width_km: 60, center: {lat: 25.79352832096807, lon: 78.51818370751653}}
+    t2: {cone: {type: Polygon, coordinates: [[[78.51234, 26.04811], [78.58988, 26.03892], [78.66214, 26.01196], [78.72419, 25.96909], [78.77181, 25.91321], [78.80174, 25.84814], [78.81195, 25.77831], [78.80174, 25.70848], [78.77181, 25.64341], [78.72419, 25.58754], [78.66214, 25.54466], [78.58988, 25.51771], [78.51234, 25.50852], [78.43479, 25.51771], [78.36253, 25.54466], [78.30048, 25.58754], [78.25286, 25.64341], [78.22293, 25.70848], [78.21272, 25.77831], [78.22293, 25.84814], [78.25286, 25.91321], [78.30048, 25.96909], [78.36253, 26.01196], [78.43479, 26.03892], [78.51234, 26.04811]]]},
+         width_km: 60, center: {lat: 25.77831164698992, lon: 78.51233612454655}}
     t6: {cone: {type: Polygon, coordinates: [[[81.32778, 25.75487], [81.5843, 25.72423], [81.82334, 25.63439], [82.02861, 25.49147], [82.18612, 25.30521], [82.28513, 25.08831], [82.31891, 24.85555], [82.28513, 24.62279], [82.18612, 24.40589], [82.02861, 24.21964], [81.82334, 24.07672], [81.5843, 23.98688], [81.32778, 23.95623], [81.07125, 23.98688], [80.83221, 24.07672], [80.62694, 24.21964], [80.46943, 24.40589], [80.37042, 24.62279], [80.33665, 24.85555], [80.37042, 25.08831], [80.46943, 25.30521], [80.62694, 25.49147], [80.83221, 25.63439], [81.07125, 25.72423], [81.32778, 25.75487]]]},
          width_km: 200, center: {lat: 24.855553333333333, lon: 81.32777666666667}}
 realized: {}                 # EQUAL in T2b -- nothing realized-cut this episode.
@@ -96,21 +105,24 @@ gold:
 
     Real numbers, this half: the t2 cone (300.0 km from storm-svc-1, width 60)
     sits just INSIDE the near edge of the kanpur/agra cluster.  Its eight 100 G
-    services are exposed at p_cut 0.1289 (d0004, d0301), 0.1603 (d0028, d0123)
-    and 0.1508 (d0188, d0189, d0349, d0350) -- 118.2 G, or 124.0 G summed over
-    every one of the 572 non-SUT services.  124.0 G < 156.0 G (1.26x): the
+    services are exposed at p_cut 0.1201 (d0004, d0301), 0.1473 (d0028, d0123)
+    and 0.1382 (d0188, d0189, d0349, d0350) -- 108.8 G, or 114.6 G summed over
+    every one of the 572 non-SUT services.  114.6 G < 156.0 G (1.36x): the
     claim on the pair is still the smaller one, so buy the insurance.
     Correct: WIDE.
 
-    That 1.26x is deliberately tighter than the 2.19x this half shipped with
+    That 1.36x is deliberately tighter than the 2.19x this half shipped with
     until 2026-08-26.  The near cone was moved outward along the 300.0 km
-    circle (bearing 288.0 -> 290.2 deg) because at 71.1 G the whole suite was
+    circle (bearing 288.0 -> 290.0 deg) because at 71.1 G the whole suite was
     solved 6/6 by a bare threshold at 89.35 G on the smallest claimant
     aggregate any horizon of the decision-hour issuance publishes -- a policy
     that never reads storm-svc-1 at all.  The margin is the price of making
-    the comparison actually necessary; it is still a comparison an
-    expected-value reasoner resolves the same way every time, because 124.0 G
-    and 156.0 G are both exact, not noisy.
+    the comparison actually necessary, and it is the SMALLEST price that buys
+    it: the binding edge is T1a's 107.6 G, the suite is unsolved from 108 G
+    up, and 114.6 G clears that by 7.1 G.  It is still a comparison an
+    expected-value reasoner resolves the same way every time, because 114.6 G
+    and 156.0 G are both exact, not noisy -- a claimant-side OVERestimate of
+    36.1% would be needed to flip it (it was 119.2% at 71.1 G).
 
     The t6 cone also sits on five further services (d0361 0.3973, d0029 and
     d0348 0.2814, d0212 and d0462 0.0693 -- 128.4 G).  That number is

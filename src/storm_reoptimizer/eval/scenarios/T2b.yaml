@@ -22,25 +22,29 @@ forecast:
                               # identical wide avoid group).  ONLY the near
                               # horizon's CENTRE differs from T2a's, and it
                               # differs along the 300.0 km circle about
-                              # storm-svc-1's point (this half -2.0e-13 km,
-                              # T2a -7.4e-13 km, both Newton-solved along a
-                              # fixed bearing -- 296.0 deg here, 290.2 deg in
-                              # T2a), so storm-svc-1's own derived exposure --
-                              # its p_cut at the exposure horizon, the
-                              # within-issuance cone motion, every horizon's
-                              # width -- is EQUAL across the halves and no
-                              # threshold on any of them can separate the pair.
+                              # storm-svc-1's point -- both halves' offsets err
+                              # by -2.2737367544323206e-13 km, the SAME float,
+                              # so they are bitwise equal.  Each centre is
+                              # placed along a fixed bearing (296.0 deg here,
+                              # 290.0 deg in T2a) measured in
+                              # cone.radial_offset_km's own frame; see
+                              # T2a.yaml's comment for the closed form.  So
+                              # storm-svc-1's own derived exposure -- its p_cut
+                              # at the exposure horizon, the within-issuance
+                              # cone motion, every horizon's width -- is EQUAL
+                              # across the halves and no threshold on any of
+                              # them can separate the pair.
                               #
                               # What DOES differ is where the eight kanpur/agra
-                              # claimants fall: this centre is 29.4 km deeper
+                              # claimants fall: this centre is 31.2 km deeper
                               # into that cluster than T2a's, taking them from
-                              # p_cut 0.129-0.160 (124.0 G at risk) to
+                              # p_cut 0.120-0.147 (114.6 G at risk) to
                               # 0.294-0.454 (347.4 G).  See
                               # docs/superpowers/rehearsals/T2.md.  (That gap
-                              # was 47 km / 71.1 G until 2026-08-26, when T2a's
-                              # near cone was retuned outward -- see T2a.yaml's
-                              # own RETUNED note for why; nothing in THIS half
-                              # moved.)
+                              # was 41.6 km / 71.1 G until 2026-08-26, when
+                              # T2a's near cone was retuned outward -- see
+                              # T2a.yaml's own RETUNED note for why; nothing in
+                              # THIS half moved.)
     t2: {cone: {type: Polygon, coordinates: [[[78.62893, 26.30806], [78.70665, 26.29887], [78.77907, 26.27191], [78.84126, 26.22904], [78.88898, 26.17316], [78.91897, 26.10809], [78.92921, 26.03826], [78.91897, 25.96843], [78.88898, 25.90337], [78.84126, 25.84749], [78.77907, 25.80461], [78.70665, 25.77766], [78.62893, 25.76847], [78.55122, 25.77766], [78.4788, 25.80461], [78.41661, 25.84749], [78.36889, 25.90337], [78.33889, 25.96843], [78.32866, 26.03826], [78.33889, 26.10809], [78.36889, 26.17316], [78.41661, 26.22904], [78.4788, 26.27191], [78.55122, 26.29887], [78.62893, 26.30806]]]},
          width_km: 60, center: {lat: 26.0382632644897, lon: 78.62893218613868}}
     t6: {cone: {type: Polygon, coordinates: [[[81.32778, 25.75487], [81.5843, 25.72423], [81.82334, 25.63439], [82.02861, 25.49147], [82.18612, 25.30521], [82.28513, 25.08831], [82.31891, 24.85555], [82.28513, 24.62279], [82.18612, 24.40589], [82.02861, 24.21964], [81.82334, 24.07672], [81.5843, 23.98688], [81.32778, 23.95623], [81.07125, 23.98688], [80.83221, 24.07672], [80.62694, 24.21964], [80.46943, 24.40589], [80.37042, 24.62279], [80.33665, 24.85555], [80.37042, 25.08831], [80.46943, 25.30521], [80.62694, 25.49147], [80.83221, 25.63439], [81.07125, 25.72423], [81.32778, 25.75487]]]},
