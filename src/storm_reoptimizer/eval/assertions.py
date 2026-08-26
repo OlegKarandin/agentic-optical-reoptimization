@@ -487,6 +487,46 @@ def assert_no_global_policy_solves_the_suite(
                         f"across the labels.")
 
 
+def assert_flip_dominates(a: ScenarioFile, b: ScenarioFile,
+                          flip_a: "FlipScalars", flip_b: "FlipScalars") -> None:
+    """The largest EQUAL-IN-BOTH-HALVES signal about the service under test
+    must not outweigh the flip itself.
+
+    Every other confound check in this module asks whether something DIFFERS
+    between the halves. None of them asks whether the thing that differs is
+    the largest thing on the board -- and an equal-in-both-halves signal that
+    dominates the flip makes every reasoner answer identically while passing
+    every equality assertion. That is exactly how T1 shipped with a `t2`
+    nowcast worth 265.0 G sitting on top of a 86.1 G flip (remediation spec,
+    finding F2).
+
+    "Flip magnitude" is the largest inter-half difference over any claimant
+    aggregate: the pairs disagree about WHICH horizon carries the competing
+    claim (T1's is at the exposure horizon, T2's and T3's are before it), so
+    taking the max is what makes one check cover all three."""
+    magnitude = max(
+        abs(flip_a.values()[var] - flip_b.values()[var]) for var in FLIP_VARS)
+
+    shared = set(flip_a.sut_ecar_by_horizon) & set(flip_b.sut_ecar_by_horizon)
+    equal = {h: flip_a.sut_ecar_by_horizon[h] for h in shared
+             if abs(flip_a.sut_ecar_by_horizon[h]
+                    - flip_b.sut_ecar_by_horizon[h]) <= DERIVED_TOLERANCE}
+    if not equal:
+        return
+
+    horizon, largest = max(equal.items(), key=lambda item: item[1])
+    if largest > magnitude:
+        raise PairInvalid(
+            f"{a.id}/{b.id}: the service under test's own exposure at horizon "
+            f"{horizon!r} is {largest:.1f} G and is EQUAL in both halves, "
+            f"while the flip magnitude is only {magnitude:.1f} G -- the "
+            f"distractor dominates the flip {largest / max(magnitude, 1e-9):.1f}"
+            f"x. Every expected-value reasoner answers the same thing in both "
+            f"halves, so the graded label is unreachable, and every equality "
+            f"assertion passes anyway. Remove or relocate that horizon, or "
+            f"enlarge the flip.")
+
+
 def assert_no_single_variable_rule_solves(
     episodes: list[ScenarioFile],
     derived: dict[str, dict[str, float]] | None = None,

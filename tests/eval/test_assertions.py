@@ -6,10 +6,14 @@ import textwrap
 import pytest
 
 from storm_reoptimizer.eval.assertions import (
-    PairInvalid, assert_gold_choices_differ, assert_issuance_prefix_shared,
-    assert_no_global_policy_solves_the_suite, assert_shared_scalars_equal,
+    PairInvalid, assert_flip_dominates, assert_gold_choices_differ,
+    assert_issuance_prefix_shared, assert_no_global_policy_solves_the_suite,
+    assert_shared_scalars_equal,
 )
-from storm_reoptimizer.eval.scenario_file import load_scenario
+from storm_reoptimizer.eval.derived import FlipScalars
+from storm_reoptimizer.eval.scenario_file import (
+    SCENARIOS_DIR, load_scenario,
+)
 
 TWIN = textwrap.dedent("""
     id: {id}
@@ -215,3 +219,53 @@ def test_a_pair_whose_halves_declare_the_same_spare_action_is_rejected(
     with pytest.raises(PairInvalid, match="gold_spare_action"):
         assert_no_global_policy_solves_the_suite(
             six_halves_same_spare_action, {})
+
+
+# GATE B (`assert_flip_dominates`, F2): the largest EQUAL-in-both-halves
+# signal about the service under test must not outweigh the flip itself.
+@pytest.fixture
+def t1a():
+    return load_scenario(SCENARIOS_DIR / "T1a.yaml")
+
+
+@pytest.fixture
+def t1b():
+    return load_scenario(SCENARIOS_DIR / "T1b.yaml")
+
+
+def _flip(scenario_id, *, at, sut_by_horizon, before=0.0, exposure="t3"):
+    return FlipScalars(
+        scenario_id=scenario_id, exposure_horizon=exposure,
+        earlier_horizons=tuple(h for h in sut_by_horizon if h != exposure),
+        claimant_ecar_at_exposure_horizon=at,
+        claimant_ecar_before_exposure_horizon=before,
+        claimant_ecar_peak_over_horizons=max(at, before),
+        sut_ecar_by_horizon=dict(sut_by_horizon))
+
+
+def test_a_distractor_larger_than_the_flip_is_rejected(t1a, t1b):
+    """T1 before W1.4: an equal-in-both-halves nowcast worth 265.0 G against
+    a flip magnitude of 86.1 G. Every expected-value reasoner answers the same
+    thing in both halves, and every equality assertion passes."""
+    a = _flip("T1a", at=107.6, sut_by_horizon={"t2": 265.0, "t3": 48.4})
+    b = _flip("T1b", at=21.5, sut_by_horizon={"t2": 265.0, "t3": 48.4})
+    with pytest.raises(PairInvalid, match="dominates the flip"):
+        assert_flip_dominates(t1a, t1b, a, b)
+
+
+def test_a_flip_larger_than_every_equal_signal_is_accepted(t1a, t1b):
+    """T1 after W1.4: the nowcast is gone, so the largest equal SUT signal is
+    48.4 G against a flip magnitude of 86.1 G."""
+    a = _flip("T1a", at=107.6, sut_by_horizon={"t3": 48.4})
+    b = _flip("T1b", at=21.5, sut_by_horizon={"t3": 48.4})
+    assert_flip_dominates(t1a, t1b, a, b)
+
+
+def test_an_unequal_sut_signal_is_not_this_checks_business(t1a, t1b):
+    """A SUT figure that DIFFERS across the halves is
+    assert_pair_derived_geometry_is_equal's job, not this one. This check only
+    weighs signals that are equal in both halves -- those are the ones every
+    reasoner reads identically."""
+    a = _flip("T1a", at=107.6, sut_by_horizon={"t3": 300.0})
+    b = _flip("T1b", at=21.5, sut_by_horizon={"t3": 48.4})
+    assert_flip_dominates(t1a, t1b, a, b)

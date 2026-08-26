@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from storm_reoptimizer.eval.assertions import (
-    PairInvalid, assert_pair_derived_geometry_is_equal,
+    PairInvalid, assert_flip_dominates, assert_pair_derived_geometry_is_equal,
     assert_each_baseline_variant_ties, assert_gold_choices_differ,
     assert_issuance_prefix_shared, assert_menus_identical,
     assert_no_global_policy_solves_the_suite,
@@ -506,3 +506,28 @@ def test_report_the_global_policy_sweep_over_the_shipped_suite(
         print("GATE A: no global policy solves the suite.")
     except PairInvalid as exc:
         print(f"GATE A (expected until W1.3): {exc}")
+
+
+@pytest.mark.parametrize("pair", ("T1", "T2", "T3"))
+def test_report_flip_dominance(pair, loaded_state_path, local_server_command,
+                               local_server_env):
+    """GATE B. Expected to REPORT a dominating distractor on T1 until W1.4
+    lands, and nothing on T2/T3. Converted into a real assertion by Task 4."""
+    a = load_scenario(SCENARIOS / f"{pair}a.yaml")
+    b = load_scenario(SCENARIOS / f"{pair}b.yaml")
+
+    async def _run():
+        async with connect_server(
+            TOPOLOGY_PATH, server_command=local_server_command,
+            env=local_server_env,
+            extra_args=["--state", str(loaded_state_path)],
+        ) as client:
+            return await flip_scalars_for(client, [a, b],
+                                          topology_path=TOPOLOGY_PATH)
+
+    flips = asyncio.run(_run())
+    try:
+        assert_flip_dominates(a, b, flips[a.id], flips[b.id])
+        print(f"GATE B {pair}: the flip dominates.")
+    except PairInvalid as exc:
+        print(f"GATE B {pair}: {exc}")
