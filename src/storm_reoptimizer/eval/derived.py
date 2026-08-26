@@ -73,13 +73,23 @@ halves, it found no solving policy on the first run -- it already passed.
 That is not evidence the claimant scalar is well-behaved; it is a structural
 artifact, root-caused per variable:
 
-  * `claimant_ecar_at_exposure_horizon` is TIED (to `DERIVED_TOLERANCE`)
-    between T2's two halves and between T3's two halves, because T2 and T3
-    each hold a byte-identical far/exposure horizon across their halves by
-    design -- the flip in both pairs lives before that horizon, not at it.
-  * `claimant_ecar_before_exposure_horizon` is TIED between T1's two halves,
-    because T1's `t1` issuance (before Task 4 removed it) carried a
-    byte-identical `t2` nowcast in both halves.
+  * `claimant_ecar_at_exposure_horizon` is TIED (to `DERIVED_TOLERANCE`) on
+    TWO separate pairs -- between T2's two halves AND between T3's two
+    halves (confirmed directly against `T2a.yaml`/`T2b.yaml`'s and
+    `T3a.yaml`/`T3b.yaml`'s `forecast.t1.t6` blocks: byte-identical
+    coordinates and width in each pair) -- because T2 and T3 each hold a
+    byte-identical far/exposure horizon across their halves by design -- the
+    flip in both pairs lives before that horizon, not at it. That is two
+    tied pairs for one variable, not one; it caps this variable at 4/6, one
+    worse than the other two.
+  * `claimant_ecar_before_exposure_horizon` is TIED between T1's two halves.
+    Historically because T1's `t1` issuance carried a byte-identical `t2`
+    nowcast in both halves; today, trivially, because Task 4 deleted that
+    nowcast, so T1's `t1` issuance now publishes ONLY `t3` (confirmed
+    directly against `T1a.yaml`'s `forecast.t1` block, a single horizon) --
+    `earlier_horizons` is empty in both halves, so this scalar is `0.0` in
+    both, not a residual nonzero byte-identical value. Either way it is
+    still a tie by construction, not by geometry.
   * `claimant_ecar_peak_over_horizons` is TIED between T3's two halves, for
     the same far-horizon reason as the first bullet.
 
@@ -94,8 +104,9 @@ before-horizon} happens to be that pair's own discriminating value -- a
 mixed, per-pair-selected reading, not a single scalar applied the same way
 everywhere. `assert_no_global_policy_solves_the_suite` sweeps one scalar,
 one threshold, one orientation, uniformly; that is a different and stronger
-claim than "some column of numbers admits a split point," and the six ties
-above are why no single column clears it.
+claim than "some column of numbers admits a split point," and the four tied
+pairs above (two on `claimant_ecar_at_exposure_horizon`, one each on the
+other two variables) are why no single column clears it.
 """
 from __future__ import annotations
 

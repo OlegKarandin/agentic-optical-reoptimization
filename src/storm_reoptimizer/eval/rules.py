@@ -52,9 +52,13 @@ here would be actively wrong, for three reasons:
    orientation, period. See that function's docstring for the orientation
    argument in full, and derived.py's module docstring for the empirical
    result of running it (spoiler: no such policy exists, but not because the
-   claimant scalar is well-behaved -- because each of its three variants has
-   exactly one structurally tied pair that caps it below 6/6 regardless of
-   threshold).
+   claimant scalar is well-behaved -- because every one of its three variants
+   has at least one structurally tied pair that caps it below 6/6 regardless
+   of threshold: `claimant_ecar_at_exposure_horizon` ties on BOTH T2 and T3
+   (two tied pairs -- caps it at 4/6), `claimant_ecar_before_exposure_
+   horizon` ties on T1 alone, and `claimant_ecar_peak_over_horizons` ties on
+   T3 alone (one tied pair each -- caps those two at 5/6). Different counts
+   per variable, same conclusion: none reaches 6/6).
 3. The ratio `claimant_ecar / sut_ecar` is enumerated by NEITHER check, on
    purpose. Computing that ratio and reasoning about it is the agent's
    INTENDED behavior, not a shortcut to be fenced off -- every gold

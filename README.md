@@ -69,16 +69,22 @@ threshold on it could answer the suite. Building the second check and running
 it against the live server found, honestly: no single uniformly-applied
 claimant scalar (checked at the exposure horizon, before it, and peaked over
 all horizons) answers all six halves under one threshold and one orientation.
-That is not because the scalar is well-chosen -- it is because each of the
-three variants has exactly one pair whose two halves are TIED to high
-precision by construction (two of the three variants tie because a pair's far
-horizon is byte-identical across its halves by design; the third tied
-because T1's near-horizon nowcast was byte-identical across its halves before
-it was later removed for an unrelated reason). A tied pair predicts the same
-label for both halves under any threshold, which caps that variable below
-6/6 regardless of geometry -- so this result says the suite's per-pair
-design already forecloses a global bare-scalar policy, not that a geometry
-retune produced the result. (Separately, and out of scope for this claim: a
+That is not because the scalar is well-chosen -- it is because every one of
+the three variants has at least one pair whose two halves are TIED to high
+precision by construction, and the count differs by variant: the
+at-exposure-horizon variant ties on TWO pairs (T2 and T3 each hold a
+byte-identical far/exposure horizon across their own halves by design,
+capping that variant at 4/6), while the before-horizon and peak-over-horizons
+variants each tie on one pair (T1 for before-horizon -- historically because
+its near-horizon nowcast was byte-identical across its halves, and today,
+trivially, because that nowcast was later deleted for an unrelated reason
+and T1's decision-hour issuance now publishes no earlier horizon at all;
+T3 for peak-over-horizons, for the same byte-identical-far-horizon reason as
+above -- capping each at 5/6). A tied pair predicts the same label for both
+halves under any threshold, which caps that variable below 6/6 regardless of
+geometry -- so this result says the suite's per-pair design already
+forecloses a global bare-scalar policy, not that a geometry retune produced
+the result. (Separately, and out of scope for this claim: a
 related check found a different, structural free-lever escape common to all
 three conserve-gold episodes, currently `xfail` pending its own follow-up
 workstream -- Claim 2 is about the two checks above, not a claim that every
