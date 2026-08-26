@@ -6,9 +6,9 @@ import textwrap
 import pytest
 
 from storm_reoptimizer.eval.assertions import (
-    PairInvalid, assert_flip_dominates, assert_gold_choices_differ,
-    assert_issuance_prefix_shared, assert_no_global_policy_solves_the_suite,
-    assert_shared_scalars_equal,
+    PairInvalid, _check_no_free_escape, assert_flip_dominates,
+    assert_gold_choices_differ, assert_issuance_prefix_shared,
+    assert_no_global_policy_solves_the_suite, assert_shared_scalars_equal,
 )
 from storm_reoptimizer.eval.derived import FlipScalars
 from storm_reoptimizer.eval.scenario_file import (
@@ -269,3 +269,38 @@ def test_an_unequal_sut_signal_is_not_this_checks_business(t1a, t1b):
     a = _flip("T1a", at=107.6, sut_by_horizon={"t3": 300.0})
     b = _flip("T1b", at=21.5, sut_by_horizon={"t3": 48.4})
     assert_flip_dominates(t1a, t1b, a, b)
+
+
+# W1.6 (`_check_no_free_escape`, F2's secondary half): gold's reasoning is
+# always "spending the pair isn't worth it", but "act" and "spend" are
+# different events. A zero-pair candidate that MOVES the service is a free
+# lever the label rule never grades -- exactly how the agent beat T1a's gold
+# label while satisfying every other scoring criterion (it committed an
+# ip_reroute with pairs_needed = 0, so gold.survived and
+# gold.max_spares_wasted: 0 both held).
+def test_a_free_candidate_that_moves_the_service_defeats_a_conserve_gold():
+    """The T1a failure mode: a 0-pair candidate the agent can take to improve
+    its own position while keeping the spare. Gold says "don't spend"; the
+    label rule reads "acted"; both are satisfiable at once."""
+    menu = {"status": "solution", "candidates": [
+        {"lever": "ip_reroute", "reused_lightpaths": ["lp-somewhere-else"],
+         "new_lightpaths": [], "restored_gbps": 300.0,
+         "shortfall_gbps": 0.0, "cost_vector": {}}]}
+    with pytest.raises(PairInvalid, match="free lever"):
+        _check_no_free_escape("T1a", menu, current={"lp-current-working-0"})
+
+
+def test_a_free_candidate_that_only_stays_put_is_safe():
+    menu = {"status": "solution", "candidates": [
+        {"lever": "ip_reroute", "reused_lightpaths": ["lp-current-working-0"],
+         "new_lightpaths": [], "restored_gbps": 300.0,
+         "shortfall_gbps": 0.0, "cost_vector": {}}]}
+    _check_no_free_escape("T1a", menu, current={"lp-current-working-0"})
+
+
+def test_candidates_that_cost_a_pair_are_not_this_checks_business():
+    menu = {"status": "solution", "candidates": [
+        {"lever": "optical_reroute", "reused_lightpaths": [],
+         "new_lightpaths": [{"oms_sequence": ["oms_1"]}],
+         "restored_gbps": 300.0, "shortfall_gbps": 0.0, "cost_vector": {}}]}
+    _check_no_free_escape("T1a", menu, current={"lp-current-working-0"})

@@ -13,6 +13,7 @@ from storm_reoptimizer.eval.assertions import (
     assert_issuance_prefix_shared, assert_menus_identical,
     assert_no_global_policy_solves_the_suite,
     assert_non_flip_decisions_non_binding, assert_shared_scalars_equal,
+    assert_wait_gold_has_no_free_escape,
 )
 from storm_reoptimizer.eval.baseline import ForecastBlindBaseline
 from storm_reoptimizer.eval.decisions import (
@@ -529,3 +530,65 @@ def test_the_flip_dominates_every_equal_signal(pair, loaded_state_path,
 
     flips = asyncio.run(_run())
     assert_flip_dominates(a, b, flips[a.id], flips[b.id])
+
+
+# W1.6 FINDING (task 5, 2026-08-26), not anticipated by the brief: the brief
+# expected T1a to PASS here now that Task 4 deleted the dominating `t2`
+# nowcast (and therefore `rg_T1a_t1_t2`). Live, it does not -- ALL THREE
+# conserve halves fail identically, and for a reason that has nothing to do
+# with that deleted risk group:
+#
+#   T1a: candidate_2 (ip_reroute) reuses ['lp-prot-storm-svc-1-0'], not the
+#        current working lightpath ['lp-cand-storm-svc-1-0']
+#   T2b: candidate_2 (ip_reroute) reuses ['lp-prot-storm-svc-1-0'], not
+#        ['lp-cand-storm-svc-1-0']
+#   T3b: candidate_2 (ip_reroute) reuses ['lp-prot-storm-svc-1-0'], not
+#        ['lp-cand-storm-svc-1-0']
+#
+# Confirmed structural, not a call-ordering bug in the assertion: all three
+# halves' `realized` blocks are empty (T2b/T3b) or name only the t3 hour
+# (T1a), strictly AFTER their shared decision_hour t1 -- so
+# `_current_working_lightpaths` and `menu_at_decision_hour` read the SAME,
+# un-mutated server state in every case. The free candidate is
+# `route_service`'s own "switch onto the service's pre-provisioned static
+# protection lightpath" option, which this suite's storm-svc-1 (a PROTECTED
+# service) offers at zero transponder pairs under the near-neutral
+# `reference_avoid: {}` every one of these three halves declares --
+# independent of forecast geometry, independent of which pair or which
+# horizon is doing the flipping. That makes it a property of the shipped
+# service/menu, not of any one episode's authoring, and it means every
+# conserve-gold half in the CURRENT suite fails W1.6's check, not just the
+# two the brief allowed for.
+#
+# Per this task's scope (touch assertions.py and tests/ only; do not fix
+# scenario YAML or the underlying menu), this is recorded as a finding and
+# flagged for W2/W3/W4 rather than repaired here -- see task-5-report.md.
+# Kept as xfail (not skip) rather than narrowed out entirely: the check is
+# correct and should keep running live so an eventual fix (e.g. exempting a
+# genuine protection-switch from "moves the service", or reshaping
+# reference_avoid/the menu so the escape isn't offered) shows up as an
+# unexpected XPASS instead of silently vanishing.
+@pytest.mark.xfail(
+    reason="W1.6 finding (task 5, 2026-08-26): every shipped conserve half "
+           "(T1a/T2b/T3b) offers a free ip_reroute onto storm-svc-1's own "
+           "static protection lightpath under reference_avoid={} -- a real, "
+           "structural free escape independent of forecast geometry, not "
+           "fixed by Task 4's nowcast deletion. Flagged for W2/W3/W4; not "
+           "this task's scope to repair the scenario/menu.",
+    strict=False)
+@pytest.mark.parametrize("scenario_id", ("T1a", "T2b", "T3b"))
+def test_a_conserve_gold_has_no_free_escape(
+    scenario_id, loaded_state_path, local_server_command, local_server_env,
+):
+    """W1.6, over every half whose gold declines to spend the pair."""
+    scenario = load_scenario(SCENARIOS / f"{scenario_id}.yaml")
+
+    async def _run():
+        async with connect_server(
+            TOPOLOGY_PATH, server_command=local_server_command,
+            env=local_server_env,
+            extra_args=["--state", str(loaded_state_path)],
+        ) as client:
+            await assert_wait_gold_has_no_free_escape(client, scenario)
+
+    asyncio.run(_run())

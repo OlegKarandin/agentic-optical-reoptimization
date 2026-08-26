@@ -527,6 +527,74 @@ def assert_flip_dominates(a: ScenarioFile, b: ScenarioFile,
             f"enlarge the flip.")
 
 
+def _check_no_free_escape(scenario_id: str, menu: dict,
+                          current: set[str]) -> None:
+    """The pure half of W1.6: given a menu and the service's CURRENT working
+    lightpath ids, no zero-pair candidate may move the service.
+
+    **Why the cheap variant.** The strict version needs each candidate's own
+    exposure, which means recomputing a representative point from its OMS
+    sequence -- reimplementing `runner.service_points` against hypothetical
+    paths. The cheap version captures the distinction that matters: a 0-pair
+    candidate that does not move you buys nothing, so gold is safe."""
+    from .ledger import pairs_needed
+
+    for index, candidate in enumerate(menu.get("candidates") or []):
+        if pairs_needed(candidate) != 0:
+            continue
+        reused = set(candidate.get("reused_lightpaths") or ())
+        if not current <= reused:
+            raise PairInvalid(
+                f"{scenario_id}: gold declines to spend the pair, but "
+                f"candidate_{index} ({candidate.get('lever')}) costs ZERO "
+                f"pairs and does not reuse the service's current working "
+                f"lightpath(s) {sorted(current)} (it reuses "
+                f"{sorted(reused)}). A free lever that improves the service's "
+                f"position makes 'take the free thing and keep the pair' the "
+                f"correct answer -- which the label rule scores as WRONG. "
+                f"'Act' and 'spend' are different events; gold argues about "
+                f"spending and the label reads acting.")
+
+
+async def _current_working_lightpaths(client: Client,
+                                      service_id: str) -> set[str]:
+    """The lightpath ids the service's WORKING path rides today. Derived the
+    same way runner.service_points walks it: IP link -> lightpath_id."""
+    ip = await call_tool_json(client, "get_topology", {"layer": "ip"})
+    services = await call_tool_json(client, "get_services")
+    lp_by_link = {link["id"]: link.get("lightpath_id")
+                  for link in ip["ip_links"]}
+    service = next((s for s in services["services"] if s["id"] == service_id),
+                   None)
+    if service is None:
+        raise PairInvalid(
+            f"the server reports no service {service_id!r}; its current "
+            f"working path cannot be read")
+    return {lp_by_link[link] for link in service["working_path"]
+            if lp_by_link.get(link)}
+
+
+async def assert_wait_gold_has_no_free_escape(client: Client,
+                                              scenario: ScenarioFile) -> None:
+    """For a half whose gold declines to spend the spare pair, every zero-pair
+    candidate at the decision hour must REUSE the service's current working
+    lightpath -- i.e. no free candidate actually moves the service.
+
+    Gold's reasoning is always "spending the pair isn't worth it", but ACT and
+    SPEND are different events. A free lever that improves the SUT's position
+    makes "take the free thing and keep the pair" correct, and the label rule
+    scores that as wrong -- which is exactly how the agent beat T1a's label
+    while satisfying every other gold criterion (remediation spec, finding
+    F2). The client must be freshly connected against this half's own state
+    file, the same contract `assert_menus_identical` has."""
+    if scenario.metadata.get("gold_spare_action") != "conserve":
+        return
+    current = await _current_working_lightpaths(
+        client, scenario.service_under_test)
+    menu = await menu_at_decision_hour(client, scenario)
+    _check_no_free_escape(scenario.id, menu, current)
+
+
 def assert_no_single_variable_rule_solves(
     episodes: list[ScenarioFile],
     derived: dict[str, dict[str, float]] | None = None,
