@@ -65,30 +65,56 @@ back this claim, and they ask opposite questions:
 
 Until 2026-08-26 the claimant side of every gold comparison was never
 enumerated by either check -- nothing had ever tested whether a bare
-threshold on it could answer the suite. Building the second check and running
-it against the live server found, honestly: no single uniformly-applied
-claimant scalar (checked at the exposure horizon, before it, and peaked over
-all horizons) answers all six halves under one threshold and one orientation.
-That is not because the scalar is well-chosen -- it is because every one of
-the three variants has at least one pair whose two halves are TIED to high
-precision by construction, and the count differs by variant: the
-at-exposure-horizon variant ties on TWO pairs (T2 and T3 each hold a
-byte-identical far/exposure horizon across their own halves by design,
-capping that variant at 4/6), while the before-horizon and peak-over-horizons
-variants each tie on one pair (T1 for before-horizon -- historically because
-its near-horizon nowcast was byte-identical across its halves, and today,
-trivially, because that nowcast was later deleted for an unrelated reason
-and T1's decision-hour issuance now publishes no earlier horizon at all;
-T3 for peak-over-horizons, for the same byte-identical-far-horizon reason as
-above -- capping each at 5/6). A tied pair predicts the same label for both
-halves under any threshold, which caps that variable below 6/6 regardless of
-geometry -- so this result says the suite's per-pair design already
-forecloses a global bare-scalar policy, not that a geometry retune produced
-the result. (Separately, and out of scope for this claim: a
-related check found a different, structural free-lever escape common to all
-three conserve-gold episodes, currently `xfail` pending its own follow-up
-workstream -- Claim 2 is about the two checks above, not a claim that every
-shortcut in the suite is closed.)
+threshold on it could answer the suite. Building the second check took two
+attempts, and the first one's failure is the more useful half of the story:
+
+1. The check was built sweeping **three** claimant-side variants -- the
+   aggregate at the exposure horizon, before it, and peaked over all
+   horizons -- and it passed on the first live run. That was written up as a
+   structural guarantee: each variant has at least one pair whose halves are
+   TIED to high precision by construction, and a tied pair predicts the same
+   label for both halves under any threshold.
+2. A whole-branch code review then asked what the **minimum** over the same
+   per-horizon map does. It solved the suite **6/6**, at a single global
+   threshold of **89.35 G**, lo -> spend and hi -> conserve -- confirmed
+   live, at full precision. That reproduces almost exactly the eval design
+   spec's own predicted "89.4 G, 6/6" finding, which the first write-up had
+   dismissed as an artifact of reading a different horizon per pair. It is
+   not an artifact: `min` performs that per-pair horizon selection
+   *mechanically*, with one rule applied uniformly, because it reads
+   whichever horizon happens to be smaller rather than a horizon fixed in
+   advance. The three-variant pass was evidence about the list, not about the
+   episodes.
+3. `claimant_ecar_min_over_horizons` was added to `derived.FLIP_VARS`, the
+   check was observed genuinely FAILING, and **T2's near-horizon geometry was
+   retuned** until it passes for real: T2a's near cone moved outward along its
+   300.0 km radial-offset circle about `storm-svc-1` (bearing 288.0 ->
+   290.2 deg -- only the bearing, so every scalar the per-pair derived-geometry
+   check reads stays equal across the halves), lifting its claimant aggregate
+   from 71.1 G to 124.0 G.
+
+The check passes today over all four variants, and the reasons are not
+uniform. Three are blocked by a structural tie: at-exposure-horizon ties on
+TWO pairs (T2 and T3 each hold a byte-identical far/exposure horizon across
+their own halves by design -- capping it at 4/6); before-horizon ties on T1
+(historically because its near-horizon nowcast was byte-identical across its
+halves, and today trivially, because that nowcast was later deleted for an
+unrelated reason and T1's decision-hour issuance publishes no earlier horizon
+at all); peak-over-horizons ties on T3, for the same shared-far-horizon
+reason -- 5/6 each. The fourth, min-over-horizons, has no tie at all and is
+blocked by an engineered **interleave**: T1b 21.5 (spend) < T3a 51.0 (spend)
+< **T1a 107.6 (conserve) < T2a 124.0 (spend) < T2b 128.4 (conserve)** < T3b
+182.8 (conserve). A conserve value sits below a spend value, so no threshold
+survives in either orientation. That interleave is what the retune bought,
+and it was not free: T2a's own decision margin narrowed from 2.19x
+(156.0/71.1) to 1.26x (156.0/124.0). Both numbers are exact, so the
+comparison is still unambiguous -- but the honest reading of Claim 2 is that
+the suite forecloses a global bare-scalar policy *partly by per-pair design
+and partly by deliberate tuning*, not by design alone. (Separately, and out
+of scope for this claim: a related check found a different, structural
+free-lever escape common to all three conserve-gold episodes, currently
+`xfail` pending its own follow-up workstream -- Claim 2 is about the two
+checks above, not a claim that every shortcut in the suite is closed.)
 
 `pair_solved` over three pairs takes values in {0, 1/3, 2/3, 1}: enough to tell
 a working harness from a broken one, not enough to separate luck from skill.

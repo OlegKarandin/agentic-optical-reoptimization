@@ -20,11 +20,12 @@ halves, not merely mislabelled.
 
 **The two-check doctrine -- read this before adding the claimant scalar to
 DERIVED_VARS.** `derived.FLIP_VARS` (the claimant-side expected-capacity-at-
-risk aggregates: at the exposure horizon, before it, and peaked over all
-horizons) is deliberately EXCLUDED from `DERIVED_VARS`, and therefore from
-`ENUMERATED_VARS`, even though it is exactly the kind of derived scalar this
-module otherwise wants to catch. The exclusion is not an oversight; adding it
-here would be actively wrong, for three reasons:
+risk aggregates: at the exposure horizon, before it, peaked over all
+horizons, and MINIMISED over all horizons) is deliberately EXCLUDED from
+`DERIVED_VARS`, and therefore from `ENUMERATED_VARS`, even though it is
+exactly the kind of derived scalar this module otherwise wants to catch. The
+exclusion is not an oversight; adding it here would be actively wrong, for
+three reasons:
 
 1. This check is PER-PAIR. `best_rule` is scored one pair at a time,
    `threshold_rules` draws its split points from that pair's two values, and
@@ -51,14 +52,24 @@ here would be actively wrong, for three reasons:
    one per pair -- because a policy an operator could actually run has one
    orientation, period. See that function's docstring for the orientation
    argument in full, and derived.py's module docstring for the empirical
-   result of running it (spoiler: no such policy exists, but not because the
-   claimant scalar is well-behaved -- because every one of its three variants
-   has at least one structurally tied pair that caps it below 6/6 regardless
-   of threshold: `claimant_ecar_at_exposure_horizon` ties on BOTH T2 and T3
-   (two tied pairs -- caps it at 4/6), `claimant_ecar_before_exposure_
-   horizon` ties on T1 alone, and `claimant_ecar_peak_over_horizons` ties on
-   T3 alone (one tied pair each -- caps those two at 5/6). Different counts
-   per variable, same conclusion: none reaches 6/6).
+   result of running it. The short version, and it is not the reassuring one
+   this docstring used to give: from the day it was built until the day it
+   was reviewed, the whole-suite check passed only because `FLIP_VARS`
+   listed three variants and there are four. The
+   fourth, `claimant_ecar_min_over_horizons`, solved the shipped suite 6/6 at
+   a single global threshold of 89.35 G -- reproducing the eval design spec's
+   own predicted "89.4 G, 6/6" finding, which had been written off as an
+   artifact of mixed per-pair reading. It is not an artifact: `min`
+   mechanises exactly that mixed reading, in one uniform rule. The check now
+   passes for real, over all four variants, because T2's near-horizon
+   geometry was retuned (2026-08-26) until the min values INTERLEAVE across
+   the labels. Three of the four are blocked by a structural tie
+   (`..._at_exposure_horizon` ties on BOTH T2 and T3, capping it at 4/6;
+   `..._before_exposure_horizon` ties on T1; `..._peak_over_horizons` ties on
+   T3 -- 5/6 each); the fourth is blocked by that engineered interleave.
+   The moral for anyone adding a variable here or there: a passing
+   enumeration check is evidence about the enumeration first, and about the
+   episodes only second.
 3. The ratio `claimant_ecar / sut_ecar` is enumerated by NEITHER check, on
    purpose. Computing that ratio and reasoning about it is the agent's
    INTENDED behavior, not a shortcut to be fenced off -- every gold
