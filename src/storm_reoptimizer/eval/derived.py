@@ -67,9 +67,9 @@ number ends up feeding. `FlipScalars.values()` is hard-restricted to exactly
 same reason.
 
 **What running the whole-suite check actually found -- the real history, in
-order (2026-08-26).** This section was rewritten twice, and the first version
-was wrong in a way worth preserving as a warning, because the mistake was
-not arithmetic: it was believing an enumeration complete.
+order (2026-08-26).** This section has been rewritten three times, and the
+first version was wrong in a way worth preserving as a warning, because the
+mistake was not arithmetic: it was believing an enumeration complete.
 
   1. The claimant-side aggregate was built with THREE variants:
      `..._at_exposure_horizon`, `..._before_exposure_horizon`,
@@ -92,6 +92,21 @@ not arithmetic: it was believing an enumeration complete.
      plan had predicted all along, before (2)'s false green made the retune
      it prescribed look unnecessary -- and T2's near-horizon geometry was
      retuned until the check genuinely passes.
+  6. A review of THAT retune found it had been aimed at a non-binding upper
+     bound and had spent about 10 G of T2a's decision margin for nothing;
+     the solve was redone against the one edge that actually binds. See
+     "The one binding condition" below. Two method errors surfaced with it,
+     both worth knowing before anyone moves a cone again: the W1.3 plan's
+     reference solver used `EARTH_R = 6371.0088` while `events.geo.
+     EARTH_RADIUS_KM` is `6371.0`, and it measured bearings against
+     `cos(SUT latitude)` while `radial_offset_km` uses `cos(CENTRE
+     latitude)`. Its Newton loop converged anyway -- by absorbing its own
+     wrong radius -- which is exactly what hid the frame mismatch. Placed in
+     the metric's own frame with the right constant, the centre is
+     CLOSED FORM: `lat = SUT.lat + degrees(d*cos(b)/R)`, then
+     `lon = SUT.lon + degrees(d*sin(b)/(R*cos(lat)))`. Both shipped near
+     centres now read back as exactly 290.0 and 296.0 degrees, and both
+     offsets land on the SAME float.
 
 **Why `min` bites where the other three cannot.** T2 and T3 each hold their
 FAR horizon byte-identical across their halves and put the flip in the near
@@ -101,44 +116,76 @@ some pair, and ties there. `min` reads whichever horizon happens to be
 smaller, which can be a different horizon in different halves, so it follows
 each pair's discriminating value around without being told where it is.
 
-**Where each variable stands now, measured live against the retuned suite:**
+**Where each variable stands now, measured live against the retuned suite.**
+Two different numbers are worth keeping apart, because conflating them
+overstates the guarantee: a TIED PAIR gives an upper BOUND (a tie predicts
+one label for both halves, so it costs at least one half), while the BEST
+ACHIEVABLE score is what an exhaustive sweep of every threshold under both
+global orientations actually reaches. The bound is not always tight.
 
   * `claimant_ecar_at_exposure_horizon` -- TIED (to `DERIVED_TOLERANCE`) on
     TWO separate pairs: T2's halves (both 128.380 G) and T3's halves (both
     283.950 G). Both pairs publish a byte-identical far/exposure horizon by
-    design, and in both the flip lives BEFORE that horizon, not at it. Two
-    tied pairs caps this variable at 4/6.
+    design, and in both the flip lives BEFORE that horizon, not at it. Bound
+    4/6; best achievable, swept, 4/6.
   * `claimant_ecar_before_exposure_horizon` -- TIED between T1's halves
     (both 0.0). Historically because T1's `t1` issuance carried a
     byte-identical `t2` nowcast in both halves; today, trivially, because
     Task 4 deleted that nowcast, so T1's `t1` issuance publishes only `t3`
     and `earlier_horizons` is empty in both halves. Either way, a tie by
-    construction rather than by geometry. Caps at 5/6.
+    construction rather than by geometry. Bound 5/6; best achievable 5/6.
   * `claimant_ecar_peak_over_horizons` -- TIED between T3's halves (both
-    283.950 G), for the same shared-far-horizon reason. Caps at 5/6.
-  * `claimant_ecar_min_over_horizons` -- NOT tied anywhere, and not blocked
-    by a tie. It is blocked by a genuine INTERLEAVE, which is the outcome
+    283.950 G), for the same shared-far-horizon reason. The tie alone bounds
+    it at 5/6, but the swept best is **4/6**: the tie is not the only thing
+    limiting this one, and quoting the bound as though it were the measured
+    score (as an earlier version of this docstring did) claims less margin
+    than the suite actually has.
+  * `claimant_ecar_min_over_horizons` -- NOT tied anywhere, so no tie bounds
+    it at all. It is blocked by a genuine INTERLEAVE, which is the outcome
     `assert_no_global_policy_solves_the_suite`'s own failure message asks
-    for: T1b 21.5 (spend), T3a 51.0 (spend), T1a 107.6 (CONSERVE), T2a 124.0
+    for: T1b 21.5 (spend), T3a 51.0 (spend), T1a 107.6 (CONSERVE), T2a 114.6
     (SPEND), T2b 128.4 (conserve), T3b 182.8 (conserve). A conserve value
     sits below a spend value, so neither orientation survives at any
-    threshold.
+    threshold. Best achievable 5/6.
 
 That interleave is what the T2 retune bought. T2a's near cone was moved
 outward along its 300.0 km radial-offset circle about `storm-svc-1` (bearing
-288.0 -> 290.2 deg; only the bearing changed, the offset is held so every
-scalar `assert_pair_derived_geometry_is_equal` reads stays equal), lifting
-its claimant aggregate from 71.1 G to 124.0 G -- above T1a's 107.6 G, which
-is a CONSERVE half, and below T2's own shared far value of 128.4 G, so `min`
-still reads T2a's near horizon. The price is T2a's own decision margin,
-156.0/124.0 = 1.26x, down from 2.19x; that is a real and accepted cost, and
-it is documented in `T2a.yaml` and `docs/superpowers/rehearsals/T2.md`.
+288.0 -> 290.0 deg; only the bearing changed, the offset is held -- to the
+same float, bitwise -- so every scalar `assert_pair_derived_geometry_is_
+equal` reads stays equal), lifting its claimant aggregate from 71.1 G to
+114.6 G.
+
+**The one binding condition, measured rather than assumed.** The only edge
+that matters is T1a's 107.563 G, because T1a is a CONSERVE half: T2a's
+SPEND value has to sit above it for the column to interleave. Sweeping
+hypothetical T2a near values against the live column, the suite is solved
+6/6 at every value <= 107.5 G and unsolved at every value >= 108 G. T2's own
+shared far value of 128.380 G is NOT a second bound: above it `min` simply
+reads the far horizon instead and the pair TIES, which blocks the variable
+just as effectively. An earlier retune targeted the middle of a
+(107.6, 128.4) "window" on the mistaken belief that the upper edge bound
+anything, and paid ~10 G of T2a's decision margin for it. 114.6 G clears the
+one real edge by 7.1 G and costs the least margin that buys the interleave:
+156.0/114.6 = 1.36x, down from 2.19x. That is still a real cost -- a
+claimant-side overestimate of 36.1% would flip this half, against 119.2%
+before -- and it is documented in `T2a.yaml` and
+`docs/superpowers/rehearsals/T2.md`.
 
 A tie caps a variable below 6/6 regardless of how any geometry is tuned:
 retuning one pair's near-horizon values cannot remove a tie that exists
 because a DIFFERENT pair's far horizon is shared by design. An interleave is
 the stronger property but it is not free -- it has to be engineered, and it
 was.
+
+**Four is still not "all".** `FLIP_VARS` is an enumeration, and this whole
+episode is what an incomplete one costs. A later review swept a FIFTH
+summary of the same per-horizon map -- the claimant aggregate at the
+EARLIEST published horizon -- and found it, too, solved the pre-retune suite
+6/6. The same retune closes it (best achievable 5/6, by the same interleave:
+T1a 107.6 conserve < T2a 114.6 spend). That is reassuring but it is not a
+proof, and `median`, `sum`, `max - min` and others remain unswept. Treat a
+green whole-suite check as evidence about the list first and the episodes
+second.
 """
 from __future__ import annotations
 

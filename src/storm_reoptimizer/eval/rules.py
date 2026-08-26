@@ -54,8 +54,8 @@ three reasons:
    argument in full, and derived.py's module docstring for the empirical
    result of running it. The short version, and it is not the reassuring one
    this docstring used to give: from the day it was built until the day it
-   was reviewed, the whole-suite check passed only because `FLIP_VARS`
-   listed three variants and there are four. The
+   was reviewed, the whole-suite check passed only because `FLIP_VARS` listed
+   three variants and there are four. The
    fourth, `claimant_ecar_min_over_horizons`, solved the shipped suite 6/6 at
    a single global threshold of 89.35 G -- reproducing the eval design spec's
    own predicted "89.4 G, 6/6" finding, which had been written off as an
@@ -64,12 +64,17 @@ three reasons:
    passes for real, over all four variants, because T2's near-horizon
    geometry was retuned (2026-08-26) until the min values INTERLEAVE across
    the labels. Three of the four are blocked by a structural tie
-   (`..._at_exposure_horizon` ties on BOTH T2 and T3, capping it at 4/6;
-   `..._before_exposure_horizon` ties on T1; `..._peak_over_horizons` ties on
-   T3 -- 5/6 each); the fourth is blocked by that engineered interleave.
-   The moral for anyone adding a variable here or there: a passing
-   enumeration check is evidence about the enumeration first, and about the
-   episodes only second.
+   (`..._at_exposure_horizon` ties on BOTH T2 and T3; `..._before_exposure_
+   horizon` ties on T1; `..._peak_over_horizons` ties on T3); the fourth has
+   no tie at all and is blocked by that engineered interleave. Swept live,
+   the best any of them actually achieves is 4/6, 5/6, 4/6 and 5/6
+   respectively -- note that a tie gives an upper BOUND, not the score, and
+   for `..._peak_over_horizons` the bound (5/6) is not tight. The moral for
+   anyone adding a variable here or there: a passing enumeration check is
+   evidence about the enumeration first, and about the episodes only second
+   -- a fifth summary of the same map (the aggregate at the EARLIEST
+   published horizon) also solved the pre-retune suite 6/6, and was found
+   only because someone went looking after the fact.
 3. The ratio `claimant_ecar / sut_ecar` is enumerated by NEITHER check, on
    purpose. Computing that ratio and reasoning about it is the agent's
    INTENDED behavior, not a shortcut to be fenced off -- every gold

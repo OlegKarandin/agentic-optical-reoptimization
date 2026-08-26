@@ -89,32 +89,46 @@ attempts, and the first one's failure is the more useful half of the story:
    check was observed genuinely FAILING, and **T2's near-horizon geometry was
    retuned** until it passes for real: T2a's near cone moved outward along its
    300.0 km radial-offset circle about `storm-svc-1` (bearing 288.0 ->
-   290.2 deg -- only the bearing, so every scalar the per-pair derived-geometry
-   check reads stays equal across the halves), lifting its claimant aggregate
-   from 71.1 G to 124.0 G.
+   290.0 deg -- only the bearing, so every scalar the per-pair derived-geometry
+   check reads stays equal across the halves, bitwise), lifting its claimant
+   aggregate from 71.1 G to 114.6 G.
 
 The check passes today over all four variants, and the reasons are not
 uniform. Three are blocked by a structural tie: at-exposure-horizon ties on
 TWO pairs (T2 and T3 each hold a byte-identical far/exposure horizon across
-their own halves by design -- capping it at 4/6); before-horizon ties on T1
-(historically because its near-horizon nowcast was byte-identical across its
-halves, and today trivially, because that nowcast was later deleted for an
-unrelated reason and T1's decision-hour issuance publishes no earlier horizon
-at all); peak-over-horizons ties on T3, for the same shared-far-horizon
-reason -- 5/6 each. The fourth, min-over-horizons, has no tie at all and is
-blocked by an engineered **interleave**: T1b 21.5 (spend) < T3a 51.0 (spend)
-< **T1a 107.6 (conserve) < T2a 124.0 (spend) < T2b 128.4 (conserve)** < T3b
-182.8 (conserve). A conserve value sits below a spend value, so no threshold
-survives in either orientation. That interleave is what the retune bought,
-and it was not free: T2a's own decision margin narrowed from 2.19x
-(156.0/71.1) to 1.26x (156.0/124.0). Both numbers are exact, so the
-comparison is still unambiguous -- but the honest reading of Claim 2 is that
-the suite forecloses a global bare-scalar policy *partly by per-pair design
-and partly by deliberate tuning*, not by design alone. (Separately, and out
-of scope for this claim: a related check found a different, structural
-free-lever escape common to all three conserve-gold episodes, currently
-`xfail` pending its own follow-up workstream -- Claim 2 is about the two
-checks above, not a claim that every shortcut in the suite is closed.)
+their own halves by design); before-horizon ties on T1 (historically because
+its near-horizon nowcast was byte-identical across its halves, and today
+trivially, because that nowcast was later deleted for an unrelated reason and
+T1's decision-hour issuance publishes no earlier horizon at all); and
+peak-over-horizons ties on T3, for the same shared-far-horizon reason. The
+fourth, min-over-horizons, has no tie at all and is blocked by an engineered
+**interleave**: T1b 21.5 (spend) < T3a 51.0 (spend) < **T1a 107.6 (conserve)
+< T2a 114.6 (spend)** < T2b 128.4 (conserve) < T3b 182.8 (conserve). A
+conserve value sits below a spend value, so no threshold survives in either
+orientation.
+
+Swept live, the best score any of the four actually reaches is 4/6, 5/6, 4/6
+and 5/6 respectively. Note those are *measured*, not inferred from the ties:
+a tied pair gives an upper **bound**, and for peak-over-horizons that bound
+(5/6) is not tight.
+
+The interleave is what the retune bought, and it was not free: T2a's own
+decision margin narrowed from 2.19x (156.0/71.1) to 1.36x (156.0/114.6) --
+a claimant-side overestimate of 36% would now flip that half, against 119%
+before. It is the smallest price that buys the property: the only binding
+edge is T1a's 107.6 G (a conserve half), and measured directly, the suite is
+solved at every T2a near value <= 107.5 G and unsolved from 108 G up. The
+honest reading of Claim 2 is therefore that the suite forecloses a global
+bare-scalar policy *partly by per-pair design and partly by deliberate
+tuning*, not by design alone -- and that four variants is an enumeration, not
+a proof: a fifth summary of the same per-horizon map (the aggregate at the
+earliest published horizon) also solved the pre-retune suite 6/6 and was
+found only by looking after the fact. The same retune closes it. (Separately,
+and out of scope for this claim: a related check found a different,
+structural free-lever escape common to all three conserve-gold episodes,
+currently `xfail` pending its own follow-up workstream -- Claim 2 is about
+the two checks above, not a claim that every shortcut in the suite is
+closed.)
 
 `pair_solved` over three pairs takes values in {0, 1/3, 2/3, 1}: enough to tell
 a working harness from a broken one, not enough to separate luck from skill.
