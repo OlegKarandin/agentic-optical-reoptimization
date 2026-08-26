@@ -32,10 +32,14 @@ reference_avoid: {}          # neutral third value: current exposure only
 #   * radial_offset_km(centre, storm-svc-1) -> equal p_cut at the exposure
 #     horizon (rules.py enumerates distinct FLOAT values, so "equal to 1e-12"
 #     would still have handed a threshold rule the pair);
-#   * radial_offset_km(storm-svc-1, centre) -> equal WITHIN-issuance cone
-#     motion, the t2->t3 leg of this same issuance: 121.03718436910242 km/h in
-#     both halves (derived.within_issuance_cone_motion_kmh -- a DIFFERENT
-#     quantity from metadata.cone_motion_kmh below);
+#   * derived.within_issuance_cone_motion_kmh -- a DIFFERENT quantity from
+#     metadata.cone_motion_kmh below -- is 0.0 in both halves, EQUAL because
+#     the t1 issuance now publishes a single horizon (t3) and a single-horizon
+#     issuance has no motion by definition. (Before the 2026-08-26 deletion of
+#     the t1 issuance's t+1 nowcast, this was the t2->t3 leg of that same
+#     issuance, 121.03718436910242 km/h in both halves -- equal for the same
+#     mirror-construction reason, but a dominating distractor in its own
+#     right; see the t1: entry's comment below);
 #   * and the shared t0 centre sits ON that mirror axis, so it is exactly
 #     95.04036836557925 km from BOTH halves' t+3 centres, which is what makes
 #     metadata.cone_motion_kmh equal and TRUE rather than merely declared.
@@ -50,19 +54,20 @@ forecast:
     t3: {cone: {type: Polygon, coordinates: [[[81.32778, 25.8475], [81.44377, 25.83371], [81.55186, 25.79328], [81.64467, 25.72896], [81.71589, 25.64515], [81.76067, 25.54754], [81.77594, 25.4428], [81.76067, 25.33806], [81.71589, 25.24045], [81.64467, 25.15664], [81.55186, 25.09232], [81.44377, 25.0519], [81.32778, 25.03811], [81.21178, 25.0519], [81.1037, 25.09232], [81.01088, 25.15664], [80.93966, 25.24045], [80.89489, 25.33806], [80.87962, 25.4428], [80.89489, 25.54754], [80.93966, 25.64515], [81.01088, 25.72896], [81.1037, 25.79328], [81.21178, 25.83371], [81.32778, 25.8475]]]},
          width_km: 90, center: {lat: 25.442800716819043, lon: 81.32777666666667}}
   t1:                        # the revision -- this is what WAIT buys
-    # BYTE-IDENTICAL in T1b: a near-term (t+1) nowcast of the storm's CURRENT
-    # footprint, sitting over storm-svc-1's own corridor regardless of where
-    # the t+3 revision below lands. It is what makes a forecast-blind policy
-    # that only asks "is storm-svc-1 inside ANY published cone" read the SAME
-    # answer in both halves (confirmed empirically: baseline variant
-    # "immediate" answered T1a/T1b differently before this horizon existed).
-    # After the 2026-08-23 rebuild storm-svc-1's t+3 OFFSET is equal across
-    # the halves too, so its raw containment at t+3 is identical either way
-    # (120.626 km, outside the 45 km half-width, in both) -- this nowcast is
-    # now belt and braces, kept because it is also what makes the t1 acting
-    # deadline real.
-    t2: {cone: {type: Polygon, coordinates: [[[81.32778, 25.26025], [81.44321, 25.24646], [81.55078, 25.20603], [81.64315, 25.14172], [81.71403, 25.0579], [81.75859, 24.9603], [81.77378, 24.85555], [81.75859, 24.75081], [81.71403, 24.65321], [81.64315, 24.56939], [81.55078, 24.50508], [81.44321, 24.46465], [81.32778, 24.45086], [81.21234, 24.46465], [81.10477, 24.50508], [81.0124, 24.56939], [80.94152, 24.65321], [80.89697, 24.75081], [80.88177, 24.85555], [80.89697, 24.9603], [80.94152, 25.0579], [81.0124, 25.14172], [81.10477, 25.20603], [81.21234, 25.24646], [81.32778, 25.26025]]]},
-         width_km: 90, center: {lat: 24.855553333333333, lon: 81.32777666666667}}
+    # ONE horizon, deliberately. This issuance used to also publish a t+1
+    # nowcast centred exactly on storm-svc-1's own point (width 90,
+    # damage_radius 74) -- p_cut 0.8834, worth 0.8834 x 300 G = 265.0 G, and
+    # BYTE-IDENTICAL in both halves. That is 3x the flip magnitude this pair
+    # is graded on, and lead_time_hours["ip_reroute"] = 0 made it actionable
+    # in the same hour, so every expected-value reasoner answered "act" in
+    # BOTH halves while every equality assertion passed. Deleted 2026-08-26
+    # (remediation spec, finding F2 / W1.4); relocation was preferred and is
+    # geometrically impossible (the cone would have to move ~160 km off the
+    # storm's own track before it stopped dominating). Both of its documented
+    # jobs survive: the SUT's t+3 offset is already equal across the halves
+    # (120.626 km in both), and the t1 acting deadline is still real at
+    # lead_time 1 against a t3 cut. assertions.assert_flip_dominates now
+    # fails the build if this recurs.
     # THE FLIP. The revised t+3 cone resolves WEST, onto the allahabad<->kanpur
     # corridor: 77.3 km from the two 100G claimants (d0029 and d0348, both
     # represented at (25.95, 81.0)) -> p_cut 0.4715 each. storm-svc-1 is
@@ -126,6 +131,9 @@ gold:
     in this harness (no cross-service restoration exists); the episode is
     scored only on storm-svc-1's survival and on storm-svc-1's own spare not
     being wasted.
+    The t1 issuance publishes a single horizon (t+3) in both halves -- no
+    nearer nowcast exists to read a raw containment flag off, so the only
+    signal available at t1 is this expected-value comparison.
 flip_variable: [svc-b, cone, centre, spare]
 metadata:
   label_rule: timing_at_decision_hour
@@ -137,9 +145,10 @@ metadata:
                               # FLOAT in both halves because the t0 centre
                               # sits on the mirror axis the two t+3 centres
                               # are reflected across. NOT the same quantity as
-                              # derived.within_issuance_cone_motion_kmh
-                              # (121.03718436910242 in both halves), which is
-                              # the t2->t3 leg INSIDE the t1 issuance.
+                              # derived.within_issuance_cone_motion_kmh, which
+                              # is 0.0 in both halves since the 2026-08-26
+                              # deletion of the t1 issuance's t+1 nowcast
+                              # (a single-horizon issuance has no motion).
   n_future_claimants: 2      # EQUAL in T1b -- d0029 and d0348: the same two
                               # services in both halves, and the only two
                               # non-SUT services that clear p_cut 0.05 at t+3

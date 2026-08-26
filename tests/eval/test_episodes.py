@@ -509,10 +509,12 @@ def test_report_the_global_policy_sweep_over_the_shipped_suite(
 
 
 @pytest.mark.parametrize("pair", ("T1", "T2", "T3"))
-def test_report_flip_dominance(pair, loaded_state_path, local_server_command,
-                               local_server_env):
-    """GATE B. Expected to REPORT a dominating distractor on T1 until W1.4
-    lands, and nothing on T2/T3. Converted into a real assertion by Task 4."""
+def test_the_flip_dominates_every_equal_signal(pair, loaded_state_path,
+                                               local_server_command,
+                                               local_server_env):
+    """W1.5. No equal-in-both-halves signal about the service under test may
+    outweigh the flip -- the check that would have caught T1 before a suite
+    run was spent on it."""
     a = load_scenario(SCENARIOS / f"{pair}a.yaml")
     b = load_scenario(SCENARIOS / f"{pair}b.yaml")
 
@@ -526,8 +528,4 @@ def test_report_flip_dominance(pair, loaded_state_path, local_server_command,
                                           topology_path=TOPOLOGY_PATH)
 
     flips = asyncio.run(_run())
-    try:
-        assert_flip_dominates(a, b, flips[a.id], flips[b.id])
-        print(f"GATE B {pair}: the flip dominates.")
-    except PairInvalid as exc:
-        print(f"GATE B {pair}: {exc}")
+    assert_flip_dominates(a, b, flips[a.id], flips[b.id])
