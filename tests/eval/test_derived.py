@@ -262,3 +262,18 @@ def test_the_flip_values_view_carries_exactly_the_swept_scalars(
         demands_gbps={"storm-svc-1": 300.0})
 
     assert set(flip.values()) == set(FLIP_VARS)
+
+
+def test_a_missing_sut_point_raises_rather_than_silently_zeroing(
+        example_scenario_yaml, write_scenario):
+    """Mirrors `derived_geometry`'s existing behaviour for the identical
+    failure (no working-path coordinates for service_under_test): a missing
+    SUT point must raise, not silently zero `sut_ecar_by_horizon` -- exactly
+    the field W1.5's `assert_flip_dominates` reads as the SUT's own side of
+    the comparison. A silent zero there would let that check draw a wrong
+    conclusion with no error signal at all."""
+    scenario = load_scenario(write_scenario(example_scenario_yaml))
+    with pytest.raises(DerivedGeometryError, match="storm-svc-1"):
+        flip_scalars_from_points(
+            scenario, points={"svc-b": (25.0, 81.0)},
+            demands_gbps={"storm-svc-1": 300.0, "svc-b": 100.0})

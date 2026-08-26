@@ -289,15 +289,23 @@ def flip_scalars_from_points(
                                exclude=sut)
         for horizon, cone in issuance.horizons.items()}
 
+    # Fail loud, exactly like `derived_geometry` does for the identical gap:
+    # a missing SUT point must not silently zero `sut_ecar_by_horizon`, which
+    # is precisely the side of the comparison W1.5's `assert_flip_dominates`
+    # reads -- a silent zero there could make that check draw a wrong
+    # conclusion with no error signal at all.
+    sut_point = points.get(sut)
+    if sut_point is None:
+        raise DerivedGeometryError(
+            f"{scenario.id}: the server reports no working-path coordinates "
+            f"for service_under_test {sut!r}; its own expected capacity at "
+            f"risk cannot be derived")
+
     sut_demand = float(demands_gbps.get(sut, 0.0))
     sut_ecar = {}
     for horizon, cone in issuance.horizons.items():
-        point = points.get(sut)
-        if point is None:
-            sut_ecar[horizon] = 0.0
-            continue
         offset = radial_offset_km(cone.center["lat"], cone.center["lon"],
-                                  *point)
+                                  *sut_point)
         sut_ecar[horizon] = expected_capacity_at_risk_gbps(
             cut_probability(offset, cone.width_km, scenario.damage_radius_km),
             sut_demand)
