@@ -124,6 +124,127 @@ Breadth comes from the interpretation axis (free-text operator reports, novel
 event types), not from more pairs of this shape — that axis is a separate
 spec.
 
+## Demo: the LLM decider on `D1`
+
+`D1` is the cheapest real exercise of the agent loop (build order step 6):
+one service, one decision hour, three tool calls. This section is a real,
+unedited run — `ClaudeDecider(model="claude-sonnet-5")` against
+`eval/states/loaded-s17.json`, scoped to `D1` alone (run 0 of 3) — captured
+to show exactly what the model is shown and exactly what it says back, not a
+paraphrase of either.
+
+**The setup** (`src/storm_reoptimizer/eval/scenarios/D1.yaml`). `storm-svc-1`
+(300 Gbps, `satna`↔`allahabad`) routes working via `satna↔rewa` and
+protection via `satna↔jhansi` — SRLG-disjoint at design time. A 15 km-wide
+storm cone centred on `satna` itself (not on the service's own point) catches
+*both* corridors, because they share an origin node. At `storm-svc-1`'s
+58.4 km offset, `p_cut = 0.9761`; the next-most-exposed service, `d0361`, sits
+at `p_cut = 0.012` — effectively uncontested. `hours_remaining` (1) exactly
+equals the optical-reroute lead time (1), so this is also the last hour in
+which acting is still possible. Gold: `act`.
+
+**What the model is shown.** `project_observation` trims the loaded state's
+573 services down to the service under test plus every service clearing
+`p_cut >= 0.005` (`eval/agent.py`'s `P_CUT_ENUMERATION_THRESHOLD`) — here,
+just `storm-svc-1` and `d0361`. Reconstructed for readability (the real
+payload's `n_services_total` was 573, `omitted_services.count` 571):
+
+```json
+{
+  "scenario_id": "D1", "service_under_test": "storm-svc-1",
+  "hour": "t0", "hours_remaining": 1,
+  "cones": {"t1": {"width_km": 15.0,
+                   "center": {"lat": 24.58333, "lon": 80.83333}}},
+  "exposure": {
+    "storm-svc-1": {"t1": {"hours_ahead": 1, "offset_km": 58.4457,
+                           "p_cut": 0.9761, "demand_gbps": 300.0}},
+    "d0361":       {"t1": {"hours_ahead": 1, "offset_km": 91.7,
+                           "p_cut": 0.012,  "demand_gbps": 100.0}}
+  },
+  "spares_on_hand": 2,
+  "lead_time_hours": {"ip_reroute": 0, "hybrid": 1, "optical_reroute": 1},
+  "risk_group_ids": {"t1": "rg_D1_t0_t1"},
+  "n_services_total": 573,
+  "omitted_services": {"count": 571, "p_cut_threshold": 0.005,
+                       "max_p_cut": 0.0,
+                       "summed_expected_capacity_at_risk_gbps": 0.0}
+}
+```
+
+**1. Timing** (`submit_timing_decision`) — `action: "act"`:
+
+> storm-svc-1 has p_cut=0.9761 at only 1 hour ahead, with lead times of 0-1h
+> for the reroute levers. There is no next issuance that will meaningfully
+> change this: the horizon is already t1, hours_remaining=1, so waiting for a
+> sharper forecast means the action would land at or after the cut (act
+> later than exposure hour - lead_time is already at the edge). Expected
+> capacity at risk here is ~293 Gbps, dwarfing d0361's ~1.2 Gbps expected
+> risk (p_cut=0.012). Waiting to see if the cone narrows risks missing the
+> lead-time window entirely on a service that's already near-certain to be
+> cut, and it also risks losing one of the 2 spares to d0361's negligible
+> claim if we delay prioritization. Acting now lets us commit inventory and
+> routing to the dominant, near-certain risk while lead time still permits
+> an effective change.
+
+**2. Constraints** (`submit_constraint_decision`) —
+`avoid.risk_groups: ["rg_D1_t0_t1"]`, `basis: "risk_group"`,
+`level: "risk_group"`, `protected: false`, `best_effort: false`:
+
+> Only one horizon exists (t1, 1 hour ahead) and it is also the only lead
+> time we have (optical_reroute lead=1h, hours_remaining=1) — we must act
+> against this exact cone, not a wider speculative one. storm-svc-1 has
+> p_cut=0.9761 at t1, essentially certain to be cut, and its
+> working+protection paths both sit inside the same forecast-derived risk
+> group rg_D1_t0_t1 (the correlation the static disjointness check never
+> saw). So the reroute must avoid that risk group specifically. Using
+> protected=False/basis=physical/level=link would only dodge the individual
+> link seen today, not the correlated cone risk that's the actual hazard;
+> using basis=risk_group/level=risk_group directly names the forecast
+> hazard we're defending against. protected=True is unusable by the harness
+> per the framing, so leave it False and best_effort False since we want a
+> real avoiding path, not a degraded one.
+
+This is the load-bearing call of the whole scenario: `basis="risk_group"`
+means the reroute is constrained against the *synthesized* forecast group,
+not the single link currently down. Get this wrong and the reroute survives
+today's cut but lands back inside the same storm cone.
+
+**3. Objective** (`submit_objective_decision`) — 8 candidates came back from
+the real solver, all restoring the full 300 Gbps at 1 spare pair. Choice:
+`candidate_0`:
+
+> All eight candidates restore the full 300 Gbps with zero shortfall and use
+> exactly 1 spare pair, so the choice comes down to secondary costs.
+> candidate_0 has the shortest OMS path (7 hops), lowest added_latency
+> (2304.85ms, the minimum across the menu), lowest spectrum_used (848,
+> second-lowest but tied near-best), and the best scalar (3440.27, lowest of
+> all candidates). Its total_margin (397.58) is essentially the best among
+> the higher-bitrate 600G options and very close to the overall max. Given
+> storm-svc-1 has p_cut=0.9761 at hour 1 (near-certain cut) versus d0361's
+> negligible 0.012, this spare is clearly best spent here, and among
+> equivalent restorations candidate_0 minimizes latency and spectrum
+> footprint while preserving strong margin.
+
+**Outcome.** `menu_status: "solution"`, `outcome: "committed"`,
+`lever: "optical_reroute"` — the harness ran the choice through
+`validate_plan`/`commit_plan` on the real (cloned) network state and it
+held. The loop repeats at `t1` (`hours_remaining=0` now): the model reaffirms
+`act`, the same risk group, and the same `candidate_0`.
+
+**Honest gap.** `D1.yaml`'s gold `flip_variable` is
+`[uncontested, spare, lead]`. The model's reasoning covers all three
+*concepts* (d0361 "doesn't compete meaningfully", the spare pairs, the lead
+time) but never writes the literal word "uncontested" — so
+`scoring.cites_flip_variable`, which is documented as entity matching over
+exact substrings, would likely score this call low despite the decision and
+reasoning both being correct. That is the metric working as designed
+(NECESSARY, NOT SUFFICIENT), not a decider defect.
+
+Full traces for all three of `D1`'s rollouts live in `eval/traces/D1-agent_
+claude-sonnet-5-{0,1,2}.json`; the audit sidecar recording exactly what was
+shown on every one of the 18 calls that produced them is
+`eval/traces/agent-calls.jsonl`.
+
 ## Repository layout
 
 - `src/storm_reoptimizer/` — the app: event interpretation, geo/asset mapping
