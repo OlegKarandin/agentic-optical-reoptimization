@@ -50,7 +50,39 @@ the forecast: the twins' menus and observables are identical by construction,
 so such a policy emits the same answer twice and scores exactly 50%.
 **Claim 2 (asserted at build time).** No rule keyed on any single forecast
 variable -- and no parameter-free greedy policy -- solves the suite; checked
-over the gold labels before any rollout runs.
+over the gold labels before any rollout runs. Two distinct static checks now
+back this claim, and they ask opposite questions:
+
+- `assertions.assert_no_single_variable_rule_solves` -- per pair, over the
+  variables both halves are supposed to SHARE (`rules.OBSERVABLE_VARS` and
+  `rules.DERIVED_VARS`): does any of them differ between the two halves in a
+  way a single threshold could key on?
+- `assertions.assert_no_global_policy_solves_the_suite` -- over the whole
+  suite, over the claimant-side aggregate that IS the flip
+  (`derived.FLIP_VARS`): does one FIXED threshold, applied UNIFORMLY with one
+  fixed orientation, answer all six halves at once -- i.e. could an operator
+  deploy a bare number and skip the comparison the agent is meant to make?
+
+Until 2026-08-26 the claimant side of every gold comparison was never
+enumerated by either check -- nothing had ever tested whether a bare
+threshold on it could answer the suite. Building the second check and running
+it against the live server found, honestly: no single uniformly-applied
+claimant scalar (checked at the exposure horizon, before it, and peaked over
+all horizons) answers all six halves under one threshold and one orientation.
+That is not because the scalar is well-chosen -- it is because each of the
+three variants has exactly one pair whose two halves are TIED to high
+precision by construction (two of the three variants tie because a pair's far
+horizon is byte-identical across its halves by design; the third tied
+because T1's near-horizon nowcast was byte-identical across its halves before
+it was later removed for an unrelated reason). A tied pair predicts the same
+label for both halves under any threshold, which caps that variable below
+6/6 regardless of geometry -- so this result says the suite's per-pair
+design already forecloses a global bare-scalar policy, not that a geometry
+retune produced the result. (Separately, and out of scope for this claim: a
+related check found a different, structural free-lever escape common to all
+three conserve-gold episodes, currently `xfail` pending its own follow-up
+workstream -- Claim 2 is about the two checks above, not a claim that every
+shortcut in the suite is closed.)
 
 `pair_solved` over three pairs takes values in {0, 1/3, 2/3, 1}: enough to tell
 a working harness from a broken one, not enough to separate luck from skill.

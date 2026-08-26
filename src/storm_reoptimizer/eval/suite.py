@@ -21,7 +21,8 @@ import statistics
 from pathlib import Path
 
 from .agent import ClaudeDecider, DEFAULT_MODEL
-from .assertions import assert_no_single_variable_rule_solves
+from .assertions import (assert_no_global_policy_solves_the_suite,
+                         assert_no_single_variable_rule_solves)
 from .baseline import ForecastBlindBaseline
 from .runner import run_episode
 from .scenario_file import ScenarioFile, load_all_scenarios
@@ -193,7 +194,7 @@ def main(argv: list[str] | None = None) -> None:
     import os
     from contextlib import asynccontextmanager
 
-    from .derived import derived_scalars_for
+    from .derived import FlipScalars, derived_scalars_for, flip_scalars_for
     from ..mcp_client import connect_server
 
     args = build_arg_parser().parse_args(argv)
@@ -233,6 +234,11 @@ def main(argv: list[str] | None = None) -> None:
             return await derived_scalars_for(
                 client, list(episodes.values()), topology_path=topology)
 
+    async def _flip_scalars() -> dict[str, FlipScalars]:
+        async with _connect() as client:
+            return await flip_scalars_for(
+                client, list(episodes.values()), topology_path=topology)
+
     # Widened with DERIVED (not just author-declared) geometry -- the
     # declared-only check is exactly what missed T1's p_cut confound for
     # three rounds of review (whole-branch review, finding C2). The entry
@@ -240,6 +246,14 @@ def main(argv: list[str] | None = None) -> None:
     # that closed the finding, not the weaker one that missed it.
     assert_no_single_variable_rule_solves(
         list(episodes.values()), asyncio.run(_derived_scalars()))
+
+    # ...alongside the existing per-pair check. Two checks, two questions:
+    # the per-pair one asks whether any scalar the halves SHARE differs; this
+    # one asks whether one fixed threshold answers every half. See rules.py's
+    # module docstring on why the flip scalar is in exactly one of them.
+    assert_no_global_policy_solves_the_suite(
+        list(episodes.values()),
+        {sid: f.values() for sid, f in asyncio.run(_flip_scalars()).items()})
 
     results = asyncio.run(run_suite(
         _connect, topology_path=topology, deciders=build_deciders(args)))

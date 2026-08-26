@@ -16,7 +16,51 @@ Per-pair orientation is deliberately GENEROUS: the three pairs draw gold
 labels from three different vocabularies (act/wait, wide/narrow, A/B), so a
 rule emits a SIDE and scoring grants it the better side->label mapping within
 each pair. A rule that still fails is genuinely unable to separate the
-halves, not merely mislabelled."""
+halves, not merely mislabelled.
+
+**The two-check doctrine -- read this before adding the claimant scalar to
+DERIVED_VARS.** `derived.FLIP_VARS` (the claimant-side expected-capacity-at-
+risk aggregates: at the exposure horizon, before it, and peaked over all
+horizons) is deliberately EXCLUDED from `DERIVED_VARS`, and therefore from
+`ENUMERATED_VARS`, even though it is exactly the kind of derived scalar this
+module otherwise wants to catch. The exclusion is not an oversight; adding it
+here would be actively wrong, for three reasons:
+
+1. This check is PER-PAIR. `best_rule` is scored one pair at a time,
+   `threshold_rules` draws its split points from that pair's two values, and
+   `score_rule` (deliberately, see above) grants the rule its better
+   side->label orientation WITHIN THAT PAIR. With exactly two values per
+   variable per pair, ANY variable that differs at all between the halves
+   scores a clean 1.0 -- there is no threshold placement or orientation that
+   can fail to separate two points. The claimant aggregate *is* the flip (it
+   is the whole reason the two halves have opposite gold labels), so it is
+   guaranteed to differ, so it would score 1.0 on every pair, forever. No
+   amount of retuning the forecast geometry can ever fix that: the check
+   would not be measuring whether a bare scalar solves the pair, it would be
+   re-deriving the tautology that the flip variable correlates with the
+   flip.
+2. The question this module answers -- "does a single-variable rule solve
+   THIS PAIR" -- is not the question that matters for the claimant scalar.
+   The question that matters for it is whether ONE FIXED THRESHOLD, applied
+   UNIFORMLY, answers the WHOLE SUITE -- i.e. whether an operator could
+   deploy a bare number and skip the agent's per-pair reasoning entirely.
+   That is a different check with a different scoring rule, and it lives in
+   `assertions.assert_no_global_policy_solves_the_suite`. It enumerates
+   exactly the variables this module excludes (`derived.FLIP_VARS`), and it
+   grants the rule exactly ONE global orientation for the entire suite, not
+   one per pair -- because a policy an operator could actually run has one
+   orientation, period. See that function's docstring for the orientation
+   argument in full, and derived.py's module docstring for the empirical
+   result of running it (spoiler: no such policy exists, but not because the
+   claimant scalar is well-behaved -- because each of its three variants has
+   exactly one structurally tied pair that caps it below 6/6 regardless of
+   threshold).
+3. The ratio `claimant_ecar / sut_ecar` is enumerated by NEITHER check, on
+   purpose. Computing that ratio and reasoning about it is the agent's
+   INTENDED behavior, not a shortcut to be fenced off -- every gold
+   rationale in this suite *is* that comparison. The line both checks police
+   is bare, uncompared scalars; a rule that performs the comparison itself
+   is not a confound, it is the task."""
 from __future__ import annotations
 
 from collections import defaultdict

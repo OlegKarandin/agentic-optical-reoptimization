@@ -34,6 +34,68 @@ hour-LABEL index gap (`hours: [t0, t1, t2, t6]` makes t2->t6 one index step,
 not four hours), which is fine for an equality test but too muddy a unit to
 drive an automated threshold sweep. Equality across the halves already
 implies no threshold can separate them, so nothing is lost.
+
+**The two-check doctrine, from the derivation side (see rules.py's module
+docstring for the full argument).** This module produces two lists with
+OPPOSITE rules, and the split is deliberate, not incidental:
+
+  * `DERIVED_VARS` -- fed to `rules.py`'s per-pair check. Its members must be
+    equal across a pair's halves (that equality is what
+    `assert_pair_derived_geometry_is_equal` enforces); enumerating one here
+    says "if this ever differs between the halves, that is a confound to
+    catch."
+  * `FLIP_VARS` -- fed to `assertions.assert_no_global_policy_solves_the_
+    suite`. Its members are SUPPOSED to differ across a pair's halves --
+    each one is a view of the claimant-side aggregate that the flip itself
+    lives in. Enumerating one here says "sweep this for a uniform threshold
+    that would let an operator skip the comparison the agent is meant to
+    make."
+
+Sharing one variable between these two lists is not just redundant, it is
+incoherent: the per-pair check's per-pair orientation would score a flip
+variable 1.0 on every pair by construction (see rules.py), permanently and
+unfixably by any geometry change. `DerivedGeometry.scalars()` must therefore
+keep exactly its two keys (`sut_p_cut_at_exposure_horizon`,
+`within_issuance_cone_motion_kmh`) and never grow a claimant-side one.
+
+`FlipScalars` is a SEPARATE dataclass from `DerivedGeometry`, not an extra
+field bolted onto it, specifically so nothing can slip a claimant scalar
+into `DerivedGeometry.scalars()` by accident -- e.g. by editing that method
+to "just add one more useful number" without noticing which check the
+number ends up feeding. `FlipScalars.values()` is hard-restricted to exactly
+`FLIP_VARS` (`{name: getattr(self, name) for name in FLIP_VARS}`) for the
+same reason.
+
+**What running the whole-suite check actually found (2026-08-26).** When
+`assert_no_global_policy_solves_the_suite` was first built and run against
+the live server sweeping all three `FLIP_VARS` uniformly across all six twin
+halves, it found no solving policy on the first run -- it already passed.
+That is not evidence the claimant scalar is well-behaved; it is a structural
+artifact, root-caused per variable:
+
+  * `claimant_ecar_at_exposure_horizon` is TIED (to `DERIVED_TOLERANCE`)
+    between T2's two halves and between T3's two halves, because T2 and T3
+    each hold a byte-identical far/exposure horizon across their halves by
+    design -- the flip in both pairs lives before that horizon, not at it.
+  * `claimant_ecar_before_exposure_horizon` is TIED between T1's two halves,
+    because T1's `t1` issuance (before Task 4 removed it) carried a
+    byte-identical `t2` nowcast in both halves.
+  * `claimant_ecar_peak_over_horizons` is TIED between T3's two halves, for
+    the same far-horizon reason as the first bullet.
+
+A tied pair predicts the SAME label for both halves under any threshold and
+any orientation, which caps that variable below 6/6 regardless of how the
+geometry is tuned -- retuning one pair's own near-horizon values cannot
+remove a tie that exists because a DIFFERENT pair's far horizon is shared by
+design. This is also why the eval design spec's own claim that "one global
+threshold at 89.4 G answers 6/6" does not survive a uniformly-applied sweep:
+that number was reached by reading, per pair, whichever of {at-horizon,
+before-horizon} happens to be that pair's own discriminating value -- a
+mixed, per-pair-selected reading, not a single scalar applied the same way
+everywhere. `assert_no_global_policy_solves_the_suite` sweeps one scalar,
+one threshold, one orientation, uniformly; that is a different and stronger
+claim than "some column of numbers admits a split point," and the six ties
+above are why no single column clears it.
 """
 from __future__ import annotations
 
