@@ -262,9 +262,19 @@ async def run_episode(
 
                 idx = candidate_index(choice.choice)
                 if idx is None:
-                    terminal_status = "declared_infeasible"
+                    # NOT terminal. "My constraints left me nothing
+                    # acceptable" is a correctable mistake of exactly the
+                    # shape last_rejection exists for: decisions.py says
+                    # decision 2 changes which candidates EXIST, so the fix
+                    # is to loosen `avoid` and look again. Ending the hour
+                    # here left no path from the declaration back to the
+                    # correction (remediation spec, W2.3).
+                    last_rejection = {
+                        "type": "declared_infeasible",
+                        "menu_size": len(menu.get("candidates") or [])}
+                    record["rejections"].append(last_rejection)
                     step["outcome"] = "declared_infeasible"
-                    break
+                    continue
                 candidates = menu.get("candidates") or []
                 if idx >= len(candidates):
                     last_rejection = {"type": "invalid_choice",
@@ -329,7 +339,14 @@ async def run_episode(
                 committed = True
                 break
             else:
-                terminal_status = "hit_cap"
+                # The cap is only "declared_infeasible" when the LAST word was
+                # a declaration; a loop that spun on invalid choices or failed
+                # validations is still hit_cap.
+                last_outcome = (record["iterations"][-1].get("outcome")
+                                if record["iterations"] else None)
+                terminal_status = ("declared_infeasible"
+                                   if last_outcome == "declared_infeasible"
+                                   else "hit_cap")
             record["committed"] = committed
 
         cuts = scenario.realized.get(hour, ())

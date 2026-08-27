@@ -325,6 +325,76 @@ def test_the_loop_caps_at_five_iterations(
     assert max(len(h.get("iterations", [])) for h in trace.hours) == MAX_ITERATIONS
 
 
+class _LoosenAfterInfeasible:
+    """Declares the menu infeasible under a tight avoid on iteration 0, then
+    loosens and commits on iteration 1 -- the correction shape MAX_ITERATIONS
+    and last_rejection exist for, and the one the runner had no path back
+    from (remediation spec, W2.3)."""
+
+    name = "loosen-after-infeasible"
+
+    def __init__(self):
+        self.rejections_seen = []
+
+    def timing(self, obs):
+        return TimingDecision("act", "act: exposed at the next horizon")
+
+    def constraints(self, obs):
+        self.rejections_seen.append(obs.last_rejection)
+        if obs.iteration == 0:
+            return ConstraintDecision(
+                avoid={"risk_groups": sorted(obs.risk_group_ids.values())},
+                reasoning="tight: avoid every forecast risk group")
+        return ConstraintDecision(
+            avoid={}, reasoning="loosened after declaring the menu infeasible")
+
+    def objective(self, obs, menu):
+        if obs.iteration == 0:
+            return ObjectiveDecision("infeasible", None,
+                                     "nothing on this menu is acceptable")
+        return ObjectiveDecision("candidate_0", None, "take the first entry")
+
+
+def test_declaring_infeasible_feeds_back_a_rejection_and_the_loop_retries(
+    tmp_path, loaded_state_path, local_server_command, local_server_env,
+):
+    decider = _LoosenAfterInfeasible()
+    trace = asyncio.run(_run(
+        _scenario(tmp_path), decider,
+        loaded_state_path, local_server_command, local_server_env))
+
+    first_hour = trace.hours[0]
+    outcomes = [step["outcome"] for step in first_hour["iterations"]]
+    assert outcomes[0] == "declared_infeasible"
+    assert "committed" in outcomes, (
+        "the loosened second attempt must have been given a chance to commit")
+    # The declaration is fed back as a typed rejection, exactly like an
+    # invalid choice or an unaffordable candidate.
+    assert first_hour["rejections"][0]["type"] == "declared_infeasible"
+    assert "menu_size" in first_hour["rejections"][0]
+    assert decider.rejections_seen[1]["type"] == "declared_infeasible"
+    assert trace.terminal_status == "converged"
+    assert trace.actions
+
+
+def test_a_decider_that_only_ever_declares_infeasible_still_terminates(
+    tmp_path, loaded_state_path, local_server_command, local_server_env,
+):
+    always_infeasible = ScriptedDecider(
+        "always-infeasible",
+        default_timing=TimingDecision("act", "always act"),
+        default_constraints=ConstraintDecision(avoid={}, reasoning="none"),
+        default_objective=ObjectiveDecision("infeasible", None, "never happy"))
+    trace = asyncio.run(_run(
+        _scenario(tmp_path), always_infeasible,
+        loaded_state_path, local_server_command, local_server_env))
+
+    assert trace.terminal_status == "declared_infeasible"
+    assert not trace.actions
+    assert max(len(h.get("iterations", []))
+               for h in trace.hours) == MAX_ITERATIONS
+
+
 def test_lead_time_marks_an_optical_reroute_at_the_cut_hour_as_late(
     tmp_path, loaded_state_path, local_server_command, local_server_env,
 ):
