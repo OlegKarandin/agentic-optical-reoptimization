@@ -171,7 +171,10 @@ TIMING_TOOL = "submit_timing_decision"
 CONSTRAINT_TOOL = "submit_constraint_decision"
 OBJECTIVE_TOOL = "submit_objective_decision"
 
-SYSTEM_PROMPT = """\
+# The prompt is assembled from two halves so the W3.2 arm can insert one
+# bullet in the right place. Concatenated, they are byte-identical to the
+# single literal that preceded them -- diff them before believing otherwise.
+_SYSTEM_PROMPT_HEAD = """\
 You are the restoration decision-maker for a multi-layer IP-over-optical \
 network during a tropical storm.
 
@@ -240,6 +243,22 @@ rather than listed: how many, the largest cut probability among them, and \
 `summed_expected_capacity_at_risk_gbps` -- each omitted service taken at its \
 own worst horizon, then summed. Read that summary before assuming the \
 network is as small as the list you were given.
+"""
+
+# W3.2's measured arm. Purely descriptive: what the field contains, over
+# which set, and in what unit. It states no threshold, names no episode, and
+# says nothing about which way the comparison should come out -- the
+# comparison is the judgement being measured.
+_RIVAL_TOTALS_BULLET = """\
+- `horizon_totals` -- per horizon, two already-summed figures: \
+`sut_ecar_gbps`, the service under test's own expected capacity at risk, and \
+`non_sut_total_ecar_gbps`, the summed expected capacity at risk of every \
+OTHER service in the model at that horizon. The second is over the whole \
+network, not only the services listed above, so it will usually exceed the \
+sum of the rows you can see.
+"""
+
+_SYSTEM_PROMPT_TAIL = """\
 
 ## The three decisions
 
@@ -299,6 +318,10 @@ Do not pad it with a checklist of terms from this prompt. A paragraph naming \
 every concept above while explaining no decision is worse than two sentences \
 that state the comparison you actually made.
 """
+
+SYSTEM_PROMPT = _SYSTEM_PROMPT_HEAD + _SYSTEM_PROMPT_TAIL
+SYSTEM_PROMPT_WITH_RIVAL_TOTALS = (
+    _SYSTEM_PROMPT_HEAD + _RIVAL_TOTALS_BULLET + _SYSTEM_PROMPT_TAIL)
 
 
 def _tool(name: str, description: str, schema: dict) -> dict:
@@ -370,13 +393,20 @@ class ClaudeDecider:
 
     def __init__(self, model: str = DEFAULT_MODEL, *, client=None,
                  p_cut_threshold: float = P_CUT_ENUMERATION_THRESHOLD,
-                 audit_path: str | Path | None = None) -> None:
+                 audit_path: str | Path | None = None,
+                 show_rival_totals: bool = False) -> None:
         self.model = model
-        self.name = f"agent:{model}"
+        # The arm is part of the identity, not a setting: suite.run_suite keys
+        # its results dict AND the trace filename on `name`, so two arms
+        # sharing one would overwrite each other (remediation spec, W3.2).
+        self.name = (f"agent:{model}+rival-totals" if show_rival_totals
+                     else f"agent:{model}")
         self._client = client
         self._p_cut_threshold = p_cut_threshold
         self._audit_path = Path(audit_path) if audit_path else None
-        self._show_rival_totals = False
+        self._show_rival_totals = show_rival_totals
+        self._system_prompt = (SYSTEM_PROMPT_WITH_RIVAL_TOTALS
+                               if show_rival_totals else SYSTEM_PROMPT)
 
     @property
     def _api(self):
@@ -400,7 +430,7 @@ class ClaudeDecider:
         return self._api.messages.create(
             model=self.model,
             max_tokens=MAX_TOKENS,
-            system=[{"type": "text", "text": SYSTEM_PROMPT,
+            system=[{"type": "text", "text": self._system_prompt,
                      "cache_control": {"type": "ephemeral"}}],
             # Sonnet 5 accepts no budget_tokens and no temperature/top_p/
             # top_k -- any of them is a 400.
@@ -497,23 +527,25 @@ class ClaudeDecider:
         with self._audit_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, default=str) + "\n")
 
+    def _project(self, obs: Observation) -> dict:
+        return project_observation(
+            obs, p_cut_threshold=self._p_cut_threshold,
+            show_rival_totals=self._show_rival_totals)
+
     def timing(self, obs: Observation) -> TimingDecision:
-        payload = project_observation(
-            obs, p_cut_threshold=self._p_cut_threshold)
+        payload = self._project(obs)
         return self._decide(
             TIMING_TOOL, TimingDecision, obs, payload,
             self._user_content(payload, TIMING_INSTRUCTION))
 
     def constraints(self, obs: Observation) -> ConstraintDecision:
-        payload = project_observation(
-            obs, p_cut_threshold=self._p_cut_threshold)
+        payload = self._project(obs)
         return self._decide(
             CONSTRAINT_TOOL, ConstraintDecision, obs, payload,
             self._user_content(payload, CONSTRAINT_INSTRUCTION))
 
     def objective(self, obs: Observation, menu: dict) -> ObjectiveDecision:
-        payload = project_observation(
-            obs, p_cut_threshold=self._p_cut_threshold)
+        payload = self._project(obs)
         return self._decide(
             OBJECTIVE_TOOL, ObjectiveDecision, obs, payload,
             self._user_content(payload, OBJECTIVE_INSTRUCTION, menu=menu))

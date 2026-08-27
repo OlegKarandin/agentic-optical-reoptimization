@@ -10,8 +10,8 @@ import pytest
 from storm_reoptimizer.eval import agent as agent_module
 from storm_reoptimizer.eval.agent import (
     CONSTRAINT_TOOL, DEFAULT_MODEL, MAX_ATTEMPTS, OBJECTIVE_TOOL,
-    P_CUT_ENUMERATION_THRESHOLD, SYSTEM_PROMPT, TIMING_TOOL, ClaudeDecider,
-    project_observation, strict_tool_schema,
+    P_CUT_ENUMERATION_THRESHOLD, SYSTEM_PROMPT, SYSTEM_PROMPT_WITH_RIVAL_TOTALS,
+    TIMING_TOOL, ClaudeDecider, project_observation, strict_tool_schema,
 )
 from storm_reoptimizer.eval.baseline import ForecastBlindBaseline
 from storm_reoptimizer.eval.decisions import (
@@ -588,6 +588,58 @@ def test_the_audit_record_shows_the_risk_figure_for_every_shown_service(
     assert record["rival_totals_shown"] is False
 
 
+def test_the_arm_is_named_so_one_results_table_can_hold_both():
+    # suite.run_suite keys results on decider.name AND derives the trace
+    # filename from it (suite.py:94-95), so two arms sharing a name would
+    # overwrite each other's traces and collapse into one row.
+    off, _ = _decider()
+    on, _ = _decider(show_rival_totals=True)
+    assert off.name == "agent:claude-sonnet-5"
+    assert on.name == "agent:claude-sonnet-5+rival-totals"
+    assert on.name.replace(":", "_") == "agent_claude-sonnet-5+rival-totals"
+
+
+def test_each_arm_sends_the_system_prompt_that_matches_its_payload():
+    # A prompt describing a field the payload does not carry would make the
+    # control arm measure the wrong thing.
+    off, off_client = _decider(
+        FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)))
+    off.timing(_obs(others=CLAIMANTS))
+    assert off_client.messages.calls[0]["system"][0]["text"] == SYSTEM_PROMPT
+
+    on, on_client = _decider(
+        FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)),
+        show_rival_totals=True)
+    on.timing(_obs(others=CLAIMANTS))
+    assert on_client.messages.calls[0]["system"][0]["text"] == \
+        SYSTEM_PROMPT_WITH_RIVAL_TOTALS
+
+
+def test_only_the_rival_totals_variant_mentions_the_totals():
+    assert "non_sut_total_ecar_gbps" not in SYSTEM_PROMPT
+    assert "non_sut_total_ecar_gbps" in SYSTEM_PROMPT_WITH_RIVAL_TOTALS
+    assert "sut_ecar_gbps" in SYSTEM_PROMPT_WITH_RIVAL_TOTALS
+
+
+def test_both_prompt_variants_clear_the_guards():
+    for prompt in (SYSTEM_PROMPT, SYSTEM_PROMPT_WITH_RIVAL_TOTALS):
+        assert len(prompt) > 4 * 1024
+        lowered = prompt.lower()
+        for leak in ("flip_variable", "flip variable", "pair_solved", "gold",
+                     "cites_", "label_correct", "scoring"):
+            assert leak not in lowered
+
+
+def test_the_audit_record_names_the_arm_it_came_from(tmp_path):
+    path = tmp_path / "calls.jsonl"
+    decider, _ = _decider(FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)),
+                          audit_path=path, show_rival_totals=True)
+    decider.timing(_obs(others=CLAIMANTS))
+    record = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+    assert record["rival_totals_shown"] is True
+    assert record["decider"] == "agent:claude-sonnet-5+rival-totals"
+
+
 PYPROJECT = Path(__file__).parents[2] / "pyproject.toml"
 
 
@@ -638,6 +690,28 @@ def test_the_agent_arm_writes_its_audit_under_eval_traces():
         build_arg_parser().parse_args(["--include-agent"]))[-1]
     assert agent._audit_path.name == "agent-calls.jsonl"
     assert agent._audit_path.parent.name == "traces"
+
+
+def test_the_rival_totals_arm_is_opt_in_and_separately_named():
+    assert _names(["--include-agent"]) == [
+        "baseline:immediate", "baseline:at_deadline", "agent:claude-sonnet-5"]
+    assert _names(["--include-agent", "--agent-rival-totals"]) == [
+        "baseline:immediate", "baseline:at_deadline",
+        "agent:claude-sonnet-5+rival-totals"]
+
+
+def test_the_rival_totals_arm_writes_a_separate_audit_sidecar():
+    # _audit appends (agent.py:469); two arms sharing one file would
+    # interleave into an unattributable log.
+    agent = build_deciders(build_arg_parser().parse_args(
+        ["--include-agent", "--agent-rival-totals"]))[-1]
+    assert agent._audit_path.name == "agent-calls-rival-totals.jsonl"
+    assert agent._audit_path.parent.name == "traces"
+
+
+def test_naming_the_arm_without_include_agent_still_runs_baselines_only():
+    assert _names(["--agent-rival-totals"]) == [
+        "baseline:immediate", "baseline:at_deadline"]
 
 
 def test_the_anthropic_sdk_is_an_optional_extra_not_a_hard_dependency():
