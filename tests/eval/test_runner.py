@@ -23,6 +23,12 @@ TOPOLOGY_PATH = (
 
 # A minimal, deliberately non-discriminating episode: two hours, one issuance,
 # one realized cut. Its job is to exercise the loop, not to score anyone.
+# The cone sits near allahabad and never intersects storm-svc-1's own
+# aerial corridor (satna<->rewa / satna<->jhansi) -- deliberately, so a
+# plain ForecastBlindBaseline commits at t0 without ever hitting a real
+# disjointness_collapse against protection. Tests that need a REAL exposure
+# use EXPOSURE_SMOKE below instead of mutating this one out from under
+# every other test in this file.
 SMOKE = textwrap.dedent("""
     id: SMOKE
     seed: 17
@@ -55,10 +61,62 @@ SMOKE = textwrap.dedent("""
       spares_on_hand: 2
 """)
 
+# Same shape as SMOKE, but the t0 cone is T2a.yaml's t1:t6 (far) cone,
+# copied verbatim -- NOT its t1:t2 (near) cone. The near one sits 300km
+# from storm-svc-1 against a 30km half-width and never exposes it
+# (T2a.yaml's own comment; docs/superpowers/rehearsals/T2.md lines
+# 533-539: "the nearest exposed horizon is therefore t6"). t6 is centred
+# ON storm-svc-1's own point and excludes both satna<->rewa (working) and
+# satna<->jhansi (protection) -- the wide avoid group that funnels every
+# real reroute candidate through jhansi<->allahabad, protection's own
+# segment, producing the genuine disjointness_collapse
+# `test_t2a_carries_a_real_validate_plan_rejection` already proves
+# recovers via widen-and-retry. A plain ForecastBlindBaseline("immediate")
+# never recovers from this (it hits the cap with zero commits), so this
+# fixture is reserved for tests that pair it with
+# `_WidensOnDisjointnessRejection`.
+EXPOSURE_SMOKE = textwrap.dedent("""
+    id: EXPOSURE_SMOKE
+    seed: 17
+    state_file: eval/states/loaded-s17.json
+    service_under_test: storm-svc-1
+    track: hudhud
+    hours: [t0, t1]
+    decision_hour: t0
+    lead_time_hours: 1
+    spares_on_hand: 2
+    damage_radius_km: 74
+    reference_avoid: {}
+    forecast:
+      t0:
+        t1: {cone: {type: Polygon, coordinates: [[[81.32778, 25.75487], [81.5843, 25.72423], [81.82334, 25.63439], [82.02861, 25.49147], [82.18612, 25.30521], [82.28513, 25.08831], [82.31891, 24.85555], [82.28513, 24.62279], [82.18612, 24.40589], [82.02861, 24.21964], [81.82334, 24.07672], [81.5843, 23.98688], [81.32778, 23.95623], [81.07125, 23.98688], [80.83221, 24.07672], [80.62694, 24.21964], [80.46943, 24.40589], [80.37042, 24.62279], [80.33665, 24.85555], [80.37042, 25.08831], [80.46943, 25.30521], [80.62694, 25.49147], [80.83221, 25.63439], [81.07125, 25.72423], [81.32778, 25.75487]]]}, width_km: 200, center: {lat: 24.855553333333333, lon: 81.32777666666667}}
+    realized:
+      t1: []
+    gold:
+      survived: [storm-svc-1]
+      max_spares_wasted: 2
+      decision_at_t0: act
+      label: act
+      rationale: smoke episode; not scored
+    flip_variable: [smoke]
+    metadata:
+      cone_width_km: 200
+      cone_motion_kmh: 20
+      n_future_claimants: 0
+      exposure_horizon_hours: 1
+      spares_on_hand: 2
+""")
+
 
 def _scenario(tmp_path):
     path = tmp_path / "SMOKE.yaml"
     path.write_text(SMOKE, encoding="utf-8")
+    return load_scenario(path)
+
+
+def _exposure_scenario(tmp_path):
+    path = tmp_path / "EXPOSURE_SMOKE.yaml"
+    path.write_text(EXPOSURE_SMOKE, encoding="utf-8")
     return load_scenario(path)
 
 
@@ -69,6 +127,110 @@ async def _run(scenario, decider, state_path, server_command, server_env):
     ) as client:
         return await run_episode(client, scenario, decider,
                                  topology_path=TOPOLOGY_PATH)
+
+
+class _RecordingDecider:
+    """Wraps a real decider and keeps every observation the harness handed it.
+    Lets a test assert what the rollout SHOWED the decider, which the trace
+    does not record -- only the decisions come back in EpisodeTrace."""
+
+    def __init__(self, inner):
+        self.inner = inner
+        self.name = inner.name
+        self.observations = []          # one per hour: the timing observation
+
+    def timing(self, obs):
+        self.observations.append(obs)
+        return self.inner.timing(obs)
+
+    def constraints(self, obs):
+        return self.inner.constraints(obs)
+
+    def objective(self, obs, menu):
+        return self.inner.objective(obs, menu)
+
+
+class _WidensOnDisjointnessRejection:
+    """Wraps ForecastBlindBaseline('immediate') -- same timing/objective --
+    but reacts to a genuine validate_plan disjointness_collapse rejection by
+    adding the violation's OWN `shared_assets` to the avoid set and retrying.
+
+    Local to this module (test_runner.py's own docstring: the seven real
+    episodes must not be needed to prove the loop works, so this stays
+    self-contained rather than importing from test_episodes.py). Same
+    mechanic, first proven against a real server, as
+    tests/eval/test_episodes.py's `_WidensOnDisjointnessRejection` /
+    `test_t2a_carries_a_real_validate_plan_rejection`: storm-svc-1's own
+    static protection lightpath (satna<->jhansi<->allahabad) is the cheapest
+    way into allahabad from anywhere else, so a plain forecast-blind avoid
+    that also excludes satna<->rewa (working) funnels every real reroute
+    candidate through jhansi<->allahabad -- a real, first-try
+    disjointness_collapse under basis=physical/level=link, not fabricated.
+    Widening with the violation's own shared_assets (naming the specific
+    jhansi<->allahabad fiber/amp/roadm ids) finds a genuinely disjoint route
+    that validates on a later iteration."""
+
+    def __init__(self) -> None:
+        self._inner = ForecastBlindBaseline("immediate")
+        self.name = "widens-on-disjointness-rejection"
+
+    def timing(self, obs):
+        return self._inner.timing(obs)
+
+    def constraints(self, obs):
+        base = self._inner.constraints(obs)
+        extra: set[str] = set()
+        if obs.last_rejection and obs.last_rejection.get("type") == "validation_violations":
+            for violation in obs.last_rejection.get("violations", []):
+                if violation.get("type") == "disjointness_collapse":
+                    extra.update(violation.get("shared_assets", []))
+        if not extra:
+            return base
+        avoid = dict(base.avoid)
+        avoid["assets"] = sorted(set(avoid.get("assets", [])) | extra)
+        return ConstraintDecision(
+            avoid=avoid,
+            reasoning=base.reasoning + "; widened after disjointness rejection",
+            protected=base.protected, best_effort=base.best_effort,
+            basis=base.basis, level=base.level)
+
+    def objective(self, obs, menu):
+        return self._inner.objective(obs, menu)
+
+
+def test_exposure_follows_the_service_after_it_reroutes(
+    tmp_path, loaded_state_path, local_server_command, local_server_env,
+):
+    # F4's stale-geometry half (remediation spec lines 116-121).
+    # EXPOSURE_SMOKE publishes ONE issuance at t0, so both hours read the
+    # same cone at the same horizon -- offset_km is then a function of the
+    # service's representative point ALONE, and can only move if the
+    # harness re-read the working path after the t0 commit. storm-svc-1 has
+    # no valid alternate route that both escapes a real exposure and stays
+    # clear of its own protection leg without a widen-and-retry
+    # (task-1-report.md); a plain ForecastBlindBaseline("immediate") never
+    # moves the node sequence at all, so this uses
+    # _WidensOnDisjointnessRejection instead. This is why the test uses its
+    # own EXPOSURE_SMOKE scenario rather than the shared SMOKE fixture:
+    # SMOKE's cone is deliberately kept clear of storm-svc-1's corridor so
+    # every OTHER test in this file, which pairs it with a plain
+    # ForecastBlindBaseline, keeps committing cleanly at t0.
+    decider = _RecordingDecider(_WidensOnDisjointnessRejection())
+    trace = asyncio.run(_run(
+        _exposure_scenario(tmp_path), decider,
+        loaded_state_path, local_server_command, local_server_env))
+
+    assert trace.actions and trace.actions[0].hour == "t0", (
+        "this test needs the t0 commit to have happened")
+    assert len(decider.observations) == 2
+    before = decider.observations[0].exposure["storm-svc-1"]["t1"]
+    after = decider.observations[1].exposure["storm-svc-1"]["t1"]
+    assert after["offset_km"] != before["offset_km"], (
+        "the service moved but the harness re-used the pre-commit point")
+    # The baseline avoids the exposed risk group, so the committed path
+    # routes around the cone's assets and the representative point has to
+    # move AWAY from the cone centre.
+    assert after["p_cut"] < before["p_cut"]
 
 
 def test_a_baseline_rollout_completes_and_records_every_hour(

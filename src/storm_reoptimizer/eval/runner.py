@@ -16,6 +16,11 @@ Two modelling choices, stated so nobody has to infer them:
   * snapshot_create() is called after inject_failure, never snapshot_branch:
     branch returns a FROZEN id naming the pre-mutation state, so passing it
     to evaluate_objective would silently score the unmodified network.
+  * The service's representative point is re-derived at the TOP OF EVERY
+    HOUR, from the server's current working path. Exposure is therefore a
+    property of where the service actually rides now, not of where it rode
+    when the episode started -- a protective reroute makes p_cut fall, which
+    is the whole point of committing one.
 
 commit_plan is in the rollout but never in the decision set -- the harness is
 the approval gate. reconcile is never called: with the MCP layer's default
@@ -28,6 +33,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import asdict, dataclass
+from functools import partial
 from pathlib import Path
 
 from mcp.client import Client
@@ -87,19 +93,26 @@ class _CountingClient:
         return await call_tool_json(self.client, name, arguments, **kw)
 
 
-async def service_points(client: Client, topology_path: str | Path
-                         ) -> dict[str, tuple[float, float]]:
+async def service_points(client: Client, topology_path: str | Path, *,
+                         call=None) -> dict[str, tuple[float, float]]:
     """A representative (lat, lon) per service: the midpoint of its working
     path's node coordinates. This is what turns a cone centre into a per-
     service offset, and it is derived from the SERVER's view of the service
     plus the LOCAL topology's coordinates -- the same split the geo mapper
-    already uses."""
+    already uses.
+
+    `call` is an optional async `(name, arguments=None, **kw)` replacement for
+    the four tool calls. run_episode passes its `_CountingClient.call` so the
+    per-hour re-read shows up in the trace's `tool_calls` instead of happening
+    off the books; every other caller (derived.py, tools/probe_episode.py)
+    keeps the plain-client behaviour by leaving it None."""
+    invoke = call if call is not None else partial(call_tool_json, client)
     raw = json.loads(Path(topology_path).read_text(encoding="utf-8-sig"))
     coords = {n["id"]: (n["lat"], n["lon"]) for n in raw["graph"]["nodes"]}
-    ip = await call_tool_json(client, "get_topology", {"layer": "ip"})
-    optical = await call_tool_json(client, "get_topology", {"layer": "optical"})
-    lightpaths = await call_tool_json(client, "get_lightpaths", expect_list=True)
-    services = await call_tool_json(client, "get_services")
+    ip = await invoke("get_topology", {"layer": "ip"})
+    optical = await invoke("get_topology", {"layer": "optical"})
+    lightpaths = await invoke("get_lightpaths", expect_list=True)
+    services = await invoke("get_services")
 
     oms_by_id = {o["id"]: o for o in optical["oms"]}
     oms_seq_by_lp = {lp["id"]: lp["oms_sequence"] for lp in lightpaths}
@@ -169,7 +182,6 @@ async def run_episode(
     started = time.monotonic()
     counting = _CountingClient(client)
     edges = load_edges(topology_path)
-    points = await service_points(client, topology_path)
     ledger = SpareLedger(on_hand=scenario.spares_on_hand)
     defined_rgs: set[str] = set()
 
@@ -180,6 +192,15 @@ async def run_episode(
 
     for hour_index, hour in enumerate(scenario.hours):
         record: dict = {"hour": hour, "iterations": [], "rejections": []}
+        # Re-read EVERY hour, not once per episode. plans.py's only op is
+        # reroute_service, so a commit really does move the working path on
+        # the server -- and a point computed before the loop describes a
+        # corridor the service may no longer ride. That is what told one real
+        # run that the lightpath it had committed an hour earlier, precisely
+        # to escape a cone, was still inside it (remediation spec, F4).
+        # Costs four tool calls an hour, counted through `counting`.
+        points = await service_points(client, topology_path,
+                                      call=counting.call)
         services = tuple((await counting.call("get_services"))["services"])
         # The roster scoring reads to know who could have survived -- the
         # final simulate_ip_routing reports links, not services.
