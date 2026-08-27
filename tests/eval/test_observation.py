@@ -90,3 +90,27 @@ def test_hours_remaining_counts_down(scenario):
     assert build_observation(scenario, "t3", service_points=POINTS,
                              services=SERVICES,
                              spares_on_hand=1).hours_remaining == 0
+
+
+ACTIONS = ({"hour": "t1", "lever": "optical_reroute", "pairs": 1,
+            "avoid": {"risk_groups": ["rg_EXAMPLE_A_t1_t3"]},
+            "effective_at_index": 2, "effective_at_hour": "t2"},)
+
+
+def test_the_observation_reports_the_actions_already_committed(scenario):
+    obs = build_observation(scenario, "t2", service_points=POINTS,
+                            services=SERVICES, spares_on_hand=0,
+                            actions_taken=ACTIONS, spares_spent=1)
+    assert obs.actions_taken == ACTIONS
+    assert obs.spares_spent == 1
+    payload = obs.to_dict()
+    assert payload["actions_taken"] == [dict(ACTIONS[0])]
+    assert payload["spares_spent"] == 1
+
+
+def test_an_episode_with_no_commits_yet_reports_an_empty_action_list(scenario):
+    obs = build_observation(scenario, "t0", service_points=POINTS,
+                            services=SERVICES, spares_on_hand=1)
+    assert obs.actions_taken == ()
+    assert obs.to_dict()["actions_taken"] == []
+    assert obs.to_dict()["spares_spent"] == 0

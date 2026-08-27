@@ -80,6 +80,14 @@ class Observation:
     risk_group_ids: dict[str, str] = field(default_factory=dict)
     iteration: int = 0
     last_rejection: dict | None = None
+    # What the decider has ALREADY DONE this episode. Without it the runner
+    # calls timing() every hour with no record that a plan was committed an
+    # hour earlier, and the decider argues against its own escape route
+    # (remediation spec, F4). Plain dicts, not runner.Action objects: runner
+    # imports this module and not the reverse, and the whole Observation has
+    # to be JSON-serializable for the trace and the prompt.
+    actions_taken: tuple[dict, ...] = ()
+    spares_spent: int = 0            # cumulative transponder PAIRS debited
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-serializable form, for the trace and for step 6's prompt."""
@@ -100,6 +108,8 @@ class Observation:
             "risk_group_ids": self.risk_group_ids,
             "iteration": self.iteration,
             "last_rejection": self.last_rejection,
+            "actions_taken": [dict(a) for a in self.actions_taken],
+            "spares_spent": self.spares_spent,
         }
 
 
@@ -111,6 +121,8 @@ def build_observation(
     risk_group_ids: dict[str, str] | None = None,
     iteration: int = 0,
     last_rejection: dict | None = None,
+    actions_taken: tuple[dict, ...] = (),
+    spares_spent: int = 0,
 ) -> Observation:
     """The observation for one hour. `service_points` maps a service id to a
     representative (lat, lon) for its footprint -- the runner derives these
@@ -153,4 +165,6 @@ def build_observation(
         risk_group_ids=dict(risk_group_ids or {}),
         iteration=iteration,
         last_rejection=last_rejection,
+        actions_taken=tuple(actions_taken),
+        spares_spent=spares_spent,
     )

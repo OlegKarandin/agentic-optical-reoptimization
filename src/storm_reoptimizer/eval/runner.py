@@ -16,6 +16,11 @@ Two modelling choices, stated so nobody has to infer them:
   * snapshot_create() is called after inject_failure, never snapshot_branch:
     branch returns a FROZEN id naming the pre-mutation state, so passing it
     to evaluate_objective would silently score the unmodified network.
+  * The service's representative point is re-derived at the TOP OF EVERY
+    HOUR, from the server's current working path. Exposure is therefore a
+    property of where the service actually rides now, not of where it rode
+    when the episode started -- a protective reroute makes p_cut fall, which
+    is the whole point of committing one.
 
 commit_plan is in the rollout but never in the decision set -- the harness is
 the approval gate. reconcile is never called: with the MCP layer's default
@@ -27,7 +32,8 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
+from functools import partial
 from pathlib import Path
 
 from mcp.client import Client
@@ -52,6 +58,38 @@ class Action:
     effective_at_index: int
     pairs: int
     service_id: str
+    # The avoid set this candidate was routed under -- the one fact that
+    # makes "I already routed around that risk group" checkable by the
+    # decider an hour later. Defaulted so the positional constructions in
+    # tests/eval/test_scoring.py keep working; run_episode always supplies
+    # it. A dict field makes Action unhashable in practice; nothing in the
+    # harness hashes one.
+    avoid: dict = field(default_factory=dict)
+
+
+def action_payloads(actions, hours=()) -> tuple[dict, ...]:
+    """What the decider is told about its OWN committed actions this episode.
+    Plain dicts, so observation.py never has to import this module (the
+    dependency runs one way) and the whole Observation stays
+    JSON-serializable for the trace and the prompt.
+
+    `effective_at_index` is a raw index into `scenario.hours` -- useless, and
+    actively misleading, for an episode whose hours are non-positional labels
+    (T2a/T2b/T3a/T3b all declare `hours: [t0, t1, t2, t6]`, where index 3 is
+    the hour LABELLED t6, not "t3"). `effective_at_hour` resolves the index
+    against the caller's `hours` sequence so the decider is told the label,
+    not just the position. `hours` defaults to `()` so existing positional
+    callers (tests/eval/test_scoring.py) that never pass it keep working;
+    every index is then out of range and resolves to `None`, same as an
+    index that runs past the end of a real `hours` list -- e.g. acting on the
+    episode's last hour with a lead time of 1."""
+    return tuple({"hour": a.hour, "lever": a.lever, "pairs": a.pairs,
+                  "avoid": a.avoid,
+                  "effective_at_index": a.effective_at_index,
+                  "effective_at_hour": (hours[a.effective_at_index]
+                                        if a.effective_at_index < len(hours)
+                                        else None)}
+                 for a in actions)
 
 
 @dataclass(frozen=True)
@@ -87,19 +125,26 @@ class _CountingClient:
         return await call_tool_json(self.client, name, arguments, **kw)
 
 
-async def service_points(client: Client, topology_path: str | Path
-                         ) -> dict[str, tuple[float, float]]:
+async def service_points(client: Client, topology_path: str | Path, *,
+                         call=None) -> dict[str, tuple[float, float]]:
     """A representative (lat, lon) per service: the midpoint of its working
     path's node coordinates. This is what turns a cone centre into a per-
     service offset, and it is derived from the SERVER's view of the service
     plus the LOCAL topology's coordinates -- the same split the geo mapper
-    already uses."""
+    already uses.
+
+    `call` is an optional async `(name, arguments=None, **kw)` replacement for
+    the four tool calls. run_episode passes its `_CountingClient.call` so the
+    per-hour re-read shows up in the trace's `tool_calls` instead of happening
+    off the books; every other caller (derived.py, tools/probe_episode.py)
+    keeps the plain-client behaviour by leaving it None."""
+    invoke = call if call is not None else partial(call_tool_json, client)
     raw = json.loads(Path(topology_path).read_text(encoding="utf-8-sig"))
     coords = {n["id"]: (n["lat"], n["lon"]) for n in raw["graph"]["nodes"]}
-    ip = await call_tool_json(client, "get_topology", {"layer": "ip"})
-    optical = await call_tool_json(client, "get_topology", {"layer": "optical"})
-    lightpaths = await call_tool_json(client, "get_lightpaths", expect_list=True)
-    services = await call_tool_json(client, "get_services")
+    ip = await invoke("get_topology", {"layer": "ip"})
+    optical = await invoke("get_topology", {"layer": "optical"})
+    lightpaths = await invoke("get_lightpaths", expect_list=True)
+    services = await invoke("get_services")
 
     oms_by_id = {o["id"]: o for o in optical["oms"]}
     oms_seq_by_lp = {lp["id"]: lp["oms_sequence"] for lp in lightpaths}
@@ -169,7 +214,6 @@ async def run_episode(
     started = time.monotonic()
     counting = _CountingClient(client)
     edges = load_edges(topology_path)
-    points = await service_points(client, topology_path)
     ledger = SpareLedger(on_hand=scenario.spares_on_hand)
     defined_rgs: set[str] = set()
 
@@ -180,12 +224,24 @@ async def run_episode(
 
     for hour_index, hour in enumerate(scenario.hours):
         record: dict = {"hour": hour, "iterations": [], "rejections": []}
+        # Re-read EVERY hour, not once per episode. plans.py's only op is
+        # reroute_service, so a commit really does move the working path on
+        # the server -- and a point computed before the loop describes a
+        # corridor the service may no longer ride. That is what told one real
+        # run that the lightpath it had committed an hour earlier, precisely
+        # to escape a cone, was still inside it (remediation spec, F4).
+        # Costs four tool calls an hour, counted through `counting`.
+        points = await service_points(client, topology_path,
+                                      call=counting.call)
         services = tuple((await counting.call("get_services"))["services"])
         # The roster scoring reads to know who could have survived -- the
         # final simulate_ip_routing reports links, not services.
         record["services"] = [s["id"] for s in services]
         obs_kwargs = dict(service_points=points, services=services,
-                          spares_on_hand=ledger.on_hand)
+                          spares_on_hand=ledger.on_hand,
+                          actions_taken=action_payloads(
+                              actions, hours=scenario.hours),
+                          spares_spent=ledger.spent)
 
         issuance = latest_issuance(scenario, hour)
         rg_ids = await _define_horizon_risk_groups(
@@ -204,7 +260,10 @@ async def run_episode(
                 obs = build_observation(
                     scenario, hour, risk_group_ids=rg_ids, iteration=iteration,
                     last_rejection=last_rejection,
-                    **{**obs_kwargs, "spares_on_hand": ledger.on_hand})
+                    **{**obs_kwargs, "spares_on_hand": ledger.on_hand,
+                       "spares_spent": ledger.spent,
+                       "actions_taken": action_payloads(
+                           actions, hours=scenario.hours)})
                 constraints = decider.constraints(obs)
                 menu = await counting.call(
                     "route_service",
@@ -219,9 +278,19 @@ async def run_episode(
 
                 idx = candidate_index(choice.choice)
                 if idx is None:
-                    terminal_status = "declared_infeasible"
+                    # NOT terminal. "My constraints left me nothing
+                    # acceptable" is a correctable mistake of exactly the
+                    # shape last_rejection exists for: decisions.py says
+                    # decision 2 changes which candidates EXIST, so the fix
+                    # is to loosen `avoid` and look again. Ending the hour
+                    # here left no path from the declaration back to the
+                    # correction (remediation spec, W2.3).
+                    last_rejection = {
+                        "type": "declared_infeasible",
+                        "menu_size": len(menu.get("candidates") or [])}
+                    record["rejections"].append(last_rejection)
                     step["outcome"] = "declared_infeasible"
-                    break
+                    continue
                 candidates = menu.get("candidates") or []
                 if idx >= len(candidates):
                     last_rejection = {"type": "invalid_choice",
@@ -277,7 +346,8 @@ async def run_episode(
                     hour=hour, hour_index=hour_index,
                     lever=candidate["lever"],
                     effective_at_index=hour_index + lead, pairs=pairs,
-                    service_id=scenario.service_under_test))
+                    service_id=scenario.service_under_test,
+                    avoid=dict(constraints.avoid)))
                 step["outcome"] = "committed"
                 # scoring.decision_label's chosen_lever rule reads this.
                 step["lever"] = candidate["lever"]
@@ -285,7 +355,14 @@ async def run_episode(
                 committed = True
                 break
             else:
-                terminal_status = "hit_cap"
+                # The cap is only "declared_infeasible" when the LAST word was
+                # a declaration; a loop that spun on invalid choices or failed
+                # validations is still hit_cap.
+                last_outcome = (record["iterations"][-1].get("outcome")
+                                if record["iterations"] else None)
+                terminal_status = ("declared_infeasible"
+                                   if last_outcome == "declared_infeasible"
+                                   else "hit_cap")
             record["committed"] = committed
 
         cuts = scenario.realized.get(hour, ())
