@@ -234,6 +234,13 @@ scenario's lead time. Acting later than (exposure hour - lead time) means \
 the action lands after the cut.
 - `risk_group_ids` -- horizon hour -> the id of the risk group defined for \
 that cone. These ids are what you name when you constrain routing.
+- `unconstrained_menu` -- present on the constraints request only. The \
+routing menu as it stands with nothing avoided: each entry's \
+`candidate_label`, its `lever`, and `pairs_needed`, its own cost in spare \
+transponder pairs. Cost vectors are not shown here; they belong to the \
+objective decision. Constraining removes entries from this list -- an entry \
+that reuses a path your `avoid` set forbids will not survive into the menu \
+you are given at the next step.
 - `iteration`, `last_rejection` -- within one hour you may get up to five \
 attempts. `last_rejection` tells you why the previous attempt failed.
 - `n_services_total` and `omitted_services` -- the observation shows you the \
@@ -419,8 +426,11 @@ class ClaudeDecider:
         return self._client
 
     def _user_content(self, payload: dict, instruction: str, *,
-                      menu: dict | None = None) -> str:
+                      menu: dict | None = None,
+                      unconstrained_menu: dict | None = None) -> str:
         body = {"observation": payload}
+        if unconstrained_menu is not None:
+            body["unconstrained_menu"] = unconstrained_menu
         if menu is not None:
             body["menu"] = _menu_for_prompt(menu)
         rendered = json.dumps(body, indent=2, sort_keys=True, default=str)
@@ -538,11 +548,14 @@ class ClaudeDecider:
             TIMING_TOOL, TimingDecision, obs, payload,
             self._user_content(payload, TIMING_INSTRUCTION))
 
-    def constraints(self, obs: Observation) -> ConstraintDecision:
+    def constraints(self, obs: Observation,
+                    unconstrained_menu: dict | None = None
+                    ) -> ConstraintDecision:
         payload = self._project(obs)
         return self._decide(
             CONSTRAINT_TOOL, ConstraintDecision, obs, payload,
-            self._user_content(payload, CONSTRAINT_INSTRUCTION))
+            self._user_content(payload, CONSTRAINT_INSTRUCTION,
+                               unconstrained_menu=unconstrained_menu))
 
     def objective(self, obs: Observation, menu: dict) -> ObjectiveDecision:
         payload = self._project(obs)

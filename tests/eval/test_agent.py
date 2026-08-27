@@ -402,6 +402,42 @@ def test_the_objective_prompt_states_each_candidates_own_spare_cost():
         "candidate_0", "candidate_1"]
 
 
+PROBE = {"status": "solution",
+         "candidates": [{"candidate_label": "candidate_0",
+                         "lever": "ip_reroute", "pairs_needed": 0},
+                        {"candidate_label": "candidate_1",
+                         "lever": "optical_reroute", "pairs_needed": 1}]}
+
+
+def test_the_constraints_prompt_shows_what_exists_before_it_is_narrowed():
+    decider, client = _decider(
+        FakeResponse(FakeToolUse(CONSTRAINT_TOOL, CONSTRAINT_OK)))
+    decider.constraints(_obs(others=CLAIMANTS), PROBE)
+    content = client.messages.calls[0]["messages"][0]["content"]
+    body = json.loads(content.split("\n\n")[0])
+    assert body["unconstrained_menu"] == PROBE
+    for candidate in body["unconstrained_menu"]["candidates"]:
+        assert "cost_vector" not in candidate
+
+
+def test_the_timing_and_objective_prompts_never_carry_the_probe():
+    # A timing decision made against a costed menu is a different experiment
+    # (the spec's deferred A9/D7), and the objective step has the real menu.
+    decider, client = _decider(
+        FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)),
+        FakeResponse(FakeToolUse(OBJECTIVE_TOOL, OBJECTIVE_OK)))
+    decider.timing(_obs(others=CLAIMANTS))
+    decider.objective(_obs(others=CLAIMANTS), MENU)
+    for call in client.messages.calls:
+        body = json.loads(call["messages"][0]["content"].split("\n\n")[0])
+        assert "unconstrained_menu" not in body
+
+
+def test_the_system_prompt_describes_the_unconstrained_menu():
+    assert "unconstrained_menu" in SYSTEM_PROMPT
+    assert "unconstrained_menu" in SYSTEM_PROMPT_WITH_RIVAL_TOTALS
+
+
 def test_the_system_prompt_warns_that_transponders_is_a_network_wide_count():
     assert "transponders" in SYSTEM_PROMPT
     assert "pairs_needed" in SYSTEM_PROMPT

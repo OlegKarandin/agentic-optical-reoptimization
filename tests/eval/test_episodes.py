@@ -399,8 +399,8 @@ class _WidensOnDisjointnessRejection:
     def timing(self, obs):
         return self._inner.timing(obs)
 
-    def constraints(self, obs):
-        base = self._inner.constraints(obs)
+    def constraints(self, obs, unconstrained_menu=None):
+        base = self._inner.constraints(obs, unconstrained_menu)
         extra: set[str] = set()
         if obs.last_rejection and obs.last_rejection.get("type") == "validation_violations":
             for violation in obs.last_rejection.get("violations", []):

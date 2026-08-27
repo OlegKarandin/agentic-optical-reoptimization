@@ -83,7 +83,10 @@ class ForecastBlindBaseline:
             "wait", f"{self.name}: {entry['hours_ahead']}h to exposure at "
                     f"{horizon} still exceeds the {deadline}h lead time")
 
-    def constraints(self, obs: Observation) -> ConstraintDecision:
+    def constraints(self, obs, unconstrained_menu=None):
+        # Accepted and IGNORED. This policy is forecast-blind by definition
+        # (see the class docstring) and Claim 1's exactly-50% arithmetic
+        # depends on it staying that way.
         exposed = _nearest_exposed_horizon(obs)
         risk_groups = ([obs.risk_group_ids[exposed[0]]]
                        if exposed and exposed[0] in obs.risk_group_ids else [])
@@ -142,7 +145,9 @@ class ScriptedDecider:
     def timing(self, obs: Observation) -> TimingDecision:
         return self._timing.get(obs.hour, self._default_timing)
 
-    def constraints(self, obs: Observation) -> ConstraintDecision:
+    def constraints(self, obs: Observation,
+                    unconstrained_menu: dict | None = None
+                    ) -> ConstraintDecision:
         return self._constraints.get(obs.hour, self._default_constraints)
 
     def objective(self, obs: Observation, menu: dict) -> ObjectiveDecision:

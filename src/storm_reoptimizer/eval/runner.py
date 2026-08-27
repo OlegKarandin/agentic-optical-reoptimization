@@ -42,7 +42,7 @@ from ..events.filters import get_filter
 from ..geo_mapper import Edge, load_edges, map_geo_event_to_assets
 from ..mcp_client import call_tool_json
 from .decisions import Decider, candidate_index
-from .ledger import SpareLedger
+from .ledger import SpareLedger, pairs_needed
 from .observation import build_observation, latest_issuance, lead_time_hours_for
 from .plans import PlanTranslationError, build_topology_index, plan_from_candidate
 from .scenario_file import ScenarioFile
@@ -90,6 +90,28 @@ def action_payloads(actions, hours=()) -> tuple[dict, ...]:
                                         if a.effective_at_index < len(hours)
                                         else None)}
                  for a in actions)
+
+
+def unconstrained_menu_projection(menu: dict) -> dict:
+    """What decision 2 is shown of the menu it is about to reshape.
+
+    decisions.py states the mechanic: decision 2's `avoid` is what
+    build_layered_graph forbids, so it changes which candidates EXIST, while
+    decision 3 only reorders. Until now the agent made that decision with no
+    view of what it was about to delete -- and one real run avoided a risk
+    group containing its own current corridor, which removed every stay-put
+    candidate from the menu before the graded step ever saw one
+    (remediation spec, F3).
+
+    Label, lever and spare cost only. The cost vector is DELIBERATELY absent:
+    weighing it is decision 3's job, and showing it here would collapse the
+    two steps into one and make the objective decision a rubber stamp."""
+    return {"status": menu.get("status"),
+            "candidates": [{"candidate_label": f"candidate_{i}",
+                            "lever": candidate["lever"],
+                            "pairs_needed": pairs_needed(candidate)}
+                           for i, candidate in enumerate(
+                               menu.get("candidates") or [])]}
 
 
 @dataclass(frozen=True)
@@ -254,6 +276,18 @@ async def run_episode(
 
         if timing.action == "act":
             index = await build_topology_index(client)
+            # What EXISTS before decision 2 narrows it. One call per acting
+            # hour, reused across every iteration -- it does not depend on
+            # the decider's answer. avoid={} with the working posture, i.e.
+            # exactly ConstraintDecision's own defaults. Counted, unlike
+            # build_topology_index above it, so the trace's tool_calls stays
+            # honest (remediation spec, W3.3).
+            probe = unconstrained_menu_projection(await counting.call(
+                "route_service",
+                {"service_id": scenario.service_under_test,
+                 "protected": False, "basis": "physical", "level": "link",
+                 "best_effort": False, "avoid": {}}))
+            record["unconstrained_menu"] = probe
             last_rejection: dict | None = None
             committed = False
             for iteration in range(MAX_ITERATIONS):
@@ -264,7 +298,7 @@ async def run_episode(
                        "spares_spent": ledger.spent,
                        "actions_taken": action_payloads(
                            actions, hours=scenario.hours)})
-                constraints = decider.constraints(obs)
+                constraints = decider.constraints(obs, probe)
                 menu = await counting.call(
                     "route_service",
                     constraints.route_service_args(scenario.service_under_test))

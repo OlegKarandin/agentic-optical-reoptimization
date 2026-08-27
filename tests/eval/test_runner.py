@@ -14,6 +14,7 @@ from storm_reoptimizer.eval.decisions import (
 )
 from storm_reoptimizer.eval.runner import (
     MAX_ITERATIONS, Action, action_payloads, run_episode,
+    unconstrained_menu_projection,
 )
 from storm_reoptimizer.eval.scenario_file import load_scenario
 from storm_reoptimizer.mcp_client import connect_server
@@ -22,6 +23,56 @@ TOPOLOGY_PATH = (
     Path(__file__).parent.parent.parent
     / "src" / "storm_reoptimizer" / "data" / "toy_india_topology.json"
 )
+
+PROBE_MENU = {
+    "status": "solution",
+    "candidates": [
+        {"lever": "ip_reroute", "reused_lightpaths": ["lp-x"],
+         "new_lightpaths": [], "restored_gbps": 300.0, "shortfall_gbps": 0.0,
+         "cost_vector": {"dropped_traffic": 0.0, "transponders": 38.0,
+                         "services_at_risk": 0, "total_margin": 5.0,
+                         "added_latency": 4.0, "spectrum_used": 18,
+                         "max_util": 0.8}},
+        {"lever": "optical_reroute", "reused_lightpaths": [],
+         "new_lightpaths": [{"oms_sequence": ["oms_1"], "lam": 0,
+                             "mode_id": "300G@4.8dB", "gsnr_db": 12.0,
+                             "bitrate_gbps": 300.0}],
+         "restored_gbps": 300.0, "shortfall_gbps": 0.0,
+         "cost_vector": {"dropped_traffic": 0.0, "transponders": 40.0,
+                         "services_at_risk": 0, "total_margin": 5.0,
+                         "added_latency": 9.0, "spectrum_used": 20,
+                         "max_util": 0.7}},
+    ],
+    "pairs": [],
+}
+
+
+def test_the_probe_projection_shows_what_exists_and_what_it_costs_in_pairs():
+    projected = unconstrained_menu_projection(PROBE_MENU)
+    assert projected["status"] == "solution"
+    assert projected["candidates"] == [
+        {"candidate_label": "candidate_0", "lever": "ip_reroute",
+         "pairs_needed": 0},
+        {"candidate_label": "candidate_1", "lever": "optical_reroute",
+         "pairs_needed": 1},
+    ]
+
+
+def test_the_probe_projection_withholds_the_cost_vector():
+    # F3's fix must not collapse decisions 2 and 3 into one. Weighing the
+    # cost vector IS decision 3's job; showing it at decision 2 would make
+    # the objective step a rubber stamp (remediation spec, W3.3).
+    projected = unconstrained_menu_projection(PROBE_MENU)
+    for candidate in projected["candidates"]:
+        assert "cost_vector" not in candidate
+        assert "new_lightpaths" not in candidate
+        assert "restored_gbps" not in candidate
+
+
+def test_a_menu_with_no_solution_projects_to_an_empty_candidate_list():
+    projected = unconstrained_menu_projection({"status": "NO_SOLUTION"})
+    assert projected == {"status": "NO_SOLUTION", "candidates": []}
+
 
 # A minimal, deliberately non-discriminating episode: two hours, one issuance,
 # one realized cut. Its job is to exercise the loop, not to score anyone.
@@ -175,16 +226,60 @@ class _RecordingDecider:
         self.inner = inner
         self.name = inner.name
         self.observations = []          # one per hour: the timing observation
+        self.probes = []                # one per constraints() call
 
     def timing(self, obs):
         self.observations.append(obs)
         return self.inner.timing(obs)
 
-    def constraints(self, obs):
-        return self.inner.constraints(obs)
+    def constraints(self, obs, unconstrained_menu=None):
+        self.probes.append(unconstrained_menu)
+        return self.inner.constraints(obs, unconstrained_menu)
 
     def objective(self, obs, menu):
         return self.inner.objective(obs, menu)
+
+
+def test_the_constraints_step_is_shown_the_menu_it_is_about_to_narrow(
+    tmp_path, loaded_state_path, local_server_command, local_server_env,
+):
+    # F3 (remediation spec lines 96-112). decisions.py: decision 2 changes
+    # which candidates EXIST. It was made blind to what constraining costs.
+    decider = _RecordingDecider(ForecastBlindBaseline("immediate"))
+    trace = asyncio.run(_run(
+        _scenario(tmp_path), decider,
+        loaded_state_path, local_server_command, local_server_env))
+
+    assert decider.probes, "the acting hour never called constraints()"
+    probe = decider.probes[0]
+    assert probe["status"] == "solution"
+    assert probe["candidates"], "a real unconstrained menu is never empty here"
+    for candidate in probe["candidates"]:
+        assert set(candidate) == {"candidate_label", "lever", "pairs_needed"}
+    # The probe is the menu BEFORE the agent's avoid set, so it is the same
+    # object for every iteration of ONE hour -- it does not depend on the
+    # answer, and re-probing per iteration would be a wasted tool call.
+    # SMOKE's immediate baseline commits at BOTH of its hours here
+    # (spares_on_hand=2 is sized for exactly that: storm-svc-1's offset from
+    # the cone centre never crosses outside the half-width even after t0's
+    # reroute), so decider.probes spans two DIFFERENT acting hours with two
+    # different real route_service results -- check same-object reuse within
+    # each hour's own iterations, not across the whole episode.
+    offset = 0
+    for hour_record in trace.hours:
+        n_iterations = len(hour_record.get("iterations", []))
+        if n_iterations == 0:
+            continue
+        group = decider.probes[offset:offset + n_iterations]
+        assert all(p is group[0] for p in group), (
+            f"hour {hour_record['hour']!r} re-probed across its own "
+            f"iterations")
+        offset += n_iterations
+    assert offset == len(decider.probes)
+    # And it lands in the trace, so a reader can see what the constraints
+    # decision was looking at without re-running the episode.
+    acting = next(h for h in trace.hours if h.get("committed"))
+    assert acting["unconstrained_menu"] == probe
 
 
 class _WidensOnDisjointnessRejection:
@@ -214,8 +309,8 @@ class _WidensOnDisjointnessRejection:
     def timing(self, obs):
         return self._inner.timing(obs)
 
-    def constraints(self, obs):
-        base = self._inner.constraints(obs)
+    def constraints(self, obs, unconstrained_menu=None):
+        base = self._inner.constraints(obs, unconstrained_menu)
         extra: set[str] = set()
         if obs.last_rejection and obs.last_rejection.get("type") == "validation_violations":
             for violation in obs.last_rejection.get("violations", []):
@@ -385,7 +480,7 @@ class _LoosenAfterInfeasible:
     def timing(self, obs):
         return TimingDecision("act", "act: exposed at the next horizon")
 
-    def constraints(self, obs):
+    def constraints(self, obs, unconstrained_menu=None):
         self.rejections_seen.append(obs.last_rejection)
         if obs.iteration == 0:
             return ConstraintDecision(

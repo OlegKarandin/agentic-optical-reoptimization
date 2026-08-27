@@ -227,12 +227,21 @@ OBJECTIVE_JSON_SCHEMA = {
 
 class Decider(Protocol):
     """Implemented by baseline.ForecastBlindBaseline today and by step 6's
-    LLM agent tomorrow. runner.py knows nothing else about either."""
+    LLM agent tomorrow. runner.py knows nothing else about either.
+
+    `constraints` takes the menu route_service returns under avoid={} --
+    what exists BEFORE this decision narrows it. It mirrors `objective`'s
+    `menu` argument rather than riding on the Observation, because an
+    Observation field would enter the timing prompt too, and a timing
+    decision made against a costed menu is a different experiment
+    (remediation spec, W3.3)."""
 
     name: str
 
     def timing(self, obs: Observation) -> TimingDecision: ...
 
-    def constraints(self, obs: Observation) -> ConstraintDecision: ...
+    def constraints(self, obs: Observation,
+                    unconstrained_menu: dict | None = None
+                    ) -> ConstraintDecision: ...
 
     def objective(self, obs: Observation, menu: dict) -> ObjectiveDecision: ...
