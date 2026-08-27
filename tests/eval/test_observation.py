@@ -73,6 +73,31 @@ def test_exposure_is_reported_per_service_per_horizon_with_a_cut_probability(
     assert obs.exposure["svc-b"]["t3"]["p_cut"] < at_t3["p_cut"]
 
 
+def test_each_exposure_row_carries_its_own_expected_capacity_at_risk(scenario):
+    # D1 (remediation spec lines 447-456). p_cut x demand_gbps is the one
+    # quantity every gold.rationale is arithmetic over (cone.py:73); asking
+    # the model to multiply it across 8 services x 2 horizons in its head is
+    # asking a deterministic step of a judgement engine.
+    obs = build_observation(scenario, "t1", service_points=POINTS,
+                            services=SERVICES, spares_on_hand=1)
+    entry = obs.exposure["storm-svc-1"]["t3"]
+    assert set(entry) == {"hours_ahead", "offset_km", "width_km", "p_cut",
+                          "demand_gbps", "expected_capacity_at_risk_gbps"}
+    # Derived from the ROUNDED p_cut printed in the same dict, so a reader
+    # multiplying the two numbers shown gets the number shown.
+    assert entry["expected_capacity_at_risk_gbps"] == pytest.approx(
+        round(entry["p_cut"] * entry["demand_gbps"], 3))
+
+
+def test_the_derived_field_appears_for_every_service_and_every_horizon(scenario):
+    obs = build_observation(scenario, "t1", service_points=POINTS,
+                            services=SERVICES, spares_on_hand=1)
+    for svc, per_horizon in obs.exposure.items():
+        for horizon, entry in per_horizon.items():
+            assert "expected_capacity_at_risk_gbps" in entry, (
+                f"{svc}/{horizon} is missing the derived field")
+
+
 def test_risk_group_ids_are_carried_through_for_the_constraint_decision(
     scenario,
 ):

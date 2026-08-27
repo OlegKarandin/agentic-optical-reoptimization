@@ -22,7 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from .cone import cut_probability, radial_offset_km
+from .cone import cut_probability, expected_capacity_at_risk_gbps, radial_offset_km
 from .scenario_file import Issuance, ScenarioFile
 
 # The rule, stated as data so the trace can carry it. `zero` -> 0 hours;
@@ -69,7 +69,8 @@ class Observation:
     hours_remaining: int
     issuance: Issuance
     # service_id -> horizon hour -> {"hours_ahead", "offset_km", "p_cut",
-    #                               "width_km", "demand_gbps"}
+    #                               "width_km", "demand_gbps",
+    #                               "expected_capacity_at_risk_gbps"}
     exposure: dict[str, dict[str, dict[str, float]]]
     services: tuple[dict, ...]
     spares_on_hand: int              # transponder PAIRS
@@ -141,13 +142,29 @@ def build_observation(
         for horizon, cone in issuance.horizons.items():
             offset = radial_offset_km(cone.center["lat"], cone.center["lon"],
                                       lat, lon)
+            p_cut = round(cut_probability(
+                offset, cone.width_km, scenario.damage_radius_km), 4)
             per_horizon[horizon] = {
                 "hours_ahead": scenario.hours.index(horizon) - hour_index,
                 "offset_km": round(offset, 1),
                 "width_km": cone.width_km,
-                "p_cut": round(cut_probability(
-                    offset, cone.width_km, scenario.damage_radius_km), 4),
+                "p_cut": p_cut,
                 "demand_gbps": svc["demand_gbps"],
+                # p_cut x demand_gbps -- "the single quantity every
+                # gold.rationale is arithmetic over" (cone.py). Precomputed
+                # because it IS arithmetic, and CLAUDE.md's doctrine puts
+                # arithmetic in code and leaves the comparison to the agent
+                # (remediation spec, W3.1).
+                #
+                # Derived from the ROUNDED p_cut one line above, NOT from the
+                # raw probability, so the payload is internally consistent: a
+                # reader who multiplies the two numbers shown gets the number
+                # shown. That makes it deliberately NOT bit-identical to
+                # derived.py's FlipScalars, which use the unrounded value and
+                # feed the static suite assertions -- those must not move.
+                "expected_capacity_at_risk_gbps": round(
+                    expected_capacity_at_risk_gbps(
+                        p_cut, svc["demand_gbps"]), 3),
             }
         exposure[svc["id"]] = per_horizon
 

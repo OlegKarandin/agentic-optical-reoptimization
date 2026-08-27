@@ -192,9 +192,10 @@ Each request carries one observation:
 horizons. You never see a future issuance. Waiting is what buys the next \
 one; that is the entire cost-benefit of waiting.
 - `exposure` -- per service, per horizon: `hours_ahead`, `offset_km`, \
-`width_km`, `p_cut`, `demand_gbps`. The product `p_cut * demand_gbps` is the \
-expected capacity at risk, and it is what makes two competing claims on one \
-resource comparable.
+`width_km`, `p_cut`, `demand_gbps`, and `expected_capacity_at_risk_gbps` -- \
+the product `p_cut * demand_gbps`, already computed for you. It is the \
+quantity that makes two competing claims on one resource comparable, and it \
+is in Gbps.
 - `services` -- the roster for the services shown.
 - `spares_on_hand` -- spare transponder PAIRS in the depot. One pair per new \
 lightpath. This inventory is invisible to the routing tools: they will \
@@ -222,8 +223,9 @@ attempts. `last_rejection` tells you why the previous attempt failed.
 service under test plus every other service whose cut probability reaches \
 the threshold in `omitted_services.p_cut_threshold`. The rest are summarized \
 rather than listed: how many, the largest cut probability among them, and \
-their summed expected capacity at risk. Read that summary before assuming \
-the network is as small as the list you were given.
+`summed_expected_capacity_at_risk_gbps` -- each omitted service taken at its \
+own worst horizon, then summed. Read that summary before assuming the \
+network is as small as the list you were given.
 
 ## The three decisions
 
@@ -360,6 +362,7 @@ class ClaudeDecider:
         self._client = client
         self._p_cut_threshold = p_cut_threshold
         self._audit_path = Path(audit_path) if audit_path else None
+        self._show_rival_totals = False
 
     @property
     def _api(self):
@@ -461,6 +464,17 @@ class ClaudeDecider:
             "decision": tool_name,
             "attempts": attempts,
             "shown_services": sorted(payload["exposure"]),
+            # Not just WHICH services were shown but at what magnitude --
+            # otherwise the sidecar cannot answer "was the claimant this
+            # episode's gold names actually visible, and how big was it?"
+            # Peak over horizons, matching omitted_services' rollup so the
+            # two halves of the account are in the same unit (W3.1).
+            "shown_expected_capacity_at_risk_gbps": {
+                svc: round(_peak_capacity_at_risk_gbps(per_horizon), 3)
+                for svc, per_horizon in payload["exposure"].items()},
+            # Which W3.2 arm produced this call. Recorded per call so a
+            # sidecar can never be misattributed to the wrong arm.
+            "rival_totals_shown": self._show_rival_totals,
             "omitted_services": payload["omitted_services"],
             "n_services_total": payload["n_services_total"],
             "result": decision.to_dict(),

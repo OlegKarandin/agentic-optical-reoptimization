@@ -411,6 +411,12 @@ def test_the_system_prompt_clears_sonnet_5s_minimum_cacheable_prefix():
     assert len(SYSTEM_PROMPT) > 4 * 1024
 
 
+def test_the_system_prompt_names_the_precomputed_risk_field():
+    # The payload carries this key (W3.1); an undocumented JSON key is a
+    # worse failure mode than a described one.
+    assert "expected_capacity_at_risk_gbps" in SYSTEM_PROMPT
+
+
 TIMING_BAD_ACTION = {"action": "hedge", "reasoning": "neither act nor wait"}
 TIMING_NO_REASONING = {"action": "wait", "reasoning": "   "}
 
@@ -542,6 +548,22 @@ def test_no_audit_file_is_written_when_none_is_configured(tmp_path):
     decider, _ = _decider(FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)))
     decider.timing(_obs(others=CLAIMANTS))
     assert list(tmp_path.iterdir()) == []
+
+
+def test_the_audit_record_shows_the_risk_figure_for_every_shown_service(
+        tmp_path):
+    # W3.1's acceptance: "the audit sidecar shows the field for every shown
+    # service". A bare id list cannot answer "was the claimant the episode
+    # names actually shown, and at what magnitude?".
+    path = tmp_path / "calls.jsonl"
+    decider, _ = _decider(FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)),
+                          audit_path=path)
+    decider.timing(_obs(others=CLAIMANTS))
+    record = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+    shown = record["shown_expected_capacity_at_risk_gbps"]
+    assert sorted(shown) == record["shown_services"]
+    assert shown["storm-svc-1"] == pytest.approx(0.3410 * 300.0, abs=1e-3)
+    assert record["rival_totals_shown"] is False
 
 
 PYPROJECT = Path(__file__).parents[2] / "pyproject.toml"
