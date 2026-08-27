@@ -62,6 +62,7 @@ def _peak_capacity_at_risk_gbps(per_horizon: dict) -> float:
 def project_observation(
     obs: Observation, *,
     p_cut_threshold: float = P_CUT_ENUMERATION_THRESHOLD,
+    show_rival_totals: bool = False,
 ) -> dict:
     """`obs.to_dict()` reduced to decision-relevant content, plus an explicit
     account of what was dropped.
@@ -74,7 +75,14 @@ def project_observation(
     `omitted_services["count"]` is over the server's full roster (a service
     with no representative point has no exposure entry at all and is counted
     here); the two risk figures are over the omitted services that do have
-    exposure, and contribute 0.0 for the rest."""
+    exposure, and contribute 0.0 for the rest.
+
+    `show_rival_totals` decides whether the agent is handed `horizon_totals`
+    -- per horizon, its own expected capacity at risk against everyone
+    else's, already summed. Off by default: it is the closest field in this
+    project to fitting the test, because it reduces the judgement to
+    comparing two printed numbers. The two arms exist to measure whether
+    that reduction changes anything (remediation spec, W3.2)."""
     payload = obs.to_dict()
     exposure = payload["exposure"]
 
@@ -99,6 +107,12 @@ def project_observation(
             sum(_peak_capacity_at_risk_gbps(exposure[svc])
                 for svc in omitted), 3),
     }
+    if not show_rival_totals:
+        # The control arm of W3.2's measurement. `payload` is a fresh dict
+        # from obs.to_dict(), so popping a top-level key here cannot touch
+        # the Observation -- unlike payload["exposure"], whose inner dicts
+        # are aliases of the caller's.
+        payload.pop("horizon_totals", None)
     return payload
 
 

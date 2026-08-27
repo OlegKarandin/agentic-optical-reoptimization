@@ -141,6 +141,28 @@ def test_projection_bounds_the_prompt_against_a_full_573_service_roster():
     assert len(json.dumps(payload)) < 5_000
 
 
+def test_the_projection_hides_the_rival_totals_by_default():
+    # The default arm must be byte-identical to what shipped before W3.2 --
+    # it is the control half of the measurement (remediation spec, D2).
+    payload = project_observation(_obs(others=CLAIMANTS))
+    assert "horizon_totals" not in payload
+
+
+def test_the_projection_shows_the_rival_totals_when_the_arm_is_on():
+    obs = _obs(others=CLAIMANTS)
+    payload = project_observation(obs, show_rival_totals=True)
+    assert payload["horizon_totals"] == obs.horizon_totals
+
+
+def test_hiding_the_totals_does_not_mutate_the_observation():
+    # payload["exposure"] aliases the Observation's own inner dicts
+    # (agent.py:87-89); a `del` on the wrong object would corrupt the caller.
+    obs = _obs(others=CLAIMANTS)
+    before = dict(obs.horizon_totals)
+    project_observation(obs)
+    assert obs.horizon_totals == before
+
+
 MENU = {
     "status": "solution",
     "candidates": [

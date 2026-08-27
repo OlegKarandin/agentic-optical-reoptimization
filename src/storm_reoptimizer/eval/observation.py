@@ -59,6 +59,37 @@ def latest_issuance(scenario: ScenarioFile, hour: str) -> Issuance:
         f"episode must publish one at its first hour")
 
 
+def _horizon_totals(exposure: dict, service_under_test: str
+                    ) -> dict[str, dict[str, float]]:
+    """Per horizon, the two operands every gold rationale in the suite
+    compares: the service under test's own expected capacity at risk, and the
+    SUMMED expected capacity at risk of everyone else competing for the same
+    spare pair (remediation spec, W3.2).
+
+    Summed over EVERY service with a representative point, not merely the
+    ones a projection later chooses to list -- the aggregate is a fact about
+    the network, and a total that silently covered only the visible rows
+    would be worse than no total at all.
+
+    Deliberately NOT shared with derived._ecar_at_cone, which computes the
+    same shape from the UNROUNDED cut probability. That one feeds FLIP_VARS
+    and assert_no_global_policy_solves_the_suite, whose interleave margins
+    are under 1 G; this one is agent-facing and must agree with the rounded
+    per-row numbers printed beside it. Two readers, two roundings, one
+    quantity -- keep them apart."""
+    totals: dict[str, dict[str, float]] = {}
+    for svc_id, per_horizon in exposure.items():
+        key = ("sut_ecar_gbps" if svc_id == service_under_test
+               else "non_sut_total_ecar_gbps")
+        for horizon, entry in per_horizon.items():
+            slot = totals.setdefault(
+                horizon, {"sut_ecar_gbps": 0.0,
+                          "non_sut_total_ecar_gbps": 0.0})
+            slot[key] += entry["expected_capacity_at_risk_gbps"]
+    return {horizon: {k: round(v, 3) for k, v in slot.items()}
+            for horizon, slot in totals.items()}
+
+
 @dataclass(frozen=True)
 class Observation:
     """Everything the decider is allowed to read at one hour of one episode."""
@@ -89,6 +120,13 @@ class Observation:
     # to be JSON-serializable for the trace and the prompt.
     actions_taken: tuple[dict, ...] = ()
     spares_spent: int = 0            # cumulative transponder PAIRS debited
+    # horizon hour -> {"sut_ecar_gbps", "non_sut_total_ecar_gbps"}: the two
+    # operands of the comparison every gold rationale makes. Present on every
+    # Observation and in the trace; whether the AGENT is shown it is
+    # project_observation's decision, gated per arm (remediation spec, W3.2).
+    # Defaulted so the hand-built Observations in tests/eval/test_agent.py and
+    # tests/eval/test_baseline.py keep constructing.
+    horizon_totals: dict[str, dict[str, float]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-serializable form, for the trace and for step 6's prompt."""
@@ -111,6 +149,7 @@ class Observation:
             "last_rejection": self.last_rejection,
             "actions_taken": [dict(a) for a in self.actions_taken],
             "spares_spent": self.spares_spent,
+            "horizon_totals": self.horizon_totals,
         }
 
 
@@ -184,4 +223,5 @@ def build_observation(
         last_rejection=last_rejection,
         actions_taken=tuple(actions_taken),
         spares_spent=spares_spent,
+        horizon_totals=_horizon_totals(exposure, scenario.service_under_test),
     )

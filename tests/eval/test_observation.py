@@ -98,6 +98,30 @@ def test_the_derived_field_appears_for_every_service_and_every_horizon(scenario)
                 f"{svc}/{horizon} is missing the derived field")
 
 
+def test_horizon_totals_split_the_sut_from_everyone_else(scenario):
+    # D2 (remediation spec lines 470-490). Every gold rationale in the suite
+    # compares the SUT's own expected capacity at risk against the AGGREGATE
+    # of everyone else competing for the same spare pair. These are the two
+    # operands of that comparison, and nothing else.
+    obs = build_observation(scenario, "t1", service_points=POINTS,
+                            services=SERVICES, spares_on_hand=1)
+    totals = obs.horizon_totals["t3"]
+    assert set(totals) == {"sut_ecar_gbps", "non_sut_total_ecar_gbps"}
+    assert totals["sut_ecar_gbps"] == pytest.approx(
+        obs.exposure["storm-svc-1"]["t3"]["expected_capacity_at_risk_gbps"])
+    others = sum(per_horizon["t3"]["expected_capacity_at_risk_gbps"]
+                 for svc, per_horizon in obs.exposure.items()
+                 if svc != "storm-svc-1")
+    assert totals["non_sut_total_ecar_gbps"] == pytest.approx(others, abs=1e-3)
+    assert obs.to_dict()["horizon_totals"] == obs.horizon_totals
+
+
+def test_horizon_totals_cover_exactly_the_issuances_horizons(scenario):
+    obs = build_observation(scenario, "t1", service_points=POINTS,
+                            services=SERVICES, spares_on_hand=1)
+    assert sorted(obs.horizon_totals) == sorted(obs.issuance.horizons)
+
+
 def test_risk_group_ids_are_carried_through_for_the_constraint_decision(
     scenario,
 ):
