@@ -245,6 +245,35 @@ def test_a_baseline_rollout_completes_and_records_every_hour(
     assert all("timing" in h for h in trace.hours)
 
 
+def test_the_next_hour_is_told_what_was_committed_in_the_previous_one(
+    tmp_path, loaded_state_path, local_server_command, local_server_env,
+):
+    # F4's no-memory half (remediation spec lines 122-132). The decider is
+    # asked to decide again at t1 with no hint that it already acted at t0
+    # unless the harness tells it.
+    decider = _RecordingDecider(ForecastBlindBaseline("immediate"))
+    trace = asyncio.run(_run(
+        _scenario(tmp_path), decider,
+        loaded_state_path, local_server_command, local_server_env))
+
+    assert trace.actions and trace.actions[0].hour == "t0"
+    committed = trace.actions[0]
+    assert decider.observations[0].actions_taken == ()
+    assert decider.observations[0].spares_spent == 0
+
+    at_t1 = decider.observations[1]
+    assert len(at_t1.actions_taken) == 1
+    remembered = at_t1.actions_taken[0]
+    assert remembered["hour"] == "t0"
+    assert remembered["lever"] == committed.lever
+    assert remembered["pairs"] == committed.pairs
+    assert remembered["effective_at_index"] == committed.effective_at_index
+    # The avoid set is what makes the memory usable: "I already routed
+    # around that risk group" is the premise the agent got wrong.
+    assert "risk_groups" in remembered["avoid"]
+    assert at_t1.spares_spent == committed.pairs
+
+
 def test_a_committed_action_debits_the_ledger_and_records_its_lead_time(
     tmp_path, loaded_state_path, local_server_command, local_server_env,
 ):

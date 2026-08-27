@@ -394,6 +394,13 @@ def test_the_system_prompt_never_leaks_scoring_internals():
         assert leak not in lowered
 
 
+def test_the_system_prompt_describes_the_agents_own_action_history():
+    # The payload carries these keys (W2.2); an undocumented JSON key is a
+    # worse failure mode than a described one.
+    assert "actions_taken" in SYSTEM_PROMPT
+    assert "spares_spent" in SYSTEM_PROMPT
+
+
 def test_the_system_prompt_clears_sonnet_5s_minimum_cacheable_prefix():
     # Sonnet 5 will not create a cache entry below 1024 tokens -- silently,
     # with no error. ~4 chars/token is the working estimate.

@@ -200,6 +200,13 @@ resource comparable.
 lightpath. This inventory is invisible to the routing tools: they will \
 happily propose a candidate the depot cannot fulfil, and the harness will \
 reject that choice.
+- `actions_taken` and `spares_spent` -- what YOU have already committed \
+earlier in this episode: per action its hour, its lever, the spare pairs it \
+cost, the `avoid` set it was routed under, and the hour index from which it \
+is effective; plus the running total of pairs already spent. A reroute you \
+committed in an earlier hour has already moved the service, so the \
+`exposure` above describes its CURRENT path, not the path it had when you \
+acted.
 - `lead_time_hours` -- hours between issuing an action on a lever and it \
 being effective, per lever. An `ip_reroute` is a config change and lands \
 immediately. Lighting a new optical path is provisioning and takes the \

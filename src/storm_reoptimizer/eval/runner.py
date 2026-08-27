@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from functools import partial
 from pathlib import Path
 
@@ -58,6 +58,24 @@ class Action:
     effective_at_index: int
     pairs: int
     service_id: str
+    # The avoid set this candidate was routed under -- the one fact that
+    # makes "I already routed around that risk group" checkable by the
+    # decider an hour later. Defaulted so the positional constructions in
+    # tests/eval/test_scoring.py keep working; run_episode always supplies
+    # it. A dict field makes Action unhashable in practice; nothing in the
+    # harness hashes one.
+    avoid: dict = field(default_factory=dict)
+
+
+def action_payloads(actions) -> tuple[dict, ...]:
+    """What the decider is told about its OWN committed actions this episode.
+    Plain dicts, so observation.py never has to import this module (the
+    dependency runs one way) and the whole Observation stays
+    JSON-serializable for the trace and the prompt."""
+    return tuple({"hour": a.hour, "lever": a.lever, "pairs": a.pairs,
+                  "avoid": a.avoid,
+                  "effective_at_index": a.effective_at_index}
+                 for a in actions)
 
 
 @dataclass(frozen=True)
@@ -206,7 +224,9 @@ async def run_episode(
         # final simulate_ip_routing reports links, not services.
         record["services"] = [s["id"] for s in services]
         obs_kwargs = dict(service_points=points, services=services,
-                          spares_on_hand=ledger.on_hand)
+                          spares_on_hand=ledger.on_hand,
+                          actions_taken=action_payloads(actions),
+                          spares_spent=ledger.spent)
 
         issuance = latest_issuance(scenario, hour)
         rg_ids = await _define_horizon_risk_groups(
@@ -225,7 +245,9 @@ async def run_episode(
                 obs = build_observation(
                     scenario, hour, risk_group_ids=rg_ids, iteration=iteration,
                     last_rejection=last_rejection,
-                    **{**obs_kwargs, "spares_on_hand": ledger.on_hand})
+                    **{**obs_kwargs, "spares_on_hand": ledger.on_hand,
+                       "spares_spent": ledger.spent,
+                       "actions_taken": action_payloads(actions)})
                 constraints = decider.constraints(obs)
                 menu = await counting.call(
                     "route_service",
@@ -298,7 +320,8 @@ async def run_episode(
                     hour=hour, hour_index=hour_index,
                     lever=candidate["lever"],
                     effective_at_index=hour_index + lead, pairs=pairs,
-                    service_id=scenario.service_under_test))
+                    service_id=scenario.service_under_test,
+                    avoid=dict(constraints.avoid)))
                 step["outcome"] = "committed"
                 # scoring.decision_label's chosen_lever rule reads this.
                 step["lever"] = candidate["lever"]
