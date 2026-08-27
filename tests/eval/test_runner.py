@@ -12,7 +12,9 @@ from storm_reoptimizer.eval.baseline import ForecastBlindBaseline, ScriptedDecid
 from storm_reoptimizer.eval.decisions import (
     ConstraintDecision, ObjectiveDecision, TimingDecision,
 )
-from storm_reoptimizer.eval.runner import MAX_ITERATIONS, run_episode
+from storm_reoptimizer.eval.runner import (
+    MAX_ITERATIONS, Action, action_payloads, run_episode,
+)
 from storm_reoptimizer.eval.scenario_file import load_scenario
 from storm_reoptimizer.mcp_client import connect_server
 
@@ -106,6 +108,41 @@ EXPOSURE_SMOKE = textwrap.dedent("""
       exposure_horizon_hours: 1
       spares_on_hand: 2
 """)
+
+
+def test_action_payloads_resolves_the_real_hour_label_not_a_synthesized_one():
+    # T2a/T2b/T3a/T3b's actual hours: [t0, t1, t2, t6] -- non-positional.
+    # A naive f"t{index}" reading of effective_at_index=3 would guess "t3",
+    # a real hour that never appears in this list. This is exactly the
+    # off-by-four-hours misreading the final-review finding is about: an
+    # optical_reroute committed at t2 (index 2) with lead time 1 records
+    # effective_at_index=3, and index 3 in this list names t6, not t3.
+    t2a_hours = ["t0", "t1", "t2", "t6"]
+    action = Action(hour="t2", hour_index=2, lever="optical_reroute",
+                    effective_at_index=3, pairs=1, service_id="storm-svc-1")
+    [payload] = action_payloads((action,), hours=t2a_hours)
+    assert payload["effective_at_index"] == 3
+    assert payload["effective_at_hour"] == "t6"
+    assert payload["effective_at_hour"] != "t3"
+
+
+def test_action_payloads_resolves_none_past_the_last_hour():
+    # Acting on the episode's last hour with lead time 1 puts the index one
+    # past the end of `hours` -- must not raise, must not synthesize a label.
+    hours = ["t0", "t1"]
+    action = Action(hour="t1", hour_index=1, lever="optical_reroute",
+                    effective_at_index=2, pairs=1, service_id="storm-svc-1")
+    [payload] = action_payloads((action,), hours=hours)
+    assert payload["effective_at_hour"] is None
+
+
+def test_action_payloads_defaults_hours_to_empty_for_positional_callers():
+    # tests/eval/test_scoring.py constructs Action directly and never calls
+    # action_payloads with a `hours` argument; the default must not raise.
+    action = Action(hour="t0", hour_index=0, lever="ip_reroute",
+                    effective_at_index=0, pairs=0, service_id="storm-svc-1")
+    [payload] = action_payloads((action,))
+    assert payload["effective_at_hour"] is None
 
 
 def _scenario(tmp_path):
@@ -268,6 +305,15 @@ def test_the_next_hour_is_told_what_was_committed_in_the_previous_one(
     assert remembered["lever"] == committed.lever
     assert remembered["pairs"] == committed.pairs
     assert remembered["effective_at_index"] == committed.effective_at_index
+    # SMOKE's hours are positional (["t0", "t1"]), so the label happens to
+    # equal what a naive f"t{index}" scheme would guess here -- the real
+    # non-positional case (T2a-style [t0, t1, t2, t6]) is covered directly
+    # in tests/eval/test_observation.py, since that's a property of
+    # action_payloads' own resolution, not of the rollout.
+    scenario_hours = ["t0", "t1"]
+    assert remembered["effective_at_hour"] == (
+        scenario_hours[committed.effective_at_index]
+        if committed.effective_at_index < len(scenario_hours) else None)
     # The avoid set is what makes the memory usable: "I already routed
     # around that risk group" is the premise the agent got wrong.
     assert "risk_groups" in remembered["avoid"]

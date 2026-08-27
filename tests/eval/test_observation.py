@@ -94,7 +94,7 @@ def test_hours_remaining_counts_down(scenario):
 
 ACTIONS = ({"hour": "t1", "lever": "optical_reroute", "pairs": 1,
             "avoid": {"risk_groups": ["rg_EXAMPLE_A_t1_t3"]},
-            "effective_at_index": 2},)
+            "effective_at_index": 2, "effective_at_hour": "t2"},)
 
 
 def test_the_observation_reports_the_actions_already_committed(scenario):

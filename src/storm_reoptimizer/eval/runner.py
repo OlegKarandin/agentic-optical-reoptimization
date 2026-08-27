@@ -67,14 +67,28 @@ class Action:
     avoid: dict = field(default_factory=dict)
 
 
-def action_payloads(actions) -> tuple[dict, ...]:
+def action_payloads(actions, hours=()) -> tuple[dict, ...]:
     """What the decider is told about its OWN committed actions this episode.
     Plain dicts, so observation.py never has to import this module (the
     dependency runs one way) and the whole Observation stays
-    JSON-serializable for the trace and the prompt."""
+    JSON-serializable for the trace and the prompt.
+
+    `effective_at_index` is a raw index into `scenario.hours` -- useless, and
+    actively misleading, for an episode whose hours are non-positional labels
+    (T2a/T2b/T3a/T3b all declare `hours: [t0, t1, t2, t6]`, where index 3 is
+    the hour LABELLED t6, not "t3"). `effective_at_hour` resolves the index
+    against the caller's `hours` sequence so the decider is told the label,
+    not just the position. `hours` defaults to `()` so existing positional
+    callers (tests/eval/test_scoring.py) that never pass it keep working;
+    every index is then out of range and resolves to `None`, same as an
+    index that runs past the end of a real `hours` list -- e.g. acting on the
+    episode's last hour with a lead time of 1."""
     return tuple({"hour": a.hour, "lever": a.lever, "pairs": a.pairs,
                   "avoid": a.avoid,
-                  "effective_at_index": a.effective_at_index}
+                  "effective_at_index": a.effective_at_index,
+                  "effective_at_hour": (hours[a.effective_at_index]
+                                        if a.effective_at_index < len(hours)
+                                        else None)}
                  for a in actions)
 
 
@@ -225,7 +239,8 @@ async def run_episode(
         record["services"] = [s["id"] for s in services]
         obs_kwargs = dict(service_points=points, services=services,
                           spares_on_hand=ledger.on_hand,
-                          actions_taken=action_payloads(actions),
+                          actions_taken=action_payloads(
+                              actions, hours=scenario.hours),
                           spares_spent=ledger.spent)
 
         issuance = latest_issuance(scenario, hour)
@@ -247,7 +262,8 @@ async def run_episode(
                     last_rejection=last_rejection,
                     **{**obs_kwargs, "spares_on_hand": ledger.on_hand,
                        "spares_spent": ledger.spent,
-                       "actions_taken": action_payloads(actions)})
+                       "actions_taken": action_payloads(
+                           actions, hours=scenario.hours)})
                 constraints = decider.constraints(obs)
                 menu = await counting.call(
                     "route_service",

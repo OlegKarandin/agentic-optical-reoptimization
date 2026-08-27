@@ -399,6 +399,10 @@ def test_the_system_prompt_describes_the_agents_own_action_history():
     # worse failure mode than a described one.
     assert "actions_taken" in SYSTEM_PROMPT
     assert "spares_spent" in SYSTEM_PROMPT
+    # Final-review finding: a bare index into scenario.hours is misleading
+    # for T2a-style non-positional hours ([t0, t1, t2, t6]) -- the prompt
+    # must point the model at the resolved hour LABEL, not just the index.
+    assert "effective_at_hour" in SYSTEM_PROMPT
 
 
 def test_the_system_prompt_clears_sonnet_5s_minimum_cacheable_prefix():
