@@ -41,7 +41,7 @@ from mcp.client import Client
 from ..events.filters import get_filter
 from ..geo_mapper import Edge, load_edges, map_geo_event_to_assets
 from ..mcp_client import call_tool_json
-from .decisions import Decider, candidate_index
+from .decisions import ConstraintDecision, Decider, candidate_index
 from .ledger import SpareLedger, pairs_needed
 from .observation import build_observation, latest_issuance, lead_time_hours_for
 from .plans import PlanTranslationError, build_topology_index, plan_from_candidate
@@ -278,15 +278,19 @@ async def run_episode(
             index = await build_topology_index(client)
             # What EXISTS before decision 2 narrows it. One call per acting
             # hour, reused across every iteration -- it does not depend on
-            # the decider's answer. avoid={} with the working posture, i.e.
-            # exactly ConstraintDecision's own defaults. Counted, unlike
-            # build_topology_index above it, so the trace's tool_calls stays
-            # honest (remediation spec, W3.3).
-            probe = unconstrained_menu_projection(await counting.call(
-                "route_service",
-                {"service_id": scenario.service_under_test,
-                 "protected": False, "basis": "physical", "level": "link",
-                 "best_effort": False, "avoid": {}}))
+            # the decider's answer. Derived from ConstraintDecision's own
+            # defaults (avoid={}, the working posture) rather than hand-
+            # copied as a literal, so a future change to those defaults
+            # cannot silently desync this probe from the posture the agent
+            # actually uses (whole-branch review finding I5 was exactly this
+            # trap, fixed in decisions.py; this call site had reintroduced
+            # it). Counted, unlike build_topology_index above it, so the
+            # trace's tool_calls stays honest (remediation spec, W3.3).
+            probe_args = ConstraintDecision(
+                avoid={}, reasoning="unconstrained probe"
+            ).route_service_args(scenario.service_under_test)
+            probe = unconstrained_menu_projection(
+                await counting.call("route_service", probe_args))
             record["unconstrained_menu"] = probe
             last_rejection: dict | None = None
             committed = False

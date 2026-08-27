@@ -83,7 +83,9 @@ class ForecastBlindBaseline:
             "wait", f"{self.name}: {entry['hours_ahead']}h to exposure at "
                     f"{horizon} still exceeds the {deadline}h lead time")
 
-    def constraints(self, obs, unconstrained_menu=None):
+    def constraints(self, obs: Observation,
+                    unconstrained_menu: dict | None = None
+                    ) -> ConstraintDecision:
         # Accepted and IGNORED. This policy is forecast-blind by definition
         # (see the class docstring) and Claim 1's exactly-50% arithmetic
         # depends on it staying that way.

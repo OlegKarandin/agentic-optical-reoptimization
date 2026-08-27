@@ -240,7 +240,10 @@ routing menu as it stands with nothing avoided: each entry's \
 transponder pairs. Cost vectors are not shown here; they belong to the \
 objective decision. Constraining removes entries from this list -- an entry \
 that reuses a path your `avoid` set forbids will not survive into the menu \
-you are given at the next step.
+you are given at the next step. Labels here are positions within THIS list \
+only -- the menu you receive at the objective step is renumbered from its \
+own surviving entries, so a label you see here does not necessarily name \
+the same candidate there.
 - `iteration`, `last_rejection` -- within one hour you may get up to five \
 attempts. `last_rejection` tells you why the previous attempt failed.
 - `n_services_total` and `omitted_services` -- the observation shows you the \

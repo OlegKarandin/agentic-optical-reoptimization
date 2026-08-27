@@ -173,10 +173,14 @@ python -m storm_reoptimizer.eval.suite --include-agent
 python -m storm_reoptimizer.eval.suite --include-agent --agent-rival-totals
 ```
 
-The arms write separate trace files (`eval/traces/*agent_claude-sonnet-5*`
-vs `*agent_claude-sonnet-5+rival-totals*`) and separate audit sidecars
-(`eval/traces/agent-calls.jsonl` vs `agent-calls-rival-totals.jsonl`), and
-the results table labels each row with its arm.
+The arms write separate trace files -- named
+`{scenario}-agent_claude-sonnet-5-{run}.json` for the control arm and
+`{scenario}-agent_claude-sonnet-5+rival-totals-{run}.json` for the treatment
+arm, so a glob distinguishing the control arm must stop at the trailing dash
+(`*agent_claude-sonnet-5-*`) rather than matching the bare model name, which
+is also a prefix of the treatment arm's filenames -- and separate audit
+sidecars (`eval/traces/agent-calls.jsonl` vs `agent-calls-rival-totals.jsonl`),
+and the results table labels each row with its arm.
 
 **The prediction, stated before the runs, so the reading is not chosen
 afterwards:**

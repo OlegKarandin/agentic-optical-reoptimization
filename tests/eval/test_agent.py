@@ -12,6 +12,7 @@ from storm_reoptimizer.eval.agent import (
     CONSTRAINT_TOOL, DEFAULT_MODEL, MAX_ATTEMPTS, OBJECTIVE_TOOL,
     P_CUT_ENUMERATION_THRESHOLD, SYSTEM_PROMPT, SYSTEM_PROMPT_WITH_RIVAL_TOTALS,
     TIMING_TOOL, ClaudeDecider, project_observation, strict_tool_schema,
+    _RIVAL_TOTALS_BULLET,
 )
 from storm_reoptimizer.eval.baseline import ForecastBlindBaseline
 from storm_reoptimizer.eval.decisions import (
@@ -655,6 +656,14 @@ def test_only_the_rival_totals_variant_mentions_the_totals():
     assert "non_sut_total_ecar_gbps" not in SYSTEM_PROMPT
     assert "non_sut_total_ecar_gbps" in SYSTEM_PROMPT_WITH_RIVAL_TOTALS
     assert "sut_ecar_gbps" in SYSTEM_PROMPT_WITH_RIVAL_TOTALS
+
+
+def test_the_rival_totals_variant_is_the_off_variant_plus_the_bullet():
+    # Canary on the branch's riskiest edit (the SYSTEM_PROMPT/_HEAD/_TAIL
+    # split): a future edit near either seam should fail this test loudly
+    # instead of silently corrupting a cached prompt prefix.
+    assert SYSTEM_PROMPT_WITH_RIVAL_TOTALS.replace(
+        _RIVAL_TOTALS_BULLET, "") == SYSTEM_PROMPT
 
 
 def test_both_prompt_variants_clear_the_guards():
