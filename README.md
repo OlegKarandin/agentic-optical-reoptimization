@@ -157,6 +157,52 @@ The flip-variable citation metric is a NECESSARY, NOT SUFFICIENT filter for
 "right answer, absent reason". It is entity matching, not reasoning
 verification.
 
+### The W3.2 measurement (designed, not yet run)
+
+`--agent-rival-totals` selects between two agent arms that differ in exactly
+one thing: whether the observation carries `horizon_totals` — per horizon,
+the service under test's own expected capacity at risk against the summed
+expected capacity at risk of every other service — and whether the system
+prompt describes it. Everything else, including the per-row
+`expected_capacity_at_risk_gbps` both arms carry, is identical.
+
+Run each arm once, on the same seed:
+
+```
+python -m storm_reoptimizer.eval.suite --include-agent
+python -m storm_reoptimizer.eval.suite --include-agent --agent-rival-totals
+```
+
+The arms write separate trace files (`eval/traces/*agent_claude-sonnet-5*`
+vs `*agent_claude-sonnet-5+rival-totals*`) and separate audit sidecars
+(`eval/traces/agent-calls.jsonl` vs `agent-calls-rival-totals.jsonl`), and
+the results table labels each row with its arm.
+
+**The prediction, stated before the runs, so the reading is not chosen
+afterwards:**
+
+- If the totals flip `T2b` and `T3b`, the failure was **arithmetic**: the
+  agent could make the comparison but not reliably form the operands, and
+  the fix belongs in the observation.
+- If nothing moves, the failure is **framing**: the agent never asks "who
+  else wants this spare pair?", and no amount of pre-computation helps. Only
+  then is prompt work (the spec's deferred `D5`) worth considering.
+- A partial flip is the interesting case and must be reported as one, not
+  rounded to whichever story is tidier.
+
+Whichever way it goes, the arm that ships as the default is a separate
+decision — the totals arm hands the model both operands, which a reviewer
+can fairly call handing it the answer.
+
+**One further check to make during either run, for W3.3.** Open the
+constraints records for `T3b` at hour `t1` in the audit sidecar and read the
+`reasoning`. The design's acceptance for the unconstrained-menu probe is
+that the constraints decision *references the 0-pair candidate* — the entry
+that reuses `storm-svc-1`'s current working lightpath, which the agent
+previously deleted upstream without ever seeing it. Explicitly **not** an
+acceptance criterion: that `T3b`'s label flips. That is the measurement, not
+the test.
+
 ### Reading `episodes correct` honestly
 
 The `episodes correct` column above is 1/7 for both baseline variants, not
