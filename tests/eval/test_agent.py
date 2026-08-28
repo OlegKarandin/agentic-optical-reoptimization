@@ -771,3 +771,25 @@ def test_the_agent_and_the_trace_project_the_menu_through_one_function():
     # can drift from it (run-viewer design, §5.1).
     from storm_reoptimizer.eval import runner as runner_mod
     assert agent_module._menu_for_prompt is runner_mod.menu_for_prompt
+
+
+def test_the_decider_exposes_the_payload_it_last_put_on_the_wire():
+    decider, _ = _decider()
+    assert decider.last_projection is None
+    obs = _obs(others=CLAIMANTS)
+    payload = decider._project(obs)
+    assert decider.last_projection == payload
+    assert decider.last_projection is payload
+
+
+def test_last_projection_is_telemetry_and_never_reaches_a_request():
+    # ClaudeDecider is stateless BY CONSTRUCTION -- suite.py builds one and
+    # reuses it across every episode, so per-instance memory would leak T1a's
+    # context into T2b's prompt. last_projection is write-only.
+    decider, fake = _decider(
+        FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)),
+        FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)))
+    decider.timing(_obs(others=CLAIMANTS))
+    first = fake.messages.calls[-1]
+    decider.timing(_obs(others=CLAIMANTS))
+    assert fake.messages.calls[-1]["messages"] == first["messages"]

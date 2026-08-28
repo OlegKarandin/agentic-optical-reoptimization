@@ -383,6 +383,13 @@ class ClaudeDecider:
     rollout already travels on the Observation runner.py builds (`hour`,
     `iteration`, `last_rejection`).
 
+    `last_projection` is the one piece of per-call state, and it is
+    write-only: nothing in this class ever reads it back, so it cannot leak
+    one episode's context into another's prompt. It exists because the runner
+    must record exactly what went on the wire, and only the decider knows --
+    the projection is decider-owned and a runner-side recomputation would
+    silently diverge the day it changes (run-viewer design, §5.1).
+
     `client` exists so tests can inject a fake. The real client is built
     lazily on first use, not in __init__, so constructing a decider -- which
     suite.py does before any rollout, and every unit test does -- never
@@ -404,6 +411,8 @@ class ClaudeDecider:
         self._show_rival_totals = show_rival_totals
         self._system_prompt = (SYSTEM_PROMPT_WITH_RIVAL_TOTALS
                                if show_rival_totals else SYSTEM_PROMPT)
+        # Write-only telemetry; see the class docstring.
+        self.last_projection: dict | None = None
 
     @property
     def _api(self):
@@ -528,9 +537,10 @@ class ClaudeDecider:
             handle.write(json.dumps(record, default=str) + "\n")
 
     def _project(self, obs: Observation) -> dict:
-        return project_observation(
+        self.last_projection = project_observation(
             obs, p_cut_threshold=self._p_cut_threshold,
             show_rival_totals=self._show_rival_totals)
+        return self.last_projection
 
     def timing(self, obs: Observation) -> TimingDecision:
         payload = self._project(obs)
