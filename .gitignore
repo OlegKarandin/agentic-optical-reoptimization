@@ -10,3 +10,5 @@ dist/
 .worktrees/
 eval/states/
 eval/traces/
+eval/traces-control-2026-08-28/
+eval/viewer/
