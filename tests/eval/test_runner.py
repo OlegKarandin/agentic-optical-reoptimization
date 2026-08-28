@@ -3,17 +3,24 @@ Uses a throwaway two-hour scenario written into tmp_path -- the seven real
 episodes come later and must not be needed to prove the loop works."""
 import asyncio
 import dataclasses
+import json
 import textwrap
 from pathlib import Path
 
 import pytest
 
+from storm_reoptimizer.eval import runner
 from storm_reoptimizer.eval.baseline import ForecastBlindBaseline, ScriptedDecider
 from storm_reoptimizer.eval.decisions import (
-    ConstraintDecision, ObjectiveDecision, TimingDecision,
+    ConstraintDecision,
+    ObjectiveDecision,
+    TimingDecision,
 )
 from storm_reoptimizer.eval.runner import (
-    MAX_ITERATIONS, Action, action_payloads, run_episode,
+    MAX_ITERATIONS,
+    Action,
+    action_payloads,
+    run_episode,
     unconstrained_menu_projection,
 )
 from storm_reoptimizer.eval.scenario_file import load_scenario
@@ -23,6 +30,50 @@ TOPOLOGY_PATH = (
     Path(__file__).parent.parent.parent
     / "src" / "storm_reoptimizer" / "data" / "toy_india_topology.json"
 )
+
+GEOMETRY_TOPOLOGY = {"graph": {"nodes": [
+    {"id": "satna", "lat": 24.6, "lon": 80.8},
+    {"id": "rewa", "lat": 24.5, "lon": 81.3},
+    {"id": "allahabad", "lat": 25.4, "lon": 81.8},
+    {"id": "jhansi", "lat": 25.4, "lon": 78.6},
+], "edges": []}, "srlgs": []}
+
+GEOMETRY_REPLIES = {
+    ("get_topology", "ip"): {"ip_links": [
+        {"id": "l_sr", "lightpath_id": "lp_sr"},
+        {"id": "l_ra", "lightpath_id": "lp_ra"},
+        {"id": "l_sj", "lightpath_id": "lp_sj"}]},
+    ("get_topology", "optical"): {"oms": [
+        {"id": "oms_sr", "src_node_id": "satna", "dst_node_id": "rewa",
+         "elements": ["fiber_1"]},
+        {"id": "oms_ra", "src_node_id": "rewa", "dst_node_id": "allahabad",
+         "elements": ["fiber_2"]},
+        {"id": "oms_sj", "src_node_id": "satna", "dst_node_id": "jhansi",
+         "elements": ["fiber_3"]},
+        {"id": "oms_gap", "src_node_id": "satna", "dst_node_id": "nowhere",
+         "elements": ["fiber_4"]}]},
+    ("get_lightpaths", None): [
+        {"id": "lp_sr", "oms_sequence": ["oms_sr"]},
+        {"id": "lp_ra", "oms_sequence": ["oms_ra"]},
+        {"id": "lp_sj", "oms_sequence": ["oms_sj", "oms_gap"]}],
+    ("get_services", None): {"services": [
+        {"id": "storm-svc-1", "demand_gbps": 300.0,
+         "working_path": ["l_sr", "l_ra"], "protection_path": ["l_sj"]}]},
+}
+
+
+def _geometry_call(counter):
+    async def call(name, arguments=None, **kw):
+        counter.append(name)
+        layer = (arguments or {}).get("layer")
+        return GEOMETRY_REPLIES[(name, layer)]
+    return call
+
+
+def _write_geometry_topology(tmp_path):
+    path = tmp_path / "topo.json"
+    path.write_text(json.dumps(GEOMETRY_TOPOLOGY), encoding="utf-8")
+    return path
 
 PROBE_MENU = {
     "status": "solution",
@@ -548,3 +599,48 @@ def test_lead_time_marks_an_optical_reroute_at_the_cut_hour_as_late(
         loaded_state_path, local_server_command, local_server_env))
     for action in trace.actions:
         assert action.effective_at_index >= action.hour_index
+
+
+def test_service_geometry_keeps_the_polyline_the_midpoint_came_from(tmp_path):
+    calls = []
+    geo = asyncio.run(runner.service_geometry(
+        None, _write_geometry_topology(tmp_path),
+        call=_geometry_call(calls)))
+    assert geo.paths["storm-svc-1"]["working"] == [
+        "satna", "rewa", "allahabad"]
+    assert geo.paths["storm-svc-1"]["protection"] == [
+        "satna", "jhansi", "nowhere"]
+
+
+def test_service_geometry_records_nodes_the_local_topology_lacks(tmp_path):
+    # runner.py:189's `if n in coords` guard drops unmappable nodes silently.
+    # The viewer must render such a gap rather than draw a shorter line
+    # (run-viewer design, open item 3).
+    geo = asyncio.run(runner.service_geometry(
+        None, _write_geometry_topology(tmp_path),
+        call=_geometry_call([])))
+    assert geo.unmapped_nodes["storm-svc-1"] == ["nowhere"]
+
+
+def test_service_geometry_maps_every_oms_to_its_two_endpoints(tmp_path):
+    # Resolved from the server's explicit src_node_id/dst_node_id, NEVER from
+    # the `oms_satna_rewa` name convention -- that convention happens to hold
+    # on this topology and is not a contract (run-viewer design, §5.1).
+    geo = asyncio.run(runner.service_geometry(
+        None, _write_geometry_topology(tmp_path),
+        call=_geometry_call([])))
+    assert geo.oms_nodes["oms_sr"] == ["satna", "rewa"]
+    assert len(geo.oms_nodes) == 4
+
+
+def test_service_points_is_unchanged_and_still_costs_four_calls(tmp_path):
+    path = _write_geometry_topology(tmp_path)
+    calls = []
+    points = asyncio.run(runner.service_points(
+        None, path, call=_geometry_call(calls)))
+    # Midpoint over the WORKING path's deduped nodes only -- protection must
+    # not move it, or every recorded p_cut in the suite shifts.
+    assert points["storm-svc-1"] == pytest.approx(
+        ((24.6 + 24.5 + 25.4) / 3, (80.8 + 81.3 + 81.8) / 3))
+    assert calls == ["get_topology", "get_topology", "get_lightpaths",
+                     "get_services"]

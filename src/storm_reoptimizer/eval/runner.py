@@ -147,19 +147,39 @@ class _CountingClient:
         return await call_tool_json(self.client, name, arguments, **kw)
 
 
-async def service_points(client: Client, topology_path: str | Path, *,
-                         call=None) -> dict[str, tuple[float, float]]:
-    """A representative (lat, lon) per service: the midpoint of its working
-    path's node coordinates. This is what turns a cone centre into a per-
-    service offset, and it is derived from the SERVER's view of the service
-    plus the LOCAL topology's coordinates -- the same split the geo mapper
-    already uses.
+@dataclass(frozen=True)
+class ServiceGeometry:
+    """One hour's read of where every service physically rides.
 
-    `call` is an optional async `(name, arguments=None, **kw)` replacement for
-    the four tool calls. run_episode passes its `_CountingClient.call` so the
-    per-hour re-read shows up in the trace's `tool_calls` instead of happening
-    off the books; every other caller (derived.py, tools/probe_episode.py)
-    keeps the plain-client behaviour by leaving it None."""
+    `points` is what build_observation consumes -- the averaged midpoint the
+    exposure arithmetic reduces each service to. `paths` is the polyline that
+    midpoint came from, and the two disagree in ways that matter: D1's SUT
+    sits 58.4 km off a 7.5 km half-width cone -- outside the polygon -- at
+    p_cut 0.976. A viewer drawing only paths would make D1 look like a harness
+    bug; one drawing only dots would hide why it isn't (run-viewer design,
+    "Draw the path, mark the point").
+
+    `unmapped_nodes` exists because runner.py's coordinate lookup drops any
+    node the LOCAL topology lacks. All 180 edges resolve today, so it is
+    normally empty -- but a service whose path is partly unmappable would
+    otherwise get a midpoint computed from the mappable half, silently."""
+    points: dict[str, tuple[float, float]]
+    # service_id -> {"working": [node_id, ...], "protection": [node_id, ...]}
+    paths: dict[str, dict[str, list[str]]]
+    # oms_id -> [src_node_id, dst_node_id]
+    oms_nodes: dict[str, list[str]]
+    unmapped_nodes: dict[str, list[str]]
+
+
+async def service_geometry(client: Client, topology_path: str | Path, *,
+                           call=None) -> ServiceGeometry:
+    """Everything the four per-hour reads already know about where services
+    ride. `service_points` is this function's `points` field and nothing more;
+    the rest was computed and discarded before (run-viewer design, §5.1).
+
+    No new server calls: the same four, in the same order, so a trace's
+    `tool_calls` figure stays comparable with every run recorded before this
+    change."""
     invoke = call if call is not None else partial(call_tool_json, client)
     raw = json.loads(Path(topology_path).read_text(encoding="utf-8-sig"))
     coords = {n["id"]: (n["lat"], n["lon"]) for n in raw["graph"]["nodes"]}
@@ -172,26 +192,61 @@ async def service_points(client: Client, topology_path: str | Path, *,
     oms_seq_by_lp = {lp["id"]: lp["oms_sequence"] for lp in lightpaths}
     lp_by_link = {lnk["id"]: lnk.get("lightpath_id")
                   for lnk in ip["ip_links"]}
+    oms_nodes = {o["id"]: [o["src_node_id"], o["dst_node_id"]]
+                 for o in optical["oms"]}
 
-    points: dict[str, tuple[float, float]] = {}
-    for svc in services["services"]:
+    def walk(link_ids) -> list[str]:
+        # Dedupe before returning: a node shared between two adjacent OMS legs
+        # (any interior junction on a multi-hop path) would otherwise be
+        # counted once per adjacent leg and skew the representative point
+        # toward it -- see task-9-report.md's fix-report section.
         nodes: list[str] = []
-        for link_id in svc["working_path"]:
+        for link_id in link_ids or ():
             lp_id = lp_by_link.get(link_id)
             for oms_id in oms_seq_by_lp.get(lp_id, []):
                 oms = oms_by_id[oms_id]
                 nodes.extend([oms["src_node_id"], oms["dst_node_id"]])
-        # Dedupe before averaging: a node shared between two adjacent OMS
-        # legs (any interior junction on a multi-hop path) would otherwise
-        # be counted once per adjacent leg and skew the representative
-        # point toward it -- see task-9-report.md's fix-report section.
-        nodes = list(dict.fromkeys(nodes))
-        known = [coords[n] for n in nodes if n in coords]
+        return list(dict.fromkeys(nodes))
+
+    points: dict[str, tuple[float, float]] = {}
+    paths: dict[str, dict[str, list[str]]] = {}
+    unmapped: dict[str, list[str]] = {}
+    for svc in services["services"]:
+        working = walk(svc["working_path"])
+        protection = walk(svc.get("protection_path"))
+        paths[svc["id"]] = {"working": working, "protection": protection}
+        missing = [n for n in dict.fromkeys(working + protection)
+                   if n not in coords]
+        if missing:
+            unmapped[svc["id"]] = missing
+        known = [coords[n] for n in working if n in coords]
         if not known:
             continue
         points[svc["id"]] = (sum(p[0] for p in known) / len(known),
                              sum(p[1] for p in known) / len(known))
-    return points
+    return ServiceGeometry(points=points, paths=paths, oms_nodes=oms_nodes,
+                           unmapped_nodes=unmapped)
+
+
+async def service_points(client: Client, topology_path: str | Path, *,
+                         call=None) -> dict[str, tuple[float, float]]:
+    """A representative (lat, lon) per service: the midpoint of its working
+    path's node coordinates. This is what turns a cone centre into a per-
+    service offset, and it is derived from the SERVER's view of the service
+    plus the LOCAL topology's coordinates -- the same split the geo mapper
+    already uses.
+
+    `call` is an optional async `(name, arguments=None, **kw)` replacement for
+    the four tool calls. run_episode passes its `_CountingClient.call` so the
+    per-hour re-read shows up in the trace's `tool_calls` instead of happening
+    off the books; every other caller (derived.py, tools/probe_episode.py)
+    keeps the plain-client behaviour by leaving it None.
+
+    Now a thin projection of `service_geometry`, which keeps the polyline this
+    function averages away. The signature and return type are deliberately
+    unchanged: derived.py and tools/probe_episode.py call it and neither wants
+    the geometry."""
+    return (await service_geometry(client, topology_path, call=call)).points
 
 
 async def _define_horizon_risk_groups(
