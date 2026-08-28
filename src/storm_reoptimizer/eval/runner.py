@@ -114,6 +114,26 @@ def unconstrained_menu_projection(menu: dict) -> dict:
                                menu.get("candidates") or [])]}
 
 
+def menu_for_prompt(menu: dict) -> dict:
+    """The routing menu with two derived fields per candidate: the label the
+    objective decision must answer with, and `pairs_needed` -- the candidate's
+    OWN spare cost (ledger.pairs_needed), which cost_vector["transponders"] is
+    not.
+
+    Lives here rather than in agent.py because BOTH readers need it: the model
+    reads it at decision 3, and the trace records it so a rollout can be read
+    afterwards. One function so the two can never disagree (run-viewer design,
+    §5.1). Contrast unconstrained_menu_projection above, which strips the cost
+    vector on purpose -- that one is shown to decision 2, this one to decision
+    3."""
+    projected = dict(menu)
+    projected["candidates"] = [
+        {**candidate, "candidate_label": f"candidate_{i}",
+         "pairs_needed": pairs_needed(candidate)}
+        for i, candidate in enumerate(menu.get("candidates") or [])]
+    return projected
+
+
 @dataclass(frozen=True)
 class EpisodeTrace:
     scenario_id: str

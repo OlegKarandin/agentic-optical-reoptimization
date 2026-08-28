@@ -644,3 +644,28 @@ def test_service_points_is_unchanged_and_still_costs_four_calls(tmp_path):
         ((24.6 + 24.5 + 25.4) / 3, (80.8 + 81.3 + 81.8) / 3))
     assert calls == ["get_topology", "get_topology", "get_lightpaths",
                      "get_services"]
+
+
+def test_menu_for_prompt_adds_the_label_and_the_pair_cost_and_keeps_the_rest():
+    menu = {"status": "solution", "candidates": [
+        {"lever": "ip_reroute", "reused_lightpaths": ["lp_1"],
+         "new_lightpaths": [], "restored_gbps": 300.0, "shortfall_gbps": 0.0,
+         "cost_vector": {"transponders": 418.0}},
+        {"lever": "optical_reroute", "reused_lightpaths": [],
+         "new_lightpaths": [{"oms_sequence": ["oms_sj"], "lam": 3,
+                             "mode_id": "m1", "gsnr_db": 17.0,
+                             "bitrate_gbps": 400.0}],
+         "restored_gbps": 300.0, "shortfall_gbps": 0.0,
+         "cost_vector": {"transponders": 420.0}}]}
+    out = runner.menu_for_prompt(menu)
+    assert out["status"] == "solution"
+    assert [c["candidate_label"] for c in out["candidates"]] == [
+        "candidate_0", "candidate_1"]
+    assert [c["pairs_needed"] for c in out["candidates"]] == [0, 1]
+    # Unlike unconstrained_menu_projection, this one keeps the cost vector --
+    # it is what decision 3 weighs.
+    assert out["candidates"][0]["cost_vector"] == {"transponders": 418.0}
+    assert menu["candidates"][0] == {
+        "lever": "ip_reroute", "reused_lightpaths": ["lp_1"],
+        "new_lightpaths": [], "restored_gbps": 300.0, "shortfall_gbps": 0.0,
+        "cost_vector": {"transponders": 418.0}}     # no mutation

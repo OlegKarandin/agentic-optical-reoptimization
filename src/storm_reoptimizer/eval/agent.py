@@ -36,8 +36,8 @@ from .decisions import (
     OBJECTIVE_JSON_SCHEMA, ObjectiveDecision, TIMING_JSON_SCHEMA,
     TimingDecision,
 )
-from .ledger import pairs_needed
 from .observation import Observation
+from .runner import menu_for_prompt as _menu_for_prompt
 
 # See the module docstring: scenarios/T3a.yaml's t3 cone comment. Keyed on
 # p_cut rather than cone containment because D1 is built to punish the
@@ -371,19 +371,6 @@ CONSTRAINT_INSTRUCTION = (
 OBJECTIVE_INSTRUCTION = (
     f"Choose one candidate from the menu above by its `candidate_label`, or "
     f"`infeasible`, then call `{OBJECTIVE_TOOL}`.")
-
-
-def _menu_for_prompt(menu: dict) -> dict:
-    """The routing menu with two derived fields per candidate: the label the
-    objective decision must answer with, and `pairs_needed` -- the
-    candidate's OWN spare cost (ledger.pairs_needed), which
-    cost_vector["transponders"] is not."""
-    projected = dict(menu)
-    projected["candidates"] = [
-        {**candidate, "candidate_label": f"candidate_{i}",
-         "pairs_needed": pairs_needed(candidate)}
-        for i, candidate in enumerate(menu.get("candidates") or [])]
-    return projected
 
 
 class ClaudeDecider:

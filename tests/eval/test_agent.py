@@ -764,3 +764,10 @@ def test_the_anthropic_sdk_is_an_optional_extra_not_a_hard_dependency():
     project = data["project"]
     assert project["optional-dependencies"]["agent"] == ["anthropic>=0.40"]
     assert not any(d.startswith("anthropic") for d in project["dependencies"])
+
+
+def test_the_agent_and_the_trace_project_the_menu_through_one_function():
+    # The recorded menu must BE what the model read, not a re-derivation that
+    # can drift from it (run-viewer design, §5.1).
+    from storm_reoptimizer.eval import runner as runner_mod
+    assert agent_module._menu_for_prompt is runner_mod.menu_for_prompt
