@@ -134,6 +134,47 @@ def menu_for_prompt(menu: dict) -> dict:
     return projected
 
 
+def _visible_services(obs) -> list[str]:
+    """Services with a nonzero cut probability at any horizon of this hour's
+    issuance.
+
+    Deliberately WIDER than the agent's p_cut_threshold projection: the viewer
+    must be able to show a service the agent was not shown, because the gap
+    between what was true and what was projected is the subject of the
+    eval-fairness design. The typical hour has two such services against 571
+    at max_p_cut 0.0, so the trimmed record stays small (run-viewer design,
+    §5.1)."""
+    return sorted(
+        svc for svc, per_horizon in obs.exposure.items()
+        if any(float(entry["p_cut"]) > 0.0
+               for entry in per_horizon.values()))
+
+
+def observation_record(obs, geometry: ServiceGeometry) -> dict:
+    """The hour's ground truth: what was actually the case, as against
+    `projected`, which is what the decider was shown. Store BOTH -- a trace
+    with only the projection cannot show the gap, and one with only the truth
+    cannot show what the agent read (run-viewer design, "Principle").
+
+    `horizon_totals` is kept WHOLE while the rows are trimmed: it is already
+    summed over the full roster, and a total silently covering only the
+    visible rows "would be worse than no total at all" (observation.py:70)."""
+    visible = _visible_services(obs)
+    payload = obs.to_dict()
+    payload["exposure"] = {s: payload["exposure"][s] for s in visible}
+    payload["services"] = [row for row in payload["services"]
+                           if row["id"] in visible]
+    return {
+        "observation": payload,
+        "service_points": {s: list(geometry.points[s]) for s in visible
+                           if s in geometry.points},
+        "service_paths": {s: geometry.paths[s] for s in visible
+                          if s in geometry.paths},
+        "unmapped_nodes": {s: geometry.unmapped_nodes[s] for s in visible
+                           if s in geometry.unmapped_nodes},
+    }
+
+
 @dataclass(frozen=True)
 class EpisodeTrace:
     scenario_id: str
@@ -148,6 +189,12 @@ class EpisodeTrace:
     affected_by_hour: dict[str, tuple[str, ...]]
     tool_calls: int
     wall_clock_s: float
+    # oms_id -> [src_node_id, dst_node_id], the static optical adjacency the
+    # viewer needs to draw a candidate's route from its `new_lightpaths[]
+    # .oms_sequence`. Once per episode, from the get_topology(layer="optical")
+    # call service_geometry already makes. Defaulted so the positional
+    # constructions in tests/eval/test_scoring.py keep working.
+    oms_nodes: dict[str, list[str]] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {**asdict(self),
@@ -328,8 +375,9 @@ async def run_episode(
         # run that the lightpath it had committed an hour earlier, precisely
         # to escape a cone, was still inside it (remediation spec, F4).
         # Costs four tool calls an hour, counted through `counting`.
-        points = await service_points(client, topology_path,
-                                      call=counting.call)
+        geometry = await service_geometry(client, topology_path,
+                                          call=counting.call)
+        points = geometry.points
         services = tuple((await counting.call("get_services"))["services"])
         # The roster scoring reads to know who could have survived -- the
         # final simulate_ip_routing reports links, not services.
@@ -346,8 +394,14 @@ async def run_episode(
 
         obs = build_observation(scenario, hour, risk_group_ids=rg_ids,
                                 **obs_kwargs)
+        record.update(observation_record(obs, geometry))
         timing = decider.timing(obs)
         record["timing"] = timing.to_dict()
+        # What the DECIDER was shown, as against the ground truth above. Read
+        # off the decider rather than recomputed: the projection is
+        # decider-owned and a recomputation would silently diverge the day it
+        # changes. Baselines have none and honestly record null.
+        record["projected"] = getattr(decider, "last_projection", None)
 
         if timing.action == "act":
             index = await build_topology_index(client)
@@ -386,6 +440,14 @@ async def run_episode(
                         "constraints": constraints.to_dict(),
                         "menu_status": menu.get("status"),
                         "menu_size": len(menu.get("candidates") or []),
+                        # The full candidate list decision 3 weighed -- cost
+                        # vector, restored/shortfall, and the OMS sequences
+                        # the viewer draws a route from. Recorded through the
+                        # SAME function the prompt uses (menu_for_prompt), so
+                        # the two cannot disagree.
+                        "menu": menu_for_prompt(menu),
+                        "projected": getattr(decider, "last_projection",
+                                             None),
                         "objective": choice.to_dict()}
                 record["iterations"].append(step)
 
@@ -500,7 +562,8 @@ async def run_episode(
         ledger_debits=tuple(ledger.debits), spares_remaining=ledger.on_hand,
         terminal_status=terminal_status, final_routing=final_routing,
         affected_by_hour=affected_by_hour, tool_calls=counting.calls,
-        wall_clock_s=round(time.monotonic() - started, 3))
+        wall_clock_s=round(time.monotonic() - started, 3),
+        oms_nodes=geometry.oms_nodes)
 
     if trace_path is not None:
         path = Path(trace_path)

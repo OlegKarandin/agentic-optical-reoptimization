@@ -16,6 +16,7 @@ from storm_reoptimizer.eval.decisions import (
     ObjectiveDecision,
     TimingDecision,
 )
+from storm_reoptimizer.eval.observation import Observation
 from storm_reoptimizer.eval.runner import (
     MAX_ITERATIONS,
     Action,
@@ -23,7 +24,7 @@ from storm_reoptimizer.eval.runner import (
     run_episode,
     unconstrained_menu_projection,
 )
-from storm_reoptimizer.eval.scenario_file import load_scenario
+from storm_reoptimizer.eval.scenario_file import ConeAtHorizon, Issuance, load_scenario
 from storm_reoptimizer.mcp_client import connect_server
 
 TOPOLOGY_PATH = (
@@ -669,3 +670,146 @@ def test_menu_for_prompt_adds_the_label_and_the_pair_cost_and_keeps_the_rest():
         "lever": "ip_reroute", "reused_lightpaths": ["lp_1"],
         "new_lightpaths": [], "restored_gbps": 300.0, "shortfall_gbps": 0.0,
         "cost_vector": {"transponders": 418.0}}     # no mutation
+
+
+# Measured, not computed, against SMOKE + ForecastBlindBaseline("immediate")
+# BEFORE task A4's recording changes landed (task-A4-brief.md, Step 1): run
+# the pre-change suite and read off the number it actually reports. Pinning
+# this is what test_recording_costs_no_extra_server_calls below is for --
+# recording the hour's observation/menu/geometry must add zero calls to the
+# already-counted call sites.
+EXPECTED_TOOL_CALLS_IMMEDIATE_BASELINE = 22
+
+
+def _observation_with_exposure(exposure: dict, *, sut: str = "storm-svc-1",
+                                horizon_totals: dict | None = None
+                                ) -> Observation:
+    """A bare Observation carrying exactly the exposure map the caller gives
+    -- test_agent.py's `_obs` pattern, but the exposure dict is the whole
+    point of the call rather than incidental setup. `_visible_services` and
+    `observation_record` only ever read `p_cut` off each per-horizon entry
+    and pass the rest through verbatim, so entries need no other keys.
+
+    `horizon_totals` defaults to an obviously-synthetic sentinel, deliberately
+    NOT derivable from `exposure` -- so a test asserting the trimmed record's
+    `horizon_totals` still equals `obs.horizon_totals` is proof the value
+    survived untouched, not proof two independent computations happened to
+    agree."""
+    horizons = sorted({h for per_horizon in exposure.values()
+                       for h in per_horizon})
+    services = tuple({"id": svc, "demand_gbps": 100.0} for svc in exposure)
+    return Observation(
+        scenario_id="TEST", service_under_test=sut, hour="t0",
+        hour_index=0, hours_remaining=1,
+        issuance=Issuance(issued_at="t0", horizons={
+            h: ConeAtHorizon(cone={"type": "Polygon", "coordinates": []},
+                             width_km=100.0, center={"lat": 0.0, "lon": 0.0})
+            for h in horizons}),
+        exposure=exposure, services=services, spares_on_hand=1,
+        lead_time_hours=1, risk_group_ids={h: f"rg_{h}" for h in horizons},
+        horizon_totals=(horizon_totals if horizon_totals is not None else
+                        {"sentinel_horizon": {"sut_ecar_gbps": 42.0,
+                                              "non_sut_total_ecar_gbps": 99.0}}))
+
+
+def _scripted_acting_decider() -> ScriptedDecider:
+    """Always acts, constrains nothing, and takes the menu's first candidate
+    -- the shape test_the_loop_caps_at_five_iterations already proves finds
+    real candidates against SMOKE under avoid={}. Used where a test needs a
+    committed hour with a real, full routing menu on record, not just a
+    baseline's fixed policy."""
+    return ScriptedDecider(
+        "scripted-acting",
+        default_timing=TimingDecision("act", "always act"),
+        default_constraints=ConstraintDecision(avoid={}, reasoning="none"),
+        default_objective=ObjectiveDecision(
+            "candidate_0", None, "take the first entry"))
+
+
+async def _run_episode_with(decider, *, scenario, state_path, server_command,
+                            server_env):
+    """`_run` above, generalized over decider and scenario: every A4 test
+    needs a real rollout against SMOKE (or a variant of it) with a decider
+    the existing fixtures don't already parametrize `_run` for."""
+    async with connect_server(
+        TOPOLOGY_PATH, server_command=server_command, env=server_env,
+        extra_args=["--state", str(state_path)],
+    ) as client:
+        return await run_episode(client, scenario, decider,
+                                 topology_path=TOPOLOGY_PATH)
+
+
+def test_visible_services_are_those_with_any_nonzero_cut_probability():
+    obs = _observation_with_exposure({
+        "storm-svc-1": {"t2": {"p_cut": 0.0}, "t6": {"p_cut": 0.52}},
+        "d0004":       {"t2": {"p_cut": 0.12}, "t6": {"p_cut": 0.0}},
+        "d9999":       {"t2": {"p_cut": 0.0},  "t6": {"p_cut": 0.0}}})
+    assert runner._visible_services(obs) == ["d0004", "storm-svc-1"]
+
+
+def test_the_hour_record_keeps_the_totals_whole_while_trimming_the_rows():
+    obs = _observation_with_exposure({
+        "storm-svc-1": {"t2": {"p_cut": 0.4}},
+        "unexposed-svc": {"t2": {"p_cut": 0.0}}})
+    geo = runner.ServiceGeometry(
+        points={"storm-svc-1": (24.6, 80.8)},
+        paths={"storm-svc-1": {"working": ["satna", "rewa"],
+                               "protection": ["satna", "jhansi"]}},
+        oms_nodes={}, unmapped_nodes={})
+    rec = runner.observation_record(obs, geo)
+    assert sorted(rec["observation"]["exposure"]) == ["storm-svc-1"]
+    assert rec["observation"]["horizon_totals"] == obs.horizon_totals
+    assert rec["service_points"]["storm-svc-1"] == [24.6, 80.8]
+    assert rec["service_paths"]["storm-svc-1"]["protection"] == [
+        "satna", "jhansi"]
+
+
+def test_the_trace_records_the_projection_the_decider_reported(
+    tmp_path, loaded_state_path, local_server_command, local_server_env,
+):
+    # Baselines have no projection and honestly record null; getattr gets
+    # that without extending the Decider protocol (run-viewer design, §5.1).
+    trace = asyncio.run(_run_episode_with(
+        ForecastBlindBaseline("immediate"), scenario=_scenario(tmp_path),
+        state_path=loaded_state_path, server_command=local_server_command,
+        server_env=local_server_env))
+    assert all(h["projected"] is None for h in trace.hours)
+
+
+def test_the_trace_records_the_full_menu_decision_three_weighed(
+    tmp_path, loaded_state_path, local_server_command, local_server_env,
+):
+    trace = asyncio.run(_run_episode_with(
+        _scripted_acting_decider(), scenario=_scenario(tmp_path),
+        state_path=loaded_state_path, server_command=local_server_command,
+        server_env=local_server_env))
+    acting = next(h for h in trace.hours if h.get("committed") is not None)
+    menu = acting["iterations"][0]["menu"]
+    assert "cost_vector" in menu["candidates"][0]
+    assert menu["candidates"][0]["candidate_label"] == "candidate_0"
+    # unconstrained_menu still strips it -- the two projections are different
+    # on purpose.
+    assert "cost_vector" not in acting["unconstrained_menu"]["candidates"][0]
+
+
+def test_the_trace_root_carries_the_oms_endpoint_map(
+    tmp_path, loaded_state_path, local_server_command, local_server_env,
+):
+    trace = asyncio.run(_run_episode_with(
+        ForecastBlindBaseline("immediate"), scenario=_scenario(tmp_path),
+        state_path=loaded_state_path, server_command=local_server_command,
+        server_env=local_server_env))
+    assert trace.oms_nodes
+    assert all(len(v) == 2 for v in trace.oms_nodes.values())
+
+
+def test_recording_costs_no_extra_server_calls(
+    tmp_path, loaded_state_path, local_server_command, local_server_env,
+):
+    # Verification item 7 of the run-viewer design, and the one that would
+    # quietly invalidate a comparison if it failed.
+    trace = asyncio.run(_run_episode_with(
+        ForecastBlindBaseline("immediate"), scenario=_scenario(tmp_path),
+        state_path=loaded_state_path, server_command=local_server_command,
+        server_env=local_server_env))
+    assert trace.tool_calls == EXPECTED_TOOL_CALLS_IMMEDIATE_BASELINE
