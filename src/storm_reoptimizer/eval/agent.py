@@ -62,7 +62,6 @@ def _peak_capacity_at_risk_gbps(per_horizon: dict) -> float:
 def project_observation(
     obs: Observation, *,
     p_cut_threshold: float = P_CUT_ENUMERATION_THRESHOLD,
-    show_rival_totals: bool = False,
 ) -> dict:
     """`obs.to_dict()` reduced to decision-relevant content, plus an explicit
     account of what was dropped.
@@ -75,14 +74,7 @@ def project_observation(
     `omitted_services["count"]` is over the server's full roster (a service
     with no representative point has no exposure entry at all and is counted
     here); the two risk figures are over the omitted services that do have
-    exposure, and contribute 0.0 for the rest.
-
-    `show_rival_totals` decides whether the agent is handed `horizon_totals`
-    -- per horizon, its own expected capacity at risk against everyone
-    else's, already summed. Off by default: it is the closest field in this
-    project to fitting the test, because it reduces the judgement to
-    comparing two printed numbers. The two arms exist to measure whether
-    that reduction changes anything (remediation spec, W3.2)."""
+    exposure, and contribute 0.0 for the rest."""
     payload = obs.to_dict()
     exposure = payload["exposure"]
 
@@ -107,12 +99,6 @@ def project_observation(
             sum(_peak_capacity_at_risk_gbps(exposure[svc])
                 for svc in omitted), 3),
     }
-    if not show_rival_totals:
-        # The control arm of W3.2's measurement. `payload` is a fresh dict
-        # from obs.to_dict(), so popping a top-level key here cannot touch
-        # the Observation -- unlike payload["exposure"], whose inner dicts
-        # are aliases of the caller's.
-        payload.pop("horizon_totals", None)
     return payload
 
 
@@ -171,9 +157,13 @@ TIMING_TOOL = "submit_timing_decision"
 CONSTRAINT_TOOL = "submit_constraint_decision"
 OBJECTIVE_TOOL = "submit_objective_decision"
 
-# The prompt is assembled from two halves so the W3.2 arm can insert one
-# bullet in the right place. Concatenated, they are byte-identical to the
-# single literal that preceded them -- diff them before believing otherwise.
+# The prompt is assembled from three literals -- not re-flowed into one --
+# because `_RIVAL_TOTALS_BULLET` has to slot into the "What you can see"
+# list below as its own bullet, right after `omitted_services` and before
+# the "## The three decisions" section starts. Concatenated, HEAD +
+# _RIVAL_TOTALS_BULLET + TAIL is byte-identical to what the now-removed
+# rival-totals arm used to send -- diff against that before believing
+# otherwise if either seam is ever touched again.
 _SYSTEM_PROMPT_HEAD = """\
 You are the restoration decision-maker for a multi-layer IP-over-optical \
 network during a tropical storm.
@@ -347,8 +337,7 @@ every concept above while explaining no decision is worse than two sentences \
 that state the comparison you actually made.
 """
 
-SYSTEM_PROMPT = _SYSTEM_PROMPT_HEAD + _SYSTEM_PROMPT_TAIL
-SYSTEM_PROMPT_WITH_RIVAL_TOTALS = (
+SYSTEM_PROMPT = (
     _SYSTEM_PROMPT_HEAD + _RIVAL_TOTALS_BULLET + _SYSTEM_PROMPT_TAIL)
 
 
@@ -415,20 +404,15 @@ class ClaudeDecider:
 
     def __init__(self, model: str = DEFAULT_MODEL, *, client=None,
                  p_cut_threshold: float = P_CUT_ENUMERATION_THRESHOLD,
-                 audit_path: str | Path | None = None,
-                 show_rival_totals: bool = False) -> None:
+                 audit_path: str | Path | None = None) -> None:
         self.model = model
-        # The arm is part of the identity, not a setting: suite.run_suite keys
-        # its results dict AND the trace filename on `name`, so two arms
-        # sharing one would overwrite each other (remediation spec, W3.2).
-        self.name = (f"agent:{model}+rival-totals" if show_rival_totals
-                     else f"agent:{model}")
+        # suite.run_suite keys its results dict AND the trace filename on
+        # `name`.
+        self.name = f"agent:{model}"
         self._client = client
         self._p_cut_threshold = p_cut_threshold
         self._audit_path = Path(audit_path) if audit_path else None
-        self._show_rival_totals = show_rival_totals
-        self._system_prompt = (SYSTEM_PROMPT_WITH_RIVAL_TOTALS
-                               if show_rival_totals else SYSTEM_PROMPT)
+        self._system_prompt = SYSTEM_PROMPT
         # Write-only telemetry; see the class docstring.
         self.last_projection: dict | None = None
 
@@ -563,9 +547,6 @@ class ClaudeDecider:
             "shown_expected_capacity_at_risk_gbps": {
                 svc: round(_peak_capacity_at_risk_gbps(per_horizon), 3)
                 for svc, per_horizon in payload["exposure"].items()},
-            # Which W3.2 arm produced this call. Recorded per call so a
-            # sidecar can never be misattributed to the wrong arm.
-            "rival_totals_shown": self._show_rival_totals,
             "omitted_services": payload["omitted_services"],
             "n_services_total": payload["n_services_total"],
             "result": decision.to_dict(),
@@ -576,8 +557,7 @@ class ClaudeDecider:
 
     def _project(self, obs: Observation) -> dict:
         self.last_projection = project_observation(
-            obs, p_cut_threshold=self._p_cut_threshold,
-            show_rival_totals=self._show_rival_totals)
+            obs, p_cut_threshold=self._p_cut_threshold)
         return self.last_projection
 
     def timing(self, obs: Observation) -> TimingDecision:

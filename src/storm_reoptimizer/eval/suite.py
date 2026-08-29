@@ -33,9 +33,6 @@ RUNS_PER_EPISODE = 3
 REPO_ROOT = Path(__file__).parent.parent.parent.parent
 TRACES_DIR = REPO_ROOT / "eval" / "traces"
 AGENT_AUDIT_PATH = TRACES_DIR / "agent-calls.jsonl"
-# _audit appends, so the two W3.2 arms must not share a sidecar or the log
-# becomes unattributable (remediation spec, W3.2).
-AGENT_RIVALS_AUDIT_PATH = TRACES_DIR / "agent-calls-rival-totals.jsonl"
 
 
 def _redact_volatile_ids(trace_dict: dict) -> dict:
@@ -138,10 +135,8 @@ def render_results_table(results: dict) -> str:
         if name.startswith("baseline:"):
             note = ("fixed policy: same input in both halves, so exactly one "
                     "half per pair")
-        elif name.endswith("+rival-totals"):
-            note = "agent arm: shown the per-horizon rival/SUT ECAR totals"
         elif name.startswith("agent:"):
-            note = "agent arm: derives the rival/SUT comparison itself"
+            note = "agent arm: shown the per-horizon rival/actionable ECAR totals"
         else:
             note = ""
         lines.append(f"| {name} | {summary['pair_solved']:.2f} | "
@@ -185,13 +180,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--agent-model", default=DEFAULT_MODEL,
         help=f"Model for --include-agent (default: {DEFAULT_MODEL}).")
-    p.add_argument(
-        "--agent-rival-totals", action="store_true",
-        help="Run the agent arm that is SHOWN the per-horizon rival/SUT "
-             "expected-capacity-at-risk totals, instead of the arm that "
-             "must derive them. Requires --include-agent. Run the suite "
-             "once each way to measure whether the agent's failure is "
-             "arithmetic or framing.")
     return p
 
 
@@ -203,10 +191,7 @@ def build_deciders(args: argparse.Namespace) -> list:
                 ForecastBlindBaseline("at_deadline")]
     if args.include_agent:
         deciders.append(ClaudeDecider(
-            model=args.agent_model,
-            show_rival_totals=args.agent_rival_totals,
-            audit_path=(AGENT_RIVALS_AUDIT_PATH if args.agent_rival_totals
-                        else AGENT_AUDIT_PATH)))
+            model=args.agent_model, audit_path=AGENT_AUDIT_PATH))
     return deciders
 
 
