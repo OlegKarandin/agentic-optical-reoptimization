@@ -406,17 +406,45 @@ function drawService(id, hour, opts) {
 
 function drawCandidate(candidate, omsNodes) {
     clearLayer('candidate');
+    omsNodes = omsNodes || {};
+
+    // reused_lightpaths are bare lightpath-id strings in every trace on
+    // disk today, never {oms_sequence} objects, and this payload carries
+    // no lightpath -> OMS map to resolve them -- a genuine payload-shape
+    // gap, not something fixable here. Track whether any reused leg fails
+    // to resolve, so a candidate that mixes an unresolvable reused leg
+    // with a resolvable new leg does not silently draw the new leg alone
+    // as if it were the WHOLE route.
     const omsSeq = [];
+    let unresolvedReused = false;
     for (const lp of candidate.reused_lightpaths || []) {
-        if (lp && lp.oms_sequence) omsSeq.push(...lp.oms_sequence);
-        else if (typeof lp === 'string') omsSeq.push(lp);
+        const seq = (lp && lp.oms_sequence) ? lp.oms_sequence
+            : (typeof lp === 'string' ? [lp] : null);
+        if (!seq) { unresolvedReused = true; continue; }
+        for (const oms of seq) {
+            if (omsNodes[oms]) omsSeq.push(oms);
+            else unresolvedReused = true;
+        }
     }
     for (const lp of candidate.new_lightpaths || []) {
         omsSeq.push(...(lp.oms_sequence || []));
     }
+
+    if (unresolvedReused) {
+        // Honestly-empty rather than plausibly-partial: say why, draw
+        // nothing that could be mistaken for the full route.
+        const note = svgEl('text', {
+            x: 10, y: 20, fill: '#a33', 'font-size': 12,
+        });
+        note.textContent = 'candidate route incomplete: a reused ' +
+            'lightpath has no OMS geometry in this payload';
+        layer('candidate').appendChild(note);
+        return;
+    }
+
     const nodeSeq = [];
     for (const oms of omsSeq) {
-        const pair = (omsNodes || {})[oms];
+        const pair = omsNodes[oms];
         if (!pair) continue;
         if (nodeSeq.length === 0) nodeSeq.push(pair[0]);
         else if (nodeSeq[nodeSeq.length - 1] !== pair[0]) nodeSeq.push(pair[0]);
@@ -517,23 +545,26 @@ function renderSaw(hour) {
     }
     el.appendChild(table);
 
-    const totals = (hour.observation || {}).horizon_totals || {};
+    const obs = hour.observation || {};
+    const totals = obs.horizon_totals || {};
     const totalsPre = document.createElement('pre');
     totalsPre.className = 'reasoning';
     totalsPre.textContent = 'horizon_totals: ' + JSON.stringify(totals, null, 1);
     el.appendChild(totalsPre);
 
-    const run = currentRun();
+    // Every field below is Observation.to_dict()'s own per-hour ledger
+    // state -- what the agent actually knew going into THIS hour, not a
+    // run-final scalar (spares_remaining) or a flat episode constant
+    // (the YAML's initial spares_on_hand / lead_time_hours). Nothing here
+    // is recomputed from run.actions.
     const misc = document.createElement('pre');
     misc.className = 'reasoning';
     misc.textContent =
-        `spares_on_hand: ${run ? currentEpisode().spares_on_hand : ''}\n` +
-        `spares_remaining: ${run ? run.spares_remaining : ''}\n` +
-        `lead_time_hours: ${run ? currentEpisode().lead_time_hours : ''}\n` +
-        `risk_group_ids: ${JSON.stringify(
-            (hour.observation || {}).risk_group_ids || {})}\n` +
-        `actions_taken: ${JSON.stringify(
-            (run ? run.actions : []).filter(a => a.hour === hour.hour))}`;
+        `spares_on_hand: ${JSON.stringify(obs.spares_on_hand)}\n` +
+        `spares_spent: ${JSON.stringify(obs.spares_spent)}\n` +
+        `lead_time_hours: ${JSON.stringify(obs.lead_time_hours || {})}\n` +
+        `risk_group_ids: ${JSON.stringify(obs.risk_group_ids || {})}\n` +
+        `actions_taken: ${JSON.stringify(obs.actions_taken || [])}`;
     el.appendChild(misc);
 }
 
