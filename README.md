@@ -157,49 +157,42 @@ The flip-variable citation metric is a NECESSARY, NOT SUFFICIENT filter for
 "right answer, absent reason". It is entity matching, not reasoning
 verification.
 
-### The W3.2 measurement (designed, not yet run)
+### The W3.2 measurement
 
-`--agent-rival-totals` selects between two agent arms that differ in exactly
-one thing: whether the observation carries `horizon_totals` — per horizon,
-the service under test's own expected capacity at risk against the summed
-expected capacity at risk of every other service — and whether the system
-prompt describes it. Everything else, including the per-row
-`expected_capacity_at_risk_gbps` both arms carry, is identical.
+Earlier revisions of this harness gated `horizon_totals` — per horizon, the
+service under test's own expected capacity at risk against the summed
+expected capacity at risk of every other service — behind a second agent
+arm (`--agent-rival-totals`), to isolate whether handing the model that
+comparison changed its answers. That two-arm design is gone: rival totals
+are now always computed and always shown, in the observation and the system
+prompt, for every agent run. There is exactly one agent arm, named
+`agent:{model}` (e.g. `agent:claude-sonnet-5`), and one audit sidecar
+(`eval/traces/agent-calls.jsonl`). The rationale for shipping totals
+unconditionally, and what the (now-historical) two-arm comparison found, is
+recorded in `docs/superpowers/2026-08-28-control-arm-findings.md` and
+`docs/superpowers/2026-08-29-shared-depot-arm-predictions.md`.
 
-Run each arm once, on the same seed:
+Run it with:
 
 ```
 python -m storm_reoptimizer.eval.suite --include-agent
-python -m storm_reoptimizer.eval.suite --include-agent --agent-rival-totals
 ```
 
-The arms write separate trace files -- named
-`{scenario}-agent_claude-sonnet-5-{run}.json` for the control arm and
-`{scenario}-agent_claude-sonnet-5+rival-totals-{run}.json` for the treatment
-arm, so a glob distinguishing the control arm must stop at the trailing dash
-(`*agent_claude-sonnet-5-*`) rather than matching the bare model name, which
-is also a prefix of the treatment arm's filenames -- and separate audit
-sidecars (`eval/traces/agent-calls.jsonl` vs `agent-calls-rival-totals.jsonl`),
-and the results table labels each row with its arm.
+**Before running `--include-agent` for a real, paid arm**, run
+`python tools/probe_contested_claim_schema.py` (both branches: a null claim
+and a non-null claim) and confirm ACCEPTED. `contested_claim` is a nullable
+OBJECT field in the tool schema; whether the Anthropic API's strict tool use
+actually accepts that shape has only been reasoned about, not verified
+against a live call, in the environment that built this harness (no
+`ANTHROPIC_API_KEY` was available). If the probe comes back REJECTED,
+`decisions.py`'s `CONTESTED_CLAIM_SCHEMA` needs to switch to the flat
+two-scalar fallback the probe script's own docstring describes
+(`contested_claim_service_id` with a `"none"` sentinel plus
+`contested_claim_ecar_gbps`) before trusting any `contested_claim` field a
+real run produces.
 
-**The prediction, stated before the runs, so the reading is not chosen
-afterwards:**
-
-- If the totals flip `T2b` and `T3b`, the failure was **arithmetic**: the
-  agent could make the comparison but not reliably form the operands, and
-  the fix belongs in the observation.
-- If nothing moves, the failure is **framing**: the agent never asks "who
-  else wants this spare pair?", and no amount of pre-computation helps. Only
-  then is prompt work (the spec's deferred `D5`) worth considering.
-- A partial flip is the interesting case and must be reported as one, not
-  rounded to whichever story is tidier.
-
-Whichever way it goes, the arm that ships as the default is a separate
-decision — the totals arm hands the model both operands, which a reviewer
-can fairly call handing it the answer.
-
-**One further check to make during either run, for W3.3.** Open the
-constraints records for `T3b` at hour `t1` in the audit sidecar and read the
+**One further check to make during a run, for W3.3.** Open the constraints
+records for `T3b` at hour `t1` in the audit sidecar and read the
 `reasoning`. The design's acceptance for the unconstrained-menu probe is
 that the constraints decision *references the 0-pair candidate* — the entry
 that reuses `storm-svc-1`'s current working lightpath, which the agent
@@ -298,7 +291,7 @@ payload's `n_services_total` was 573, `omitted_services.count` 571):
 
 ```json
 {
-  "scenario_id": "D1", "service_under_test": "storm-svc-1",
+  "scenario_id": "D1", "actionable_service": "storm-svc-1",
   "hour": "t0", "hours_remaining": 1,
   "cones": {"t1": {"width_km": 15.0,
                    "center": {"lat": 24.58333, "lon": 80.83333}}},
@@ -307,6 +300,9 @@ payload's `n_services_total` was 573, `omitted_services.count` 571):
                            "p_cut": 0.9761, "demand_gbps": 300.0}},
     "d0361":       {"t1": {"hours_ahead": 1, "offset_km": 91.7,
                            "p_cut": 0.012,  "demand_gbps": 100.0}}
+  },
+  "horizon_totals": {
+    "t1": {"sut_ecar_gbps": 292.83, "non_sut_total_ecar_gbps": 1.2}
   },
   "spares_on_hand": 2,
   "lead_time_hours": {"ip_reroute": 0, "hybrid": 1, "optical_reroute": 1},
@@ -317,6 +313,18 @@ payload's `n_services_total` was 573, `omitted_services.count` 571):
                        "summed_expected_capacity_at_risk_gbps": 0.0}
 }
 ```
+
+`horizon_totals` (`eval/agent.py`'s `P_CUT_ENUMERATION_THRESHOLD` neighbor,
+`_horizon_totals` in `observation.py`) is always present now, summed over
+every service with a representative point regardless of what
+`project_observation` trims for display — the two operands (`sut_ecar_gbps`
+against `non_sut_total_ecar_gbps`) every gold rationale in the suite
+compares. Every decision the model submits (timing, constraints, objective)
+also carries a `contested_claim` field: `{"service_id": ..., "expected_
+capacity_at_risk_gbps": ...}` naming the strongest rival claim it weighed,
+or `null` for "there is none". It is elicited, not scored — see "What to
+read afterwards" in `docs/superpowers/2026-08-29-shared-depot-arm-
+predictions.md`.
 
 **1. Timing** (`submit_timing_decision`) — `action: "act"`:
 
@@ -391,6 +399,18 @@ Full traces for all three of `D1`'s rollouts live in `eval/traces/D1-agent_
 claude-sonnet-5-{0,1,2}.json`; the audit sidecar recording exactly what was
 shown on every one of the 18 calls that produced them is
 `eval/traces/agent-calls.jsonl`.
+
+## Viewing a run
+
+`python tools/build_viewer_data.py` folds the scenario YAMLs, the recorded
+traces in `eval/traces/`, and the toy topology into `eval/viewer/index.html`
+— a single self-contained, double-clickable file with no server and no
+network calls needed. Open it in a browser to step hour-by-hour through an
+episode: the exposure map, the candidate menu, and "What it said" (each
+decision's reasoning, alongside its `contested_claim` when the model
+recorded one). The per-hour gold-vs-agent strip reads each hour's
+`gold_spare_action` (`spend` or `conserve`) against whether the committed
+action actually spent a physical spare pair.
 
 ## Repository layout
 
