@@ -283,10 +283,20 @@ def test_strict_tool_schemas_drop_the_keywords_the_api_rejects():
     # very first real call.
     assert strict_tool_schema(TIMING_JSON_SCHEMA) == {
         "type": "object", "additionalProperties": False,
-        "required": ["action", "reasoning"],
+        "required": ["action", "reasoning", "contested_claim"],
         "properties": {
             "action": {"type": "string", "enum": ["act", "wait"]},
             "reasoning": {"type": "string"},
+            "contested_claim": {"anyOf": [
+                {"type": "object", "additionalProperties": False,
+                 "required": ["service_id",
+                              "expected_capacity_at_risk_gbps"],
+                 "properties": {
+                     "service_id": {"type": "string"},
+                     "expected_capacity_at_risk_gbps": {"type": "number"},
+                 }},
+                {"type": "null"},
+            ]},
         },
     }
     priority = strict_tool_schema(
@@ -591,7 +601,7 @@ def test_the_audit_sidecar_records_what_the_model_was_shown(tmp_path):
                                         "storm-svc-1"]
     assert record["omitted_services"]["count"] == 2
     assert record["n_services_total"] == 6
-    assert record["result"] == TIMING_OK
+    assert record["result"] == {**TIMING_OK, "contested_claim": None}
 
 
 def test_the_audit_records_how_many_attempts_a_decision_took(tmp_path):

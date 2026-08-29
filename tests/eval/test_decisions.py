@@ -3,14 +3,16 @@ import pytest
 
 from storm_reoptimizer.eval.decisions import (
     CONSTRAINT_JSON_SCHEMA, COST_TERMS, ConstraintDecision, DecisionError,
-    ObjectiveDecision, TimingDecision, candidate_index, rank_by_priority,
+    OBJECTIVE_JSON_SCHEMA, ObjectiveDecision, TIMING_JSON_SCHEMA,
+    TimingDecision, candidate_index, rank_by_priority,
 )
 
 
 def test_timing_decision_round_trips():
     d = TimingDecision.from_dict({"action": "wait", "reasoning": "cone is wide"})
     assert d.action == "wait"
-    assert d.to_dict() == {"action": "wait", "reasoning": "cone is wide"}
+    assert d.to_dict() == {"action": "wait", "reasoning": "cone is wide",
+                           "contested_claim": None}
 
 
 def test_timing_rejects_an_unknown_action():
@@ -56,7 +58,8 @@ def test_risk_group_is_a_legal_constraint_level():
     payload = {"avoid": {"risk_groups": ["rg_T2a_t1_t6"]},
                "reasoning": "avoid the full t+6 cone",
                "protected": False, "best_effort": False,
-               "basis": "risk_group", "level": "risk_group"}
+               "basis": "risk_group", "level": "risk_group",
+               "contested_claim": None}
     d = ConstraintDecision.from_dict(payload)
     assert (d.basis, d.level) == ("risk_group", "risk_group")
     assert d.to_dict() == payload
@@ -116,3 +119,52 @@ def test_cost_terms_are_the_seven_the_server_reports():
     assert COST_TERMS == (
         "spectrum_used", "transponders", "max_util", "dropped_traffic",
         "added_latency", "total_margin", "services_at_risk")
+
+
+def test_a_decision_carries_the_rival_claim_it_weighed_or_null():
+    d = TimingDecision.from_dict({
+        "action": "wait", "reasoning": "the cone sharpens next hour",
+        "contested_claim": {"service_id": "d0462",
+                            "expected_capacity_at_risk_gbps": 88.3}})
+    assert d.contested_claim == {"service_id": "d0462",
+                                 "expected_capacity_at_risk_gbps": 88.3}
+
+
+def test_a_decision_with_no_rival_claim_says_so_explicitly():
+    d = TimingDecision.from_dict({
+        "action": "act", "reasoning": "nothing else is exposed",
+        "contested_claim": None})
+    assert d.contested_claim is None
+    assert d.to_dict()["contested_claim"] is None
+
+
+def test_an_absent_contested_claim_is_the_same_as_null():
+    # baseline.py and every gold decision construct these positionally with no
+    # claim; they must keep working untouched.
+    assert TimingDecision.from_dict(
+        {"action": "act", "reasoning": "x"}).contested_claim is None
+    assert TimingDecision("act", "x").contested_claim is None
+    assert ObjectiveDecision("candidate_0", None, "x").contested_claim is None
+    assert ConstraintDecision(avoid={}, reasoning="x").contested_claim is None
+
+
+@pytest.mark.parametrize("bad, match", [
+    ({"service_id": "d0462"}, "expected_capacity_at_risk_gbps"),
+    ({"expected_capacity_at_risk_gbps": 1.0}, "service_id"),
+    ({"service_id": "", "expected_capacity_at_risk_gbps": 1.0},
+     "service_id"),
+    ({"service_id": "d0462", "expected_capacity_at_risk_gbps": "big"},
+     "expected_capacity_at_risk_gbps"),
+    ("d0462", "contested_claim"),
+])
+def test_a_malformed_contested_claim_is_rejected(bad, match):
+    with pytest.raises(DecisionError, match=match):
+        TimingDecision.from_dict(
+            {"action": "act", "reasoning": "x", "contested_claim": bad})
+
+
+def test_all_three_decisions_require_the_field():
+    for schema in (TIMING_JSON_SCHEMA, CONSTRAINT_JSON_SCHEMA,
+                   OBJECTIVE_JSON_SCHEMA):
+        assert "contested_claim" in schema["required"]
+        assert "contested_claim" in schema["properties"]

@@ -52,10 +52,53 @@ def _reasoning(payload: dict, where: str) -> str:
     return text
 
 
+_CLAIM_KEYS = ("service_id", "expected_capacity_at_risk_gbps")
+
+
+def _contested_claim(payload: dict, where: str) -> dict | None:
+    """The strongest competing claim on the shared depot this decision
+    weighed, or None for "there is none".
+
+    Elicited, never scored: the graded labels stay exactly what they were, so
+    this run's label_correct/pair_solved stay comparable with the control-arm
+    findings. What it buys is the decomposition a human currently gets only by
+    reading 21 rollouts of prose -- a wrong answer WITH the rival named is a
+    judgement failure, the same answer with `null` is an attention failure,
+    and the two need different fixes (eval-fairness design, §5.2).
+
+    Deliberately not a spend|conserve enum: that names the axis outright, and
+    the scenario files are explicit that enumerating `gold_spare_action`
+    "would trivially solve every pair"."""
+    claim = payload.get("contested_claim")
+    if claim is None:
+        return None
+    if not isinstance(claim, dict):
+        raise DecisionError(
+            f"{where}: `contested_claim` must be an object or null")
+    missing = [k for k in _CLAIM_KEYS if k not in claim]
+    if missing:
+        raise DecisionError(
+            f"{where}: `contested_claim` is missing {missing}")
+    svc = claim["service_id"]
+    if not isinstance(svc, str) or not svc.strip():
+        raise DecisionError(
+            f"{where}: `contested_claim.service_id` must name a service")
+    ecar = claim["expected_capacity_at_risk_gbps"]
+    if isinstance(ecar, bool) or not isinstance(ecar, (int, float)):
+        raise DecisionError(
+            f"{where}: `contested_claim.expected_capacity_at_risk_gbps` "
+            f"must be a number")
+    return {"service_id": svc, "expected_capacity_at_risk_gbps": float(ecar)}
+
+
 @dataclass(frozen=True)
 class TimingDecision:
     action: str          # "act" | "wait"
     reasoning: str
+    # The rival claim on the shared depot this decision weighed. Last field so
+    # every positional construction in baseline.py, assertions.py, tools/ and
+    # tests/eval/test_episodes.py keeps working untouched.
+    contested_claim: dict | None = None
 
     @classmethod
     def from_dict(cls, payload: dict) -> "TimingDecision":
@@ -65,10 +108,12 @@ class TimingDecision:
             raise DecisionError(
                 f"timing: `action` must be one of {sorted(_ACTIONS)}, "
                 f"got {action!r}")
-        return cls(action=action, reasoning=reasoning)
+        return cls(action=action, reasoning=reasoning,
+                   contested_claim=_contested_claim(payload, "timing"))
 
     def to_dict(self) -> dict[str, Any]:
-        return {"action": self.action, "reasoning": self.reasoning}
+        return {"action": self.action, "reasoning": self.reasoning,
+                "contested_claim": self.contested_claim}
 
 
 @dataclass(frozen=True)
@@ -99,6 +144,10 @@ class ConstraintDecision:
     best_effort: bool = False
     basis: str = "physical"
     level: str = "link"
+    # The rival claim on the shared depot this decision weighed. Last field so
+    # every positional construction in baseline.py, assertions.py, tools/ and
+    # tests/eval/test_episodes.py keeps working untouched.
+    contested_claim: dict | None = None
 
     @classmethod
     def from_dict(cls, payload: dict) -> "ConstraintDecision":
@@ -120,12 +169,14 @@ class ConstraintDecision:
         return cls(avoid=avoid, reasoning=reasoning,
                    protected=bool(payload.get("protected", False)),
                    best_effort=bool(payload.get("best_effort", False)),
-                   basis=basis, level=level)
+                   basis=basis, level=level,
+                   contested_claim=_contested_claim(payload, "constraints"))
 
     def to_dict(self) -> dict[str, Any]:
         return {"avoid": self.avoid, "protected": self.protected,
                 "best_effort": self.best_effort, "basis": self.basis,
-                "level": self.level, "reasoning": self.reasoning}
+                "level": self.level, "reasoning": self.reasoning,
+                "contested_claim": self.contested_claim}
 
     def route_service_args(self, service_id: str) -> dict[str, Any]:
         return {"service_id": service_id, "protected": self.protected,
@@ -138,6 +189,10 @@ class ObjectiveDecision:
     choice: str                          # "candidate_<i>" | "infeasible"
     priority: tuple[str, ...] | None     # interpretability artifact, optional
     reasoning: str
+    # The rival claim on the shared depot this decision weighed. Last field so
+    # every positional construction in baseline.py, assertions.py, tools/ and
+    # tests/eval/test_episodes.py keeps working untouched.
+    contested_claim: dict | None = None
 
     @classmethod
     def from_dict(cls, payload: dict) -> "ObjectiveDecision":
@@ -154,12 +209,14 @@ class ObjectiveDecision:
                     f"objective: `priority` names non-cost-terms {unknown}; "
                     f"allowed: {list(COST_TERMS)}")
             priority = tuple(priority)
-        return cls(choice=choice, priority=priority, reasoning=reasoning)
+        return cls(choice=choice, priority=priority, reasoning=reasoning,
+                   contested_claim=_contested_claim(payload, "objective"))
 
     def to_dict(self) -> dict[str, Any]:
         return {"choice": self.choice,
                 "priority": list(self.priority) if self.priority else None,
-                "reasoning": self.reasoning}
+                "reasoning": self.reasoning,
+                "contested_claim": self.contested_claim}
 
 
 def candidate_index(choice: str) -> int | None:
@@ -187,18 +244,29 @@ def rank_by_priority(candidates: list[dict],
     return sorted(range(len(candidates)), key=key)
 
 
+CONTESTED_CLAIM_SCHEMA = {
+    "type": ["object", "null"],
+    "additionalProperties": False,
+    "required": ["service_id", "expected_capacity_at_risk_gbps"],
+    "properties": {
+        "service_id": {"type": "string"},
+        "expected_capacity_at_risk_gbps": {"type": "number"},
+    },
+}
+
 TIMING_JSON_SCHEMA = {
     "type": "object", "additionalProperties": False,
-    "required": ["action", "reasoning"],
+    "required": ["action", "reasoning", "contested_claim"],
     "properties": {
         "action": {"type": "string", "enum": sorted(_ACTIONS)},
         "reasoning": {"type": "string", "minLength": 1},
+        "contested_claim": CONTESTED_CLAIM_SCHEMA,
     },
 }
 
 CONSTRAINT_JSON_SCHEMA = {
     "type": "object", "additionalProperties": False,
-    "required": ["avoid", "reasoning"],
+    "required": ["avoid", "reasoning", "contested_claim"],
     "properties": {
         "avoid": {
             "type": "object", "additionalProperties": False,
@@ -210,17 +278,19 @@ CONSTRAINT_JSON_SCHEMA = {
         "basis": {"type": "string", "enum": sorted(_BASES)},
         "level": {"type": "string", "enum": sorted(_LEVELS)},
         "reasoning": {"type": "string", "minLength": 1},
+        "contested_claim": CONTESTED_CLAIM_SCHEMA,
     },
 }
 
 OBJECTIVE_JSON_SCHEMA = {
     "type": "object", "additionalProperties": False,
-    "required": ["choice", "priority", "reasoning"],
+    "required": ["choice", "priority", "reasoning", "contested_claim"],
     "properties": {
         "choice": {"type": "string"},
         "priority": {"type": ["array", "null"],
                      "items": {"type": "string", "enum": list(COST_TERMS)}},
         "reasoning": {"type": "string", "minLength": 1},
+        "contested_claim": CONTESTED_CLAIM_SCHEMA,
     },
 }
 
