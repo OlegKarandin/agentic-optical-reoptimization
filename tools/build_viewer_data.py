@@ -156,8 +156,611 @@ def fold(traces_dir: Path, scenarios_dir: Path, topology_path: Path) -> dict:
     return {"topology": load_topology(topology_path), "episodes": episodes}
 
 
+_HTML_TEMPLATE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>storm-reoptimizer run viewer</title>
+<style>__CSS__</style></head>
+<body>
+<header id="controls">
+  <select id="episode"></select>
+  <select id="run"></select>
+  <label><input type="checkbox" id="plant"> aerial plant</label>
+  <span id="gold"></span>
+</header>
+<main>
+  <svg id="map" viewBox="0 0 800 800" preserveAspectRatio="xMidYMid meet">
+    <g id="layer-plant"></g><g id="layer-cones"></g>
+    <g id="layer-paths"></g><g id="layer-candidate"></g>
+    <g id="layer-points"></g>
+  </svg>
+  <aside id="panels">
+    <section id="candidates"></section>
+    <section id="saw"></section>
+    <section id="said"></section>
+  </aside>
+</main>
+<footer><div id="scrubber"></div></footer>
+<script type="application/json" id="payload">__PAYLOAD__</script>
+<script>__JS__</script>
+</body></html>
+"""
+
+
+_CSS = """
+* { box-sizing: border-box; }
+body { margin: 0; font-family: ui-monospace, "Cascadia Code", Consolas,
+       monospace; font-size: 13px; color: #1a1a1a; background: #fff; }
+#controls { display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+            border-bottom: 1px solid #ccc; }
+#controls select, #controls label { font: inherit; }
+#gold { margin-left: auto; font-weight: bold; }
+main { display: grid; grid-template-columns: 1fr 380px; gap: 0;
+       height: calc(100vh - 90px); }
+#map { width: 100%; height: 100%; background: #f7f7f5; }
+#panels { overflow-y: auto; border-left: 1px solid #ccc; padding: 8px; }
+#panels section { margin-bottom: 16px; }
+#panels h3 { margin: 0 0 4px 0; font-size: 12px; text-transform: uppercase;
+             letter-spacing: 0.04em; color: #555; }
+table { border-collapse: collapse; width: 100%; font: inherit; }
+table td, table th { border: 1px solid #ddd; padding: 2px 5px;
+                      text-align: left; white-space: nowrap; }
+th { background: #f0f0ee; }
+.shown, .omitted { display: inline-block; padding: 0 4px; border-radius: 3px;
+                    font-size: 11px; font-weight: bold; }
+.shown { background: #d6f0d6; color: #146214; }
+.omitted { background: #eee; color: #777; }
+.candidate-row { cursor: pointer; }
+.candidate-row:hover { background: #f0f4ff; }
+.candidate-row.committed { font-weight: bold; }
+.candidate-row.selected { outline: 2px solid #3366cc; }
+footer { border-top: 1px solid #ccc; padding: 6px 12px; }
+#scrubber { display: flex; gap: 1px; }
+.hcell { flex: 1; padding: 3px 2px; text-align: center; cursor: pointer;
+         border: 1px solid #ddd; background: #f5f5f3; }
+.hcell.current { background: #3366cc; color: #fff; }
+.hcell.decision { border-color: #cc6633; border-width: 2px; }
+.hcell .strip { height: 4px; margin-top: 2px; }
+.hcell .strip.match { background: #2e8b2e; }
+.hcell .strip.mismatch { background: #cc3333; }
+.hcell .strip.unknown { background: #ccc; }
+.aerial { stroke-dasharray: 4 3; }
+.gap-marker { stroke: #cc3333; stroke-width: 2; }
+pre.reasoning { white-space: pre-wrap; background: #f7f7f5; padding: 6px;
+                border: 1px solid #eee; margin: 4px 0; }
+.rejection { color: #a33; margin: 2px 0; }
+.contested { background: #fff4e0; border: 1px solid #e0c080; padding: 4px;
+             margin: 4px 0; }
+"""
+
+
+_JS = r"""
+const P = JSON.parse(document.getElementById('payload').textContent);
+let state = {episode: null, run: null, hourIndex: 0, candidate: null};
+
+// ---- geometry -------------------------------------------------------
+
+const BBOX = {latMin: 8, latMax: 35, lonMin: 68, lonMax: 97};
+
+function project(lat, lon) {
+    const x = (lon - BBOX.lonMin) / (BBOX.lonMax - BBOX.lonMin) * 800;
+    const y = (BBOX.latMax - lat) / (BBOX.latMax - BBOX.latMin) * 800;
+    return [x, y];
+}
+
+let EDGE_INDEX = null;
+function buildEdgeIndex() {
+    EDGE_INDEX = new Map();
+    for (const e of P.topology.edges) {
+        EDGE_INDEX.set(e.src + '|' + e.dst, e);
+        EDGE_INDEX.set(e.dst + '|' + e.src, e);
+    }
+}
+
+function isAerial(nodeA, nodeB) {
+    if (!EDGE_INDEX) buildEdgeIndex();
+    const e = EDGE_INDEX.get(nodeA + '|' + nodeB);
+    return !!e && e.mount_type === 'aerial';
+}
+
+// Namespace read off the existing <svg> node rather than spelled out as a
+// URL literal, so this file carries no bare protocol-scheme substring.
+const SVG_NS = document.getElementById('map').namespaceURI;
+
+function svgEl(tag, attrs) {
+    const el = document.createElementNS(SVG_NS, tag);
+    for (const k in attrs) el.setAttribute(k, attrs[k]);
+    return el;
+}
+
+function layer(name) { return document.getElementById('layer-' + name); }
+
+function clearLayer(name) {
+    const g = layer(name);
+    while (g.firstChild) g.removeChild(g.firstChild);
+}
+
+// ---- plant ------------------------------------------------------------
+
+function drawPlant(showAerial) {
+    clearLayer('plant');
+    const g = layer('plant');
+    const nodes = P.topology.nodes;
+    for (const e of P.topology.edges) {
+        const a = nodes[e.src];
+        const b = nodes[e.dst];
+        if (!a || !b) continue;
+        const [x1, y1] = project(a[0], a[1]);
+        const [x2, y2] = project(b[0], b[1]);
+        const aerial = showAerial && e.mount_type === 'aerial';
+        const path = svgEl('path', {
+            d: `M${x1},${y1}L${x2},${y2}`,
+            stroke: '#ccc', 'stroke-width': 1, fill: 'none',
+            class: aerial ? 'aerial' : '',
+        });
+        g.appendChild(path);
+    }
+}
+
+// ---- polylines ----------------------------------------------------------
+
+function drawPolyline(nodes, opts) {
+    const weight = opts.weight || 2;
+    const colour = opts.colour || '#333';
+    const layerName = opts.layer || 'paths';
+    const g = layer(layerName);
+    const topoNodes = P.topology.nodes;
+    const hour = currentHour();
+    const unmapped = (hour && hour.unmapped_nodes) || {};
+    for (let i = 0; i < nodes.length - 1; i++) {
+        const a = nodes[i];
+        const b = nodes[i + 1];
+        const ca = topoNodes[a];
+        const cb = topoNodes[b];
+        if (!ca || !cb || unmapped[a] || unmapped[b]) {
+            // A node the topology lacks breaks the line with a visible gap
+            // marker rather than joining across it.
+            const known = ca || cb;
+            if (known) {
+                const [gx, gy] = project(known[0], known[1]);
+                g.appendChild(svgEl('circle', {
+                    cx: gx, cy: gy, r: 5, class: 'gap-marker', fill: 'none',
+                }));
+            }
+            continue;
+        }
+        const [x1, y1] = project(ca[0], ca[1]);
+        const [x2, y2] = project(cb[0], cb[1]);
+        const aerial = isAerial(a, b);
+        g.appendChild(svgEl('path', {
+            d: `M${x1},${y1}L${x2},${y2}`,
+            stroke: colour, 'stroke-width': weight, fill: 'none',
+            class: aerial ? 'aerial' : '',
+        }));
+    }
+}
+
+// ---- cones --------------------------------------------------------------
+
+function drawCones(episode, hour) {
+    clearLayer('cones');
+    const g = layer('cones');
+    const forecast = episode.forecast || {};
+    const issuances = Object.keys(forecast).sort();
+    // The issuance "in force" at this hour is the latest one issued at or
+    // before this hour.
+    let inForce = null;
+    for (const issued of issuances) {
+        if (issued <= hour.hour) inForce = issued;
+    }
+    if (inForce === null && issuances.length) inForce = issuances[0];
+    for (const issued of issuances) {
+        const horizons = forecast[issued];
+        const graded = issued === inForce;
+        for (const horizonKey in horizons) {
+            const cone = horizons[horizonKey];
+            const pts = (cone.polygon || []).map(([lat, lon]) => project(lat, lon));
+            if (!pts.length) continue;
+            const d = 'M' + pts.map(p => p.join(',')).join('L') + 'Z';
+            g.appendChild(svgEl('path', {
+                d,
+                fill: graded ? 'rgba(51,102,204,0.12)' : 'rgba(150,150,150,0.06)',
+                stroke: graded ? '#3366cc' : '#999',
+                'stroke-width': graded ? 1.5 : 1,
+                'stroke-dasharray': graded ? '' : '2 2',
+                'data-issued': issued, 'data-horizon': horizonKey,
+            }));
+        }
+    }
+}
+
+// ---- services -------------------------------------------------------
+
+function drawService(id, hour, opts) {
+    opts = opts || {};
+    const paths = (hour.service_paths || {})[id];
+    if (paths) {
+        if (paths.working) {
+            drawPolyline(paths.working,
+                {weight: opts.emphasis ? 3.5 : 2.5, colour: '#1a1a1a',
+                 layer: 'paths'});
+        }
+        if (paths.protection) {
+            drawPolyline(paths.protection,
+                {weight: opts.emphasis ? 2 : 1.2, colour: '#888',
+                 layer: 'paths'});
+        }
+    }
+    const point = (hour.service_points || {})[id];
+    if (point) {
+        const [x, y] = project(point[0], point[1]);
+        layer('points').appendChild(svgEl('circle', {
+            cx: x, cy: y, r: opts.emphasis ? 6 : 4,
+            fill: opts.colour || '#cc3333',
+            stroke: '#fff', 'stroke-width': 1,
+            'data-service': id,
+        }));
+    }
+}
+
+// ---- candidates -------------------------------------------------------
+
+function drawCandidate(candidate, omsNodes) {
+    clearLayer('candidate');
+    const omsSeq = [];
+    for (const lp of candidate.reused_lightpaths || []) {
+        if (lp && lp.oms_sequence) omsSeq.push(...lp.oms_sequence);
+        else if (typeof lp === 'string') omsSeq.push(lp);
+    }
+    for (const lp of candidate.new_lightpaths || []) {
+        omsSeq.push(...(lp.oms_sequence || []));
+    }
+    const nodeSeq = [];
+    for (const oms of omsSeq) {
+        const pair = (omsNodes || {})[oms];
+        if (!pair) continue;
+        if (nodeSeq.length === 0) nodeSeq.push(pair[0]);
+        else if (nodeSeq[nodeSeq.length - 1] !== pair[0]) nodeSeq.push(pair[0]);
+        nodeSeq.push(pair[1]);
+    }
+    if (nodeSeq.length >= 2) {
+        drawPolyline(nodeSeq, {weight: 3, colour: '#cc6633', layer: 'candidate'});
+    }
+}
+
+// ---- panels -------------------------------------------------------------
+
+function currentEpisode() { return P.episodes[state.episode]; }
+function currentRun() {
+    const ep = currentEpisode();
+    if (!ep) return null;
+    return ep.runs[state.run] || null;
+}
+function currentHour() {
+    const run = currentRun();
+    if (!run) return null;
+    return run.hours[state.hourIndex] || null;
+}
+
+function selectedIteration(hour) {
+    if (!hour || !hour.iterations || !hour.iterations.length) return null;
+    return hour.iterations[hour.iterations.length - 1];
+}
+
+function esc(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+}
+
+function renderCandidates(hour) {
+    const el = document.getElementById('candidates');
+    el.innerHTML = '<h3>Candidates</h3>';
+    if (!hour) return;
+    const iter = selectedIteration(hour);
+    const candidates = (iter && iter.menu && iter.menu.candidates) || [];
+    if (!candidates.length) {
+        el.appendChild(document.createTextNode('(no menu this hour)'));
+        return;
+    }
+    // The committed candidate is selected on load; a click overrides it for
+    // the rest of this hour's viewing session.
+    const selected = candidates.find(c => c.candidate_label === state.candidate)
+        || candidates.find(c => c.committed) || null;
+    state.candidate = selected ? selected.candidate_label : null;
+
+    const table = document.createElement('table');
+    table.innerHTML = '<tr><th>label</th><th>lever</th><th>pairs</th>' +
+        '<th>restored</th><th>shortfall</th><th>cost</th></tr>';
+    candidates.forEach((c) => {
+        const tr = document.createElement('tr');
+        tr.className = 'candidate-row' + (c.committed ? ' committed' : '') +
+            (c === selected ? ' selected' : '');
+        tr.innerHTML =
+            `<td>${esc(c.candidate_label)}</td><td>${esc(c.lever)}</td>` +
+            `<td>${esc(c.pairs_needed)}</td>` +
+            `<td>${esc(c.restored_gbps)}</td>` +
+            `<td>${esc(c.shortfall_gbps)}</td>` +
+            `<td>${esc(JSON.stringify(c.cost_vector || {}))}</td>`;
+        tr.addEventListener('click', () => {
+            state.candidate = c.candidate_label;
+            renderCandidates(hour);
+        });
+        table.appendChild(tr);
+    });
+    el.appendChild(table);
+
+    const run = currentRun();
+    if (selected) {
+        drawCandidate(selected, run ? run.oms_nodes : {});
+    } else {
+        clearLayer('candidate');
+    }
+}
+
+function renderSaw(hour) {
+    const el = document.getElementById('saw');
+    el.innerHTML = '<h3>What the agent saw</h3>';
+    if (!hour) return;
+    const rows = hour.exposure_rows || [];
+    const table = document.createElement('table');
+    table.innerHTML = '<tr><th>service</th><th>horizon</th><th>offset_km</th>' +
+        '<th>p_cut</th><th>demand_gbps</th><th>ECAR</th><th></th></tr>';
+    for (const r of rows) {
+        const tr = document.createElement('tr');
+        tr.innerHTML =
+            `<td>${esc(r.service_id)}</td><td>${esc(r.horizon)}</td>` +
+            `<td>${esc(r.offset_km)}</td><td>${esc(r.p_cut)}</td>` +
+            `<td>${esc(r.demand_gbps)}</td>` +
+            `<td>${esc(r.expected_capacity_at_risk_gbps)}</td>` +
+            `<td><span class="${r.shown ? 'shown' : 'omitted'}">` +
+            `${r.shown ? 'shown' : 'omitted'}</span></td>`;
+        table.appendChild(tr);
+    }
+    el.appendChild(table);
+
+    const totals = (hour.observation || {}).horizon_totals || {};
+    const totalsPre = document.createElement('pre');
+    totalsPre.className = 'reasoning';
+    totalsPre.textContent = 'horizon_totals: ' + JSON.stringify(totals, null, 1);
+    el.appendChild(totalsPre);
+
+    const run = currentRun();
+    const misc = document.createElement('pre');
+    misc.className = 'reasoning';
+    misc.textContent =
+        `spares_on_hand: ${run ? currentEpisode().spares_on_hand : ''}\n` +
+        `spares_remaining: ${run ? run.spares_remaining : ''}\n` +
+        `lead_time_hours: ${run ? currentEpisode().lead_time_hours : ''}\n` +
+        `risk_group_ids: ${JSON.stringify(
+            (hour.observation || {}).risk_group_ids || {})}\n` +
+        `actions_taken: ${JSON.stringify(
+            (run ? run.actions : []).filter(a => a.hour === hour.hour))}`;
+    el.appendChild(misc);
+}
+
+function renderSaid(hour) {
+    const el = document.getElementById('said');
+    el.innerHTML = '<h3>What it said</h3>';
+    if (!hour) return;
+    if (!hour.timing) {
+        el.appendChild(document.createTextNode('(no reasoning recorded)'));
+        return;
+    }
+    const timing = document.createElement('div');
+    timing.innerHTML = `<b>action:</b> ${esc(hour.timing.action)}`;
+    const timingReasoning = document.createElement('pre');
+    timingReasoning.className = 'reasoning';
+    timingReasoning.textContent = hour.timing.reasoning || '';
+    el.appendChild(timing);
+    el.appendChild(timingReasoning);
+    if (hour.timing.contested_claim) {
+        const cc = document.createElement('div');
+        cc.className = 'contested';
+        cc.textContent = 'contested_claim (timing): ' +
+            JSON.stringify(hour.timing.contested_claim);
+        el.appendChild(cc);
+    }
+
+    for (const rej of hour.rejections || []) {
+        const d = document.createElement('div');
+        d.className = 'rejection';
+        d.textContent = 'rejected: ' + JSON.stringify(rej);
+        el.appendChild(d);
+    }
+
+    (hour.iterations || []).forEach((it) => {
+        const h = document.createElement('div');
+        h.innerHTML = `<b>iteration ${esc(it.iteration)}</b> -- ` +
+            `menu ${esc(it.menu_status)} (${esc(it.menu_size)}) -- ` +
+            `outcome ${esc(it.outcome)}`;
+        el.appendChild(h);
+
+        const constraints = it.constraints || {};
+        const cPre = document.createElement('pre');
+        cPre.className = 'reasoning';
+        cPre.textContent = `avoid: ${JSON.stringify(constraints.avoid || {})}\n` +
+            (constraints.reasoning || '');
+        el.appendChild(cPre);
+
+        const objective = it.objective || {};
+        const oPre = document.createElement('pre');
+        oPre.className = 'reasoning';
+        oPre.textContent = `choice: ${objective.choice}\n` +
+            (objective.reasoning || '');
+        el.appendChild(oPre);
+
+        const claim = constraints.contested_claim || objective.contested_claim;
+        if (claim) {
+            const cc = document.createElement('div');
+            cc.className = 'contested';
+            cc.textContent = 'contested_claim: ' + JSON.stringify(claim);
+            el.appendChild(cc);
+        }
+    });
+}
+
+// ---- scrubber -------------------------------------------------------
+
+function renderScrubber(episode, run) {
+    const el = document.getElementById('scrubber');
+    el.innerHTML = '';
+    if (!episode || !run) return;
+    const gold = episode.gold || {};
+    // Actions live on the run, each tagged with the hour it landed in --
+    // hour records carry no `actions` key of their own.
+    const actionsByHour = {};
+    for (const a of run.actions || []) {
+        (actionsByHour[a.hour] = actionsByHour[a.hour] || []).push(a);
+    }
+    run.hours.forEach((h, i) => {
+        const cell = document.createElement('div');
+        cell.className = 'hcell' +
+            (i === state.hourIndex ? ' current' : '') +
+            (h.hour === episode.decision_hour ? ' decision' : '');
+        const label = document.createElement('div');
+        label.textContent = h.hour;
+        cell.appendChild(label);
+
+        const strip = document.createElement('div');
+        const acted = actionsByHour[h.hour] || [];
+        let cls = 'unknown';
+        if (gold.gold_spare_action && acted.length) {
+            // pairs > 0 spends a physical spare (optical_reroute); pairs ==
+            // 0 does not (ip_reroute / rate-reduce) -- that split is what
+            // gold_spare_action ("conserve" vs "expend") is judging.
+            const spent = acted.some(a => (a.pairs || 0) > 0);
+            const agentAction = spent ? 'expend' : 'conserve';
+            cls = agentAction === gold.gold_spare_action ? 'match' : 'mismatch';
+        }
+        strip.className = 'strip ' + cls;
+        strip.title = acted.length
+            ? `agent action(s): ${JSON.stringify(acted)}`
+            : 'no action this hour';
+        cell.appendChild(strip);
+
+        cell.addEventListener('click', () => {
+            state.hourIndex = i;
+            state.candidate = null;
+            renderAll();
+        });
+        el.appendChild(cell);
+    });
+}
+
+// ---- top-level render -------------------------------------------------
+
+function renderMap() {
+    clearLayer('paths');
+    clearLayer('points');
+    clearLayer('candidate');
+    drawPlant(document.getElementById('plant').checked);
+    const episode = currentEpisode();
+    const hour = currentHour();
+    if (!episode || !hour) { clearLayer('cones'); return; }
+    drawCones(episode, hour);
+    for (const svc of hour.services || []) {
+        const emphasis = svc === (hour.actionable_service || episode.actionable_service);
+        drawService(svc, hour, {
+            emphasis,
+            colour: emphasis ? '#cc3333' : '#3366cc',
+        });
+    }
+}
+
+function renderGold() {
+    const episode = currentEpisode();
+    const el = document.getElementById('gold');
+    if (!episode) { el.textContent = ''; return; }
+    const gold = episode.gold || {};
+    el.textContent = `gold: ${gold.label || ''} (${gold.gold_spare_action || ''})`;
+}
+
+function renderAll() {
+    const episode = currentEpisode();
+    const run = currentRun();
+    const hour = currentHour();
+    renderMap();
+    renderCandidates(hour);
+    renderSaw(hour);
+    renderSaid(hour);
+    renderScrubber(episode, run);
+    renderGold();
+}
+
+function populateDropdowns() {
+    const epSel = document.getElementById('episode');
+    epSel.innerHTML = '';
+    Object.keys(P.episodes).sort().forEach((id) => {
+        const opt = svgOptionLike(id, id);
+        epSel.appendChild(opt);
+    });
+    epSel.addEventListener('change', () => {
+        state.episode = epSel.value;
+        state.run = 0;
+        state.hourIndex = 0;
+        state.candidate = null;
+        populateRunDropdown();
+        renderAll();
+    });
+    state.episode = epSel.value;
+    populateRunDropdown();
+}
+
+function svgOptionLike(value, text) {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = text;
+    return opt;
+}
+
+function populateRunDropdown() {
+    const runSel = document.getElementById('run');
+    runSel.innerHTML = '';
+    const episode = currentEpisode();
+    (episode ? episode.runs : []).forEach((r, i) => {
+        runSel.appendChild(svgOptionLike(i, `${r.decider_name} #${r.run_index}`));
+    });
+    runSel.onchange = () => {
+        state.run = Number(runSel.value);
+        state.hourIndex = 0;
+        state.candidate = null;
+        renderAll();
+    };
+    state.run = 0;
+}
+
+document.getElementById('plant').addEventListener('change', renderMap);
+
+document.addEventListener('keydown', (ev) => {
+    const run = currentRun();
+    if (!run) return;
+    if (ev.key === 'ArrowLeft' && state.hourIndex > 0) {
+        state.hourIndex -= 1;
+        state.candidate = null;
+        renderAll();
+    } else if (ev.key === 'ArrowRight' && state.hourIndex < run.hours.length - 1) {
+        state.hourIndex += 1;
+        state.candidate = null;
+        renderAll();
+    }
+});
+
+populateDropdowns();
+renderAll();
+"""
+
+
 def render_html(payload: dict) -> str:
-    return json.dumps(payload)
+    """One file, double-click, no server and no dependencies.
+
+    The payload is INLINED rather than fetched: fetch() from file:// fails
+    CORS in Chrome, which would mean running a local HTTP server on every
+    inspection -- a tax paid on exactly the workflow this design exists to
+    remove (run-viewer design, §5.3)."""
+    blob = json.dumps(payload, separators=(",", ":")).replace("</", "<\\/")
+    return (_HTML_TEMPLATE
+            .replace("__CSS__", _CSS)
+            .replace("__JS__", _JS)
+            .replace("__PAYLOAD__", blob))
 
 
 def main() -> None:

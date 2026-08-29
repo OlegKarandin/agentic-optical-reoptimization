@@ -154,3 +154,28 @@ def test_a_pre_change_trace_folds_without_the_new_keys(tmp_path):
     hour = payload["episodes"]["T3b"]["runs"][0]["hours"][0]
     assert hour["exposure_rows"] == []
     assert hour["service_paths"] == {}
+
+
+def test_the_html_is_one_self_contained_file(folded):
+    html = bvd.render_html(folded)
+    assert html.lstrip().startswith("<!doctype html>")
+    assert "<script" in html and "application/json" in html
+    # No network at all: a viewer that needs a CDN is not double-clickable.
+    for banned in ("http://", "https://", "src=\"//", "@import"):
+        assert banned not in html
+
+
+def test_the_payload_survives_a_script_close_in_the_data(folded):
+    folded["episodes"]["T3b"]["gold"]["rationale"] = "</script><b>x</b>"
+    html = bvd.render_html(folded)
+    assert "</script><b>" not in html
+    assert "<\\/script>" in html
+
+
+def test_the_aerial_plant_is_distinguishable_in_the_payload(folded):
+    # Acceptance item 4: storm-svc-1's working and protection paths must both
+    # render with a dotted first segment out of Satna, without a legend.
+    aerial = {(e["src"], e["dst"]) for e in folded["topology"]["edges"]
+              if e["mount_type"] == "aerial"}
+    assert ("satna", "rewa") in aerial or ("rewa", "satna") in aerial
+    assert ("satna", "jhansi") in aerial or ("jhansi", "satna") in aerial
