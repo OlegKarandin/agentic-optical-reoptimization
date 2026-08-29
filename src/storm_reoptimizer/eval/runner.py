@@ -136,18 +136,25 @@ def menu_for_prompt(menu: dict) -> dict:
 
 def _visible_services(obs) -> list[str]:
     """Services with a nonzero cut probability at any horizon of this hour's
-    issuance.
+    issuance, plus the actionable service unconditionally.
 
     Deliberately WIDER than the agent's p_cut_threshold projection: the viewer
     must be able to show a service the agent was not shown, because the gap
     between what was true and what was projected is the subject of the
     eval-fairness design. The typical hour has two such services against 571
     at max_p_cut 0.0, so the trimmed record stays small (run-viewer design,
-    §5.1)."""
-    return sorted(
+    §5.1). The actionable service is kept even at p_cut == 0.0, mirroring
+    project_observation's `keep` set (agent.py) -- a successful reroute is
+    exactly what drives its p_cut to 0, and the viewer's job is to show that
+    settle, not drop the service the whole episode is about the moment it
+    recovers (final-review fix, 2026-08-29)."""
+    visible = {
         svc for svc, per_horizon in obs.exposure.items()
         if any(float(entry["p_cut"]) > 0.0
-               for entry in per_horizon.values()))
+               for entry in per_horizon.values())}
+    if obs.service_under_test in obs.exposure:
+        visible.add(obs.service_under_test)
+    return sorted(visible)
 
 
 def observation_record(obs, geometry: ServiceGeometry) -> dict:

@@ -747,6 +747,20 @@ def test_visible_services_are_those_with_any_nonzero_cut_probability():
     assert runner._visible_services(obs) == ["d0004", "storm-svc-1"]
 
 
+def test_visible_services_keeps_the_actionable_service_even_at_zero_p_cut():
+    # final-review fix (2026-08-29): a successful reroute is exactly what
+    # drives the actionable service's own p_cut to 0 -- dropping it here
+    # would silently erase the "reroute worked, midpoint settled" case
+    # from service_points/service_paths/observation.exposure for the hour,
+    # disagreeing with project_observation's `keep` set (agent.py), which
+    # keeps obs.service_under_test unconditionally.
+    obs = _observation_with_exposure({
+        "storm-svc-1": {"t2": {"p_cut": 0.0}, "t6": {"p_cut": 0.0}},
+        "d9999":       {"t2": {"p_cut": 0.0}, "t6": {"p_cut": 0.0}}},
+        sut="storm-svc-1")
+    assert runner._visible_services(obs) == ["storm-svc-1"]
+
+
 def test_the_hour_record_keeps_the_totals_whole_while_trimming_the_rows():
     obs = _observation_with_exposure({
         "storm-svc-1": {"t2": {"p_cut": 0.4}},

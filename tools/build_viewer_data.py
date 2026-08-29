@@ -619,11 +619,23 @@ function renderSaid(hour) {
             (objective.reasoning || '');
         el.appendChild(oPre);
 
-        const claim = constraints.contested_claim || objective.contested_claim;
-        if (claim) {
+        // Both decisions can carry a contested_claim, and T3's graded
+        // spend/conserve judgement lives in the objective decision's
+        // `choice` -- render both, independently labelled, rather than
+        // silently preferring one when both are populated (final-review
+        // fix, 2026-08-29).
+        if (constraints.contested_claim) {
             const cc = document.createElement('div');
             cc.className = 'contested';
-            cc.textContent = 'contested_claim: ' + JSON.stringify(claim);
+            cc.textContent = 'contested_claim (constraints): ' +
+                JSON.stringify(constraints.contested_claim);
+            el.appendChild(cc);
+        }
+        if (objective.contested_claim) {
+            const cc = document.createElement('div');
+            cc.className = 'contested';
+            cc.textContent = 'contested_claim (objective): ' +
+                JSON.stringify(objective.contested_claim);
             el.appendChild(cc);
         }
     });
@@ -657,9 +669,9 @@ function renderScrubber(episode, run) {
         if (gold.gold_spare_action && acted.length) {
             // pairs > 0 spends a physical spare (optical_reroute); pairs ==
             // 0 does not (ip_reroute / rate-reduce) -- that split is what
-            // gold_spare_action ("conserve" vs "expend") is judging.
+            // gold_spare_action ("conserve" vs "spend") is judging.
             const spent = acted.some(a => (a.pairs || 0) > 0);
-            const agentAction = spent ? 'expend' : 'conserve';
+            const agentAction = spent ? 'spend' : 'conserve';
             cls = agentAction === gold.gold_spare_action ? 'match' : 'mismatch';
         }
         strip.className = 'strip ' + cls;
