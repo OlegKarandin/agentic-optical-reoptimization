@@ -1,3 +1,4 @@
+# tools/probe_contested_claim_schema.py
 """Does strict tool use accept a nullable OBJECT with its own `required` list?
 
 `strict_tool_schema` (eval/agent.py) rewrites a list-valued `type` into an
