@@ -486,6 +486,38 @@ def test_the_system_prompt_names_the_precomputed_risk_field():
     assert "expected_capacity_at_risk_gbps" in SYSTEM_PROMPT
 
 
+def test_the_prompt_states_that_the_depot_is_shared():
+    assert "The depot is SHARED" in SYSTEM_PROMPT
+    assert "a pair held is a pair they can use" in SYSTEM_PROMPT
+
+
+def test_the_prompt_states_the_queue_discipline_both_ways():
+    lowered = SYSTEM_PROMPT.lower()
+    assert "earlier hour reaches the depot before one cut later" in lowered
+    assert "larger demand has the stronger claim" in lowered
+
+
+def test_the_prompt_never_states_the_comparison_or_its_answer():
+    # The judgement under test. Facts about the world, never the answer key
+    # (eval-fairness design, §3).
+    lowered = SYSTEM_PROMPT.lower()
+    for banned in ("conserve if", "if theirs is bigger", "sum the claimants",
+                   "add up the", "threshold", "usually larger"):
+        assert banned not in lowered
+
+
+def test_the_reasoning_instruction_fires_in_both_directions():
+    assert "say what claim you preferred over the claims you did not " \
+           "serve" in SYSTEM_PROMPT
+    assert "If you held one, say what you held it for" in SYSTEM_PROMPT
+
+
+def test_the_prompt_says_the_actionable_service_is_shown_mechanically():
+    assert "not because it has the stronger claim" in SYSTEM_PROMPT
+    assert "real competing claim on the same depot" in SYSTEM_PROMPT
+    assert "service under test" not in SYSTEM_PROMPT
+
+
 TIMING_BAD_ACTION = {"action": "hedge", "reasoning": "neither act nor wait"}
 TIMING_NO_REASONING = {"action": "wait", "reasoning": "   "}
 
