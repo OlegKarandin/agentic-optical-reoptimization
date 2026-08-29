@@ -450,6 +450,25 @@ class ClaudeDecider:
             messages=messages,
         )
 
+    @staticmethod
+    def _check_contested_claim(decision, payload, tool_name) -> None:
+        """A claim must name a service the model was actually shown.
+
+        Same class of guard as the hallucinated risk-group id that burned 3 of
+        5 iterations in a real T3a rollout (control-arm findings, root cause
+        #3): the generated JSON disagreeing with the payload it was generated
+        from. It rides the existing MAX_ATTEMPTS retry loop rather than a new
+        mechanism -- from_dict cannot do this because it never sees the
+        observation."""
+        claim = getattr(decision, "contested_claim", None)
+        if claim is None:
+            return
+        if claim["service_id"] not in payload["exposure"]:
+            raise DecisionError(
+                f"{tool_name}: `contested_claim.service_id` "
+                f"{claim['service_id']!r} is not in this observation's "
+                f"`exposure`. Name a service you were shown, or null.")
+
     def _decide(self, tool_name, decision_cls, obs, payload, user_content):
         """One decision, with up to MAX_ATTEMPTS self-correction rounds.
 
@@ -483,6 +502,7 @@ class ClaudeDecider:
                 continue
             try:
                 decision = decision_cls.from_dict(block.input)
+                self._check_contested_claim(decision, payload, tool_name)
             except DecisionError as exc:
                 failure = exc
                 # Echo the assistant content back unchanged -- with adaptive

@@ -545,6 +545,35 @@ def test_a_tool_use_block_naming_a_different_tool_is_not_accepted():
     assert len(client.messages.calls) == 2
 
 
+def test_a_claim_naming_an_unshown_service_is_retried_not_accepted():
+    decider, client = _decider(
+        FakeResponse(FakeToolUse(TIMING_TOOL, {
+            "action": "act", "reasoning": "d9999 outranks me",
+            "contested_claim": {"service_id": "d9999",
+                                "expected_capacity_at_risk_gbps": 900.0}},
+                                 block_id="toolu_first")),
+        FakeResponse(FakeToolUse(TIMING_TOOL, {
+            "action": "act", "reasoning": "nothing else is exposed",
+            "contested_claim": None})))
+    decision = decider.timing(_obs(others=CLAIMANTS))
+    assert decision.contested_claim is None
+    assert len(client.messages.calls) == 2
+    correction = client.messages.calls[1]["messages"][-1]["content"][0]
+    assert correction["is_error"] is True
+    assert "d9999" in correction["content"]
+
+
+def test_a_claim_naming_a_shown_service_is_accepted_first_time():
+    shown = CLAIMANTS[0][0]
+    decider, client = _decider(FakeResponse(FakeToolUse(TIMING_TOOL, {
+        "action": "wait", "reasoning": "they are ahead of me in the queue",
+        "contested_claim": {"service_id": shown,
+                            "expected_capacity_at_risk_gbps": 12.0}})))
+    decision = decider.timing(_obs(others=CLAIMANTS))
+    assert decision.contested_claim["service_id"] == shown
+    assert len(client.messages.calls) == 1
+
+
 def test_recovery_on_the_third_attempt_still_returns_a_decision():
     decider, client = _decider(
         FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_BAD_ACTION)),
