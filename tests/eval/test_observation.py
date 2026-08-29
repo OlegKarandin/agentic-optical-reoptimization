@@ -163,3 +163,29 @@ def test_an_episode_with_no_commits_yet_reports_an_empty_action_list(scenario):
     assert obs.actions_taken == ()
     assert obs.to_dict()["actions_taken"] == []
     assert obs.to_dict()["spares_spent"] == 0
+
+
+def test_the_wire_names_the_actionable_service_not_the_one_under_test(
+        scenario):
+    # "service under test" is eval-harness vocabulary leaking into the
+    # operational world; being named it reads as "this is the important one",
+    # which is exactly the framing the control run's root cause #5 accuses
+    # (eval-fairness design, §5.3).
+    payload = build_observation(scenario, "t0", service_points=POINTS,
+                                services=SERVICES, spares_on_hand=1).to_dict()
+    assert payload["actionable_service"] == "storm-svc-1"
+    assert "service_under_test" not in payload
+
+
+def test_the_roster_marks_which_row_the_tools_can_act_on(scenario):
+    rows = build_observation(scenario, "t0", service_points=POINTS,
+                             services=SERVICES,
+                             spares_on_hand=1).to_dict()["services"]
+    actionable = [r for r in rows if r.get("actionable")]
+    assert [r["id"] for r in actionable] == ["storm-svc-1"]
+
+
+def test_the_python_attribute_keeps_the_harness_name(scenario):
+    obs = build_observation(scenario, "t0", service_points=POINTS,
+                            services=SERVICES, spares_on_hand=1)
+    assert obs.service_under_test == "storm-svc-1"

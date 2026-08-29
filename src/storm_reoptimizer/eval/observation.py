@@ -132,14 +132,23 @@ class Observation:
         """JSON-serializable form, for the trace and for step 6's prompt."""
         return {
             "scenario_id": self.scenario_id,
-            "service_under_test": self.service_under_test,
+            # "service under test" is eval-harness vocabulary; on the wire it
+            # reads as "this is the important one", which is the framing the
+            # control run's root cause #5 accuses. The Python attribute keeps
+            # the harness name -- it is the correct one for a harness concept
+            # -- and only the wire speaks the operational one (eval-fairness
+            # design, §5.3).
+            "actionable_service": self.service_under_test,
             "hour": self.hour,
             "hours_remaining": self.hours_remaining,
             "issued_at": self.issuance.issued_at,
             "cones": {h: {"width_km": c.width_km, "center": c.center}
                       for h, c in self.issuance.horizons.items()},
             "exposure": self.exposure,
-            "services": [dict(s) for s in self.services],
+            "services": [
+                {**dict(s), "actionable": True}
+                if s["id"] == self.service_under_test else dict(s)
+                for s in self.services],
             "spares_on_hand": self.spares_on_hand,
             "lead_time_hours": {
                 lever: lead_time_hours_for(lever, self.lead_time_hours)

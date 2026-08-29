@@ -121,7 +121,7 @@ def test_projection_preserves_every_field_the_decision_points_read():
                                "on_hand": 1})
     payload = project_observation(obs)
     raw = obs.to_dict()
-    for key in ("scenario_id", "service_under_test", "hour",
+    for key in ("scenario_id", "actionable_service", "hour",
                 "hours_remaining", "issued_at", "cones", "spares_on_hand",
                 "lead_time_hours", "risk_group_ids", "iteration",
                 "last_rejection"):
