@@ -563,19 +563,33 @@ def test_a_committed_action_debits_the_ledger_and_records_its_lead_time(
 def test_an_unaffordable_choice_is_rejected_and_the_loop_retries(
     tmp_path, loaded_state_path, local_server_command, local_server_env,
 ):
-    broke = dataclasses.replace(_scenario(tmp_path), spares_on_hand=0)
+    # run_episode builds the SpareLedger from `scenario.spare_inventory`
+    # (Task 9), not `spares_on_hand` -- both must be zeroed for the ledger
+    # to actually be empty. `depot_site` is left alone: it already comes
+    # through as "satna" from SMOKE, which is what `spare_inventory` here
+    # needs to key on.
+    broke = dataclasses.replace(
+        _scenario(tmp_path), spares_on_hand=0, spare_inventory={"satna": 0})
     trace = asyncio.run(_run(
         broke, ForecastBlindBaseline("immediate"),
         loaded_state_path, local_server_command, local_server_env))
     rejections_by_hour = [h.get("rejections", []) for h in trace.hours]
-    # With no spares, any optical candidate must be refused by the ledger.
+    # With no spares, any optical candidate must be refused by the ledger --
+    # assert this actually happened rather than silently no-op'ing if it
+    # didn't (found live: a stale `spares_on_hand=0`-only replace() left
+    # `spare_inventory` at SMOKE's real {"satna": 2}, so the ledger was never
+    # actually broke and this whole test passed for the wrong reason).
+    insufficient = [r for hour_rejections in rejections_by_hour
+                    for r in hour_rejections
+                    if r["type"] == "insufficient_spares"]
+    assert insufficient, (
+        f"expected at least one insufficient_spares rejection with an "
+        f"empty ledger; rejections_by_hour={rejections_by_hour}")
     # The retry cap is per ACTING HOUR (a global constraint), not per
     # episode -- both t0 and t1 are exposed here, so each independently
     # exhausts its own cap; the total across the episode can exceed
     # MAX_ITERATIONS even though no single hour ever does.
-    if any(r["type"] == "insufficient_spares"
-           for hour_rejections in rejections_by_hour for r in hour_rejections):
-        assert max(len(hr) for hr in rejections_by_hour) <= MAX_ITERATIONS
+    assert max(len(hr) for hr in rejections_by_hour) <= MAX_ITERATIONS
     assert trace.spares_remaining == 0
 
 
