@@ -12,7 +12,7 @@ import textwrap
 
 import pytest
 
-from storm_reoptimizer.eval.cone import cut_probability, radial_offset_km
+from storm_reoptimizer.eval.cone import p_cut_point, radial_offset_km
 from storm_reoptimizer.eval.derived import (
     DERIVED_VARS, FLIP_VARS, DerivedGeometryError, derived_geometry_from_point,
     exposure_horizon_hour, flip_scalars_from_points, horizon_widths_km,
@@ -95,14 +95,14 @@ def test_an_exposure_horizon_off_the_end_of_the_timeline_is_an_error(tmp_path):
 
 def test_p_cut_is_the_same_arithmetic_the_observation_shows_the_decider(tmp_path):
     """Not an independent reimplementation -- deliberately the same
-    radial_offset_km -> cut_probability chain build_observation puts in front
+    radial_offset_km -> p_cut_point chain build_observation puts in front
     of the decider, because the point is that this is a number the agent can
     read and therefore a number a one-line rule can key on."""
     scenario = _episode(tmp_path, "A", t3_lat=25.9)
     offset, p_cut = sut_p_cut_at_exposure_horizon(scenario, SUT_POINT)
     expected_offset = radial_offset_km(25.9, 81.0, *SUT_POINT)
     assert offset == pytest.approx(expected_offset)
-    assert p_cut == pytest.approx(cut_probability(expected_offset, 90.0, 74.0))
+    assert p_cut == pytest.approx(p_cut_point(expected_offset, 90.0, 74.0))
     # Unrounded, unlike the observation's 4-decimal display copy: the
     # equality check across halves must not paper over a real difference.
     assert p_cut != round(p_cut, 4) or p_cut in (0.0, 1.0)

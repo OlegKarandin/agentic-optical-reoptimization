@@ -194,7 +194,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..mcp_client import call_tool_json
-from .cone import cut_probability, expected_capacity_at_risk_gbps, radial_offset_km
+from .cone import expected_capacity_at_risk_gbps, p_cut_point, radial_offset_km
 from .observation import latest_issuance
 from .scenario_file import Issuance, ScenarioFile
 
@@ -331,7 +331,7 @@ def sut_p_cut_at_exposure_horizon(
     decision-hour issuance's cone at the exposure horizon.
 
     Exactly the arithmetic `build_observation` already puts in front of the
-    decider (`radial_offset_km` -> `cut_probability`), on exactly the same
+    decider (`radial_offset_km` -> `p_cut_point`), on exactly the same
     representative point (`runner.service_points`) -- which is the point: this
     is a number the agent can read, so it is a number a one-line rule can key
     on. Unrounded, unlike the observation's 4-decimal display copy, so the
@@ -339,8 +339,8 @@ def sut_p_cut_at_exposure_horizon(
     horizon = exposure_horizon_hour(scenario)
     cone = decision_issuance(scenario).horizons[horizon]
     offset = radial_offset_km(cone.center["lat"], cone.center["lon"], *sut_point)
-    return offset, cut_probability(offset, cone.width_km,
-                                   scenario.damage_radius_km)
+    return offset, p_cut_point(offset, cone.width_km,
+                               scenario.damage_radius_km)
 
 
 def sut_exposure_by_horizon(
@@ -348,7 +348,7 @@ def sut_exposure_by_horizon(
 ) -> dict[str, tuple[float, float]]:
     """`(offset_km, p_cut)` for the service under test at EVERY horizon the
     decision-hour issuance publishes -- not just the one `exposure_horizon_
-    hours` names. Same `radial_offset_km` -> `cut_probability` chain as
+    hours` names. Same `radial_offset_km` -> `p_cut_point` chain as
     `sut_p_cut_at_exposure_horizon`, run once per horizon, so a pair whose
     flip lives in a horizon OTHER than the declared exposure one still has
     the SUT's own exposure there held to account."""
@@ -356,8 +356,8 @@ def sut_exposure_by_horizon(
     out: dict[str, tuple[float, float]] = {}
     for horizon, cone in issuance.horizons.items():
         offset = radial_offset_km(cone.center["lat"], cone.center["lon"], *sut_point)
-        out[horizon] = (offset, cut_probability(offset, cone.width_km,
-                                                 scenario.damage_radius_km))
+        out[horizon] = (offset, p_cut_point(offset, cone.width_km,
+                                            scenario.damage_radius_km))
     return out
 
 
@@ -436,7 +436,7 @@ def _ecar_at_cone(scenario: ScenarioFile, cone, points, demands_gbps, *,
         offset = radial_offset_km(cone.center["lat"], cone.center["lon"],
                                   *point)
         total += expected_capacity_at_risk_gbps(
-            cut_probability(offset, cone.width_km, scenario.damage_radius_km),
+            p_cut_point(offset, cone.width_km, scenario.damage_radius_km),
             float(demand))
     return total
 
@@ -483,7 +483,7 @@ def flip_scalars_from_points(
         offset = radial_offset_km(cone.center["lat"], cone.center["lon"],
                                   *sut_point)
         sut_ecar[horizon] = expected_capacity_at_risk_gbps(
-            cut_probability(offset, cone.width_km, scenario.damage_radius_km),
+            p_cut_point(offset, cone.width_km, scenario.damage_radius_km),
             sut_demand)
 
     return FlipScalars(

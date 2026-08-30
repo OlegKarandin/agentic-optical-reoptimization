@@ -22,7 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from .cone import cut_probability, expected_capacity_at_risk_gbps, radial_offset_km
+from .cone import expected_capacity_at_risk_gbps, p_cut_point, radial_offset_km
 from .scenario_file import Issuance, ScenarioFile
 
 # The rule, stated as data so the trace can carry it. `zero` -> 0 hours;
@@ -190,7 +190,7 @@ def build_observation(
         for horizon, cone in issuance.horizons.items():
             offset = radial_offset_km(cone.center["lat"], cone.center["lon"],
                                       lat, lon)
-            p_cut = round(cut_probability(
+            p_cut = round(p_cut_point(
                 offset, cone.width_km, scenario.damage_radius_km), 4)
             per_horizon[horizon] = {
                 "hours_ahead": scenario.hours.index(horizon) - hour_index,

@@ -17,7 +17,7 @@ import asyncio
 import json
 from pathlib import Path
 
-from storm_reoptimizer.eval.cone import cone_polygon, cut_probability, radial_offset_km
+from storm_reoptimizer.eval.cone import cone_polygon, p_cut_point, radial_offset_km
 from storm_reoptimizer.eval.ledger import pairs_needed
 from storm_reoptimizer.eval.runner import service_points
 from storm_reoptimizer.events.filters import get_filter
@@ -42,7 +42,7 @@ async def probe(topology: Path, state: Path, service: str, lat: float,
             if point is None:
                 continue
             offset = radial_offset_km(lat, lon, *point)
-            p_cut = cut_probability(offset, width_km, damage_radius_km)
+            p_cut = p_cut_point(offset, width_km, damage_radius_km)
             print(f"{svc['id']:<24}{svc['demand_gbps']:>8.0f}"
                   f"{offset:>11.1f}{p_cut:>8.2f}")
 

@@ -1,24 +1,55 @@
 """Cone containment semantics (eval design spec, "Cone semantics"). Pure
 maths -- no server, no state file."""
+import math
+
 import pytest
+from scipy.stats import ncx2
 
 from storm_reoptimizer.eval.cone import (
-    CONTAINMENT_P, cone_polygon, cross_track_sigma_km, cut_probability,
-    expected_capacity_at_risk_gbps, radial_offset_km,
+    CONTAINMENT_P, RAYLEIGH_DIVISOR, cone_polygon, cross_track_sigma_km,
+    expected_capacity_at_risk_gbps, p_cut_point, radial_offset_km,
 )
 
 
-def test_sigma_is_calibrated_so_the_cone_half_width_captures_P():
-    # The defining property: an asset whose damaging-wind radius exactly
-    # equals the cone's half-width, sitting on the axis, is cut with
-    # probability CONTAINMENT_P. Everything else follows from this.
-    assert cut_probability(0.0, 90.0, 45.0) == pytest.approx(CONTAINMENT_P, abs=1e-9)
+def test_sigma_is_the_two_dimensional_rayleigh_calibration():
+    # The cone circle of radius R contains the storm CENTRE with probability
+    # 0.66 -- a statement about a disc in the PLANE. The distance from the
+    # forecast position to an isotropic 2-D Gaussian's realization is
+    # Rayleigh, not normal, so the quantile is sqrt(-2 ln(1-P)) = 1.46888...,
+    # not Phi^-1((1+P)/2) = 0.9542. The shipped sigma was 54% too large.
+    assert RAYLEIGH_DIVISOR == pytest.approx(
+        math.sqrt(-2.0 * math.log(1.0 - CONTAINMENT_P)), abs=1e-15)
+    assert cross_track_sigma_km(90.0) == pytest.approx(30.6355, abs=1e-4)
+    assert cross_track_sigma_km(320.0) == pytest.approx(108.9263, abs=1e-4)
+
+
+def test_the_calibration_round_trips_through_the_point_model():
+    # A target ON the axis with a damage radius equal to the cone's own
+    # half-width must be cut with probability exactly CONTAINMENT_P. At
+    # offset 0 the noncentral chi-square degenerates to the central one,
+    # whose CDF is the Rayleigh CDF the calibration was solved from -- so
+    # this asserts the two steps agree rather than merely coexist.
+    assert p_cut_point(0.0, 90.0, 45.0) == pytest.approx(CONTAINMENT_P, abs=1e-12)
+
+
+def test_the_point_model_is_the_noncentral_chi_square_cdf():
+    sigma = cross_track_sigma_km(90.0)
+    expected = float(ncx2.cdf((74.0 / sigma) ** 2, df=2,
+                              nc=(120.6 / sigma) ** 2))
+    assert p_cut_point(120.6, 90.0, 74.0) == pytest.approx(expected, abs=1e-15)
+    assert expected == pytest.approx(0.046013, abs=1e-6)
+
+
+def test_the_point_model_saturates_and_vanishes_at_the_limits():
+    assert p_cut_point(0.0, 15.0, 74.0) == pytest.approx(1.0, abs=1e-9)
+    assert p_cut_point(5000.0, 90.0, 74.0) == pytest.approx(0.0, abs=1e-12)
+    assert p_cut_point(120.0, 90.0, 1e5) == pytest.approx(1.0, abs=1e-9)
 
 
 def test_cut_probability_falls_off_with_offset_from_the_axis():
-    centre = cut_probability(0.0, 90.0, 60.0)
-    edge = cut_probability(45.0, 90.0, 60.0)
-    far = cut_probability(200.0, 90.0, 60.0)
+    centre = p_cut_point(0.0, 90.0, 60.0)
+    edge = p_cut_point(45.0, 90.0, 60.0)
+    far = p_cut_point(200.0, 90.0, 60.0)
     assert centre > edge > far
     assert 0.0 <= far < 0.1
 
@@ -26,7 +57,7 @@ def test_cut_probability_falls_off_with_offset_from_the_axis():
 def test_a_wider_cone_is_a_less_certain_forecast_on_the_axis():
     # More cross-track spread => the track is less likely to pass right over
     # an on-axis asset. This is what makes "the cone tightens" informative.
-    assert cut_probability(0.0, 60.0, 40.0) > cut_probability(0.0, 200.0, 40.0)
+    assert p_cut_point(0.0, 60.0, 40.0) > p_cut_point(0.0, 200.0, 40.0)
 
 
 def test_width_must_be_positive():

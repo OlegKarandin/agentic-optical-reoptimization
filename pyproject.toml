@@ -21,6 +21,13 @@ dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.5"]
 # plain `python -m storm_reoptimizer.eval.suite` -- run with no SDK and no
 # credentials.
 agent = ["anthropic>=0.40"]
+# eval/cone.py's exposure model composes scipy's ncx2 (the exact point-target
+# answer), Sobol (deterministic low-discrepancy sample locations) and norm.ppf
+# (the inverse transform onto a 2-D Gaussian). Kept out of `dependencies`
+# because the runtime storm pipeline never imports storm_reoptimizer.eval;
+# mandatory in practice for development, since eval/cone.py is imported by
+# observation, runner, derived, rules and most of tests/eval/.
+eval = ["scipy>=1.11"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
