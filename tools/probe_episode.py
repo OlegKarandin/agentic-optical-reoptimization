@@ -18,7 +18,7 @@ import json
 from pathlib import Path
 
 from storm_reoptimizer.eval.cone import cone_polygon, p_cut_point, radial_offset_km
-from storm_reoptimizer.eval.ledger import pairs_needed
+from storm_reoptimizer.eval.ledger import spares_needed
 from storm_reoptimizer.eval.runner import service_points
 from storm_reoptimizer.events.filters import get_filter
 from storm_reoptimizer.geo_mapper import load_edges, map_geo_event_to_assets
@@ -53,6 +53,14 @@ async def probe(topology: Path, state: Path, service: str, lat: float,
         for edge in exposed:
             print(f"  {edge.src} <-> {edge.dst}")
 
+        # oms_id -> [src_node_id, dst_node_id] -- same shape
+        # runner.service_geometry/assertions._oms_nodes build, needed to
+        # resolve a candidate's new_lightpaths to endpoint SITES.
+        optical = await call_tool_json(client, "get_topology",
+                                       {"layer": "optical"})
+        oms_nodes = {o["id"]: [o["src_node_id"], o["dst_node_id"]]
+                    for o in optical["oms"]}
+
         menu = await call_tool_json(client, "route_service", {
             "service_id": service, "protected": False, "basis": "physical",
             "level": "link", "best_effort": False, "avoid": avoid})
@@ -62,7 +70,7 @@ async def probe(topology: Path, state: Path, service: str, lat: float,
             print(f"  candidate_{i}: lever={cand['lever']:<16} "
                   f"restored={cand['restored_gbps']:>6.0f}G "
                   f"shortfall={cand['shortfall_gbps']:>6.0f}G "
-                  f"pairs={pairs_needed(cand)}")
+                  f"spares={spares_needed(cand, oms_nodes)}")
             print(f"      {json.dumps(cand['cost_vector'])}")
         if not menu["candidates"]:
             print("  (empty menu)")
