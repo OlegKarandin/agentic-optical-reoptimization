@@ -59,6 +59,27 @@ def _peak_capacity_at_risk_gbps(per_horizon: dict) -> float:
                 for e in per_horizon.values()), default=0.0)
 
 
+def _depot_eligible(svc: str, obs: Observation) -> bool:
+    """Whether `svc` terminates at this episode's depot site, so a spare
+    spent there is a real claim against the same inventory `spares_on_hand`
+    counts.
+
+    Read off `restorable_groups` rather than a second, independent notion of
+    "terminates at depot_site": Task 10's co-terminating grouping already
+    excludes every service that does not (`observation._restorable_groups`'s
+    own `depot_site not in sites: continue`), and membership does not depend
+    on the horizon or the magnitude of exposure -- a service present in
+    `exposure` at all gets a per-horizon entry (and so a group) at EVERY
+    horizon the current issuance publishes if it is eligible at all. Reusing
+    it, instead of adding a parallel eligibility test, is what guarantees the
+    projection's notion of "eligible" and `horizon_totals`' own
+    `largest_restorable_group_ecar_gbps` can never disagree about who is
+    competing for this depot."""
+    return any(svc in group["members"]
+              for groups in obs.restorable_groups.values()
+              for group in groups)
+
+
 def project_observation(
     obs: Observation, *,
     p_cut_threshold: float = P_CUT_ENUMERATION_THRESHOLD,
@@ -66,38 +87,74 @@ def project_observation(
     """`obs.to_dict()` reduced to decision-relevant content, plus an explicit
     account of what was dropped.
 
-    Kept: the service under test always, and every service whose peak p_cut
-    reaches `p_cut_threshold`. `services` is trimmed to the same set --
-    `exposure` already carries each service's `demand_gbps`, so the roster is
-    nearly redundant with it for decision purposes.
+    Kept: the service under test always, and every service that is BOTH
+    depot-eligible (`_depot_eligible`: terminates at this episode's depot
+    site, so it can actually draw on the inventory `spares_on_hand` counts)
+    AND whose peak p_cut reaches `p_cut_threshold`. `services` is trimmed to
+    the same set -- `exposure` already carries each service's `demand_gbps`,
+    so the roster is nearly redundant with it for decision purposes.
+    `restorable_groups` is trimmed too, to groups whose members are ALL kept
+    -- otherwise a service's id would leak through that field even though it
+    was dropped everywhere else.
 
-    `omitted_services["count"]` is over the server's full roster (a service
-    with no representative point has no exposure entry at all and is counted
-    here); the two risk figures are over the omitted services that do have
-    exposure, and contribute 0.0 for the rest."""
+    Everything dropped is accounted for, split into TWO buckets rather than
+    one (design spec §4.2): `below_threshold` for depot-eligible services
+    that are simply quiet, and `ineligible_for_depot` for services that may
+    be badly exposed but cannot draw on this depot at all, so they are no
+    part of the contest this episode's spare decides. Folding the two
+    together would hand the decider a large `max_p_cut` it cannot interpret
+    -- an ineligible service's own exposure is not a competing claim, no
+    matter how high -- which is exactly the overstatement D2 found in the
+    gold rationales. Each bucket's `count` is over the server's full roster
+    (a service with no representative point has no exposure entry at all,
+    and is counted here as `below_threshold` -- no exposure data means no
+    basis to call it ineligible either); the two risk figures are over the
+    dropped services that do have exposure, and contribute 0.0 for the
+    rest."""
     payload = obs.to_dict()
     exposure = payload["exposure"]
 
     keep = {obs.service_under_test}
     keep |= {svc for svc, per_horizon in exposure.items()
-             if _peak_p_cut(per_horizon) >= p_cut_threshold}
-    omitted = [svc for svc in exposure if svc not in keep]
+             if _depot_eligible(svc, obs)
+             and _peak_p_cut(per_horizon) >= p_cut_threshold}
+    dropped = [svc for svc in exposure if svc not in keep]
+    below_threshold = [svc for svc in dropped if _depot_eligible(svc, obs)]
+    ineligible_for_depot = [svc for svc in dropped
+                            if not _depot_eligible(svc, obs)]
+
+    def _bucket(svcs: list[str], *, extra_count: int = 0) -> dict:
+        return {
+            "count": len(svcs) + extra_count,
+            "max_p_cut": round(
+                max((_peak_p_cut(exposure[svc]) for svc in svcs),
+                   default=0.0), 4),
+            "summed_expected_capacity_at_risk_gbps": round(
+                sum(_peak_capacity_at_risk_gbps(exposure[svc])
+                    for svc in svcs), 3),
+        }
 
     all_services = payload["services"]
     payload["exposure"] = {svc: per_horizon
                            for svc, per_horizon in exposure.items()
                            if svc in keep}
     payload["services"] = [s for s in all_services if s["id"] in keep]
+    payload["restorable_groups"] = {
+        horizon: tuple(g for g in groups
+                      if all(m in keep for m in g["members"]))
+        for horizon, groups in payload["restorable_groups"].items()}
     payload["n_services_total"] = len(all_services)
+    # Roster entries with no exposure data at all (no storm-cuttable span --
+    # see build_observation) are neither in `exposure` nor `dropped` above;
+    # fold them into `below_threshold`, since zero exposure is quiet by
+    # definition and there is no evidence to call them ineligible.
+    no_exposure_data = (len(all_services) - len(payload["services"])
+                        - len(dropped))
     payload["omitted_services"] = {
-        "count": len(all_services) - len(payload["services"]),
         "p_cut_threshold": p_cut_threshold,
-        "max_p_cut": round(
-            max((_peak_p_cut(exposure[svc]) for svc in omitted), default=0.0),
-            4),
-        "summed_expected_capacity_at_risk_gbps": round(
-            sum(_peak_capacity_at_risk_gbps(exposure[svc])
-                for svc in omitted), 3),
+        "below_threshold": _bucket(below_threshold,
+                                   extra_count=no_exposure_data),
+        "ineligible_for_depot": _bucket(ineligible_for_depot),
     }
     return payload
 
@@ -204,18 +261,25 @@ the product `p_cut * demand_gbps`, already computed for you. It is the \
 quantity that makes two competing claims on one resource comparable, and it \
 is in Gbps.
 - `services` -- the roster for the services shown.
-- `spares_on_hand` -- spare transponder PAIRS in the depot. One pair per new \
-lightpath. This inventory is invisible to the routing tools: they will \
-happily propose a candidate the depot cannot fulfil, and the harness will \
-reject that choice.
+- `spares_on_hand` -- spare transponders held at `depot_site`, the one site \
+whose inventory (the scenario's own `spare_inventory`, held per site) is \
+scarce in this episode. Lighting a new lightpath consumes one transponder at \
+each of its two endpoint sites; an `ip_reroute` consumes none. Every other \
+site is stocked well enough that only `depot_site` ever binds. This \
+inventory is invisible to the routing tools: they will happily propose a \
+candidate the depot cannot fulfil, and the harness will reject that choice.
 \n\
-  The depot is SHARED. Other services on this network draw on the same \
-inventory when they need restoring, and a pair you spend is not available to \
-them. Order matters: a service cut in an EARLIER hour reaches the depot \
-before one cut later, and among services cut in the same hour the larger \
-demand has the stronger claim. You are not asked to restore those services \
-and their restoration is not simulated in this episode -- but the claim they \
-have on the inventory is real, and a pair held is a pair they can use.
+  That depot is SHARED -- with the other services that terminate at the same \
+site. A transponder you spend there is not available to them. Order matters: \
+a service cut in an EARLIER hour reaches the depot before one cut later, and \
+among services cut in the same hour the larger demand has the stronger \
+claim. You are not asked to restore them and their restoration is not \
+simulated, but their claim on this site's inventory is real.
+\n\
+  Services that do not terminate at `depot_site` are summarized under \
+`omitted_services.ineligible_for_depot`. They may be badly exposed; they are \
+not competing for this inventory, because restoring them draws on their own \
+sites' depots.
 - `actions_taken` and `spares_spent` -- what YOU have already committed \
 earlier in this episode: per action its hour, its lever, the spare pairs it \
 cost, the `avoid` set it was routed under, and `effective_at_hour` -- the \
@@ -234,8 +298,8 @@ the action lands after the cut.
 that cone. These ids are what you name when you constrain routing.
 - `unconstrained_menu` -- present on the constraints request only. The \
 routing menu as it stands with nothing avoided: each entry's \
-`candidate_label`, its `lever`, and `pairs_needed`, its own cost in spare \
-transponder pairs. Cost vectors are not shown here; they belong to the \
+`candidate_label`, its `lever`, and `spares_needed`, its own cost in spare \
+transponders PER SITE. Cost vectors are not shown here; they belong to the \
 objective decision. Constraining removes entries from this list -- an entry \
 that reuses a path your `avoid` set forbids will not survive into the menu \
 you are given at the next step. Labels here are positions within THIS list \
@@ -245,16 +309,19 @@ the same candidate there.
 - `iteration`, `last_rejection` -- within one hour you may get up to five \
 attempts. `last_rejection` tells you why the previous attempt failed.
 - `n_services_total` and `omitted_services` -- the observation shows you the \
-actionable service plus every other service whose cut probability is high \
-enough to be shown individually rather than folded into `omitted_services`. \
-The rest are summarized rather than listed: how many, the largest cut \
-probability among them, and `summed_expected_capacity_at_risk_gbps` -- each \
-omitted service taken at its own worst horizon, then summed. Read that \
-summary before assuming the network is as small as the list you were given. \
-The actionable service is shown \
-unconditionally, even at zero exposure, because it is the only one these \
-tools can act on -- not because it has the stronger claim. Every other \
-service listed is a real competing claim on the same depot.
+actionable service plus every other DEPOT-ELIGIBLE service whose cut \
+probability is high enough to be shown individually. The rest are \
+summarized, split into two accounts so a large number in one is never \
+misread as the other: one bucket for depot-eligible services that are \
+simply quiet, and `omitted_services.ineligible_for_depot` for services that \
+may be badly exposed but do not terminate at `depot_site` at all, so they \
+are no part of this contest. Each bucket carries `count`, `max_p_cut`, and \
+`summed_expected_capacity_at_risk_gbps` -- the services in that bucket taken \
+at their own worst horizon, then summed. Read both before assuming the \
+network is as small as the list you were given. The actionable service is \
+shown unconditionally, even at zero exposure, because it is the only one \
+these tools can act on -- not because it has the stronger claim. Every \
+other service listed is a real competing claim on the same depot.
 """
 
 # W3.2's measured arm. Purely descriptive: what the field contains, over
@@ -262,12 +329,22 @@ service listed is a real competing claim on the same depot.
 # says nothing about which way the comparison should come out -- the
 # comparison is the judgement being measured.
 _RIVAL_TOTALS_BULLET = """\
-- `horizon_totals` -- per horizon, two already-summed figures: \
-`sut_ecar_gbps`, the actionable service's own expected capacity at risk, and \
-`non_sut_total_ecar_gbps`, the summed expected capacity at risk of every \
-OTHER service in the model at that horizon. The second is over the whole \
-network, not only the services listed above, so it will usually exceed the \
-sum of the rows you can see.
+- `horizon_totals` -- per horizon, three already-summed figures: \
+`sut_ecar_gbps`, the actionable service's own expected capacity at risk; \
+`largest_restorable_group_ecar_gbps`, the LARGEST expected capacity at risk \
+among the co-terminating groups sharing this depot; and \
+`non_sut_ineligible_ecar_gbps`, the summed expected capacity at risk of \
+every service that cannot draw on this depot at all. One spare buys one \
+lightpath: services that co-terminate (share both endpoints) are jointly \
+restored by it and their figures add within a group, but across groups only \
+the MAXIMUM is an honest competing claim, never a sum. \
+`non_sut_ineligible_ecar_gbps` is kept for scale, not as a claim: it is over \
+the whole network, not only the services listed above, and none of it can \
+be restored from this depot regardless of how large it reads.
+- `restorable_groups` -- per horizon, the co-terminating groups themselves \
+that `largest_restorable_group_ecar_gbps` maxes over: each with `endpoints`, \
+`members`, and `ecar_gbps`, so you can see WHICH services would share one \
+restoring lightpath, not just the total.
 """
 
 _SYSTEM_PROMPT_TAIL = """\
@@ -304,10 +381,11 @@ ordering over these seven cost terms:
 - `transponders` -- **network-wide**: 2.0 x the count of every lightpath in \
 the whole model after the candidate is materialized on a clone. It is NOT \
 this candidate's own transponder cost, and comparing candidates on it is \
-close to meaningless. Each candidate carries a precomputed `pairs_needed` \
-field, which IS its own cost in spare transponder pairs (one per new \
-lightpath, zero for an `ip_reroute`). Reason about spares from \
-`pairs_needed` and `spares_on_hand`, never from `transponders`.
+close to meaningless. Each candidate carries a precomputed `spares_needed` \
+field, which IS its own cost in spare transponders -- now a PER-SITE dict, \
+one entry per site where this candidate's own new lightpaths charge a \
+transponder (empty for an `ip_reroute`). Reason about spares from \
+`spares_needed` and `spares_on_hand`, never from `transponders`.
 - `max_util` -- worst link utilization, 0-1. Cost.
 - `dropped_traffic` -- Gbps that stays unrestored. Cost.
 - `added_latency` -- milliseconds added. Cost.

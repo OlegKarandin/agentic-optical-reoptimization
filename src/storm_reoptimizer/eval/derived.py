@@ -198,7 +198,7 @@ from .cone import (
     Segment, expected_capacity_at_risk_gbps, nearest_span_offset_km,
     p_cut_region, radial_offset_km,
 )
-from .observation import latest_issuance
+from .observation import _restorable_groups, latest_issuance
 from .scenario_file import Issuance, ScenarioFile
 
 if TYPE_CHECKING:                    # pragma: no cover
@@ -392,7 +392,23 @@ def sut_exposure_by_horizon(
 FLIP_VARS = ("claimant_ecar_at_exposure_horizon",
              "claimant_ecar_before_exposure_horizon",
              "claimant_ecar_peak_over_horizons",
-             "claimant_ecar_min_over_horizons")
+             "claimant_ecar_min_over_horizons",
+             # Added 2026-08-30. The others summarize a network-wide SUM of
+             # every non-SUT service's exposure, which is the wrong statistic
+             # under a node-local depot AND the wrong statistic full stop: one
+             # spare buys one lightpath, so only a co-terminating group's
+             # figure is honestly what it competes for. This is the number the
+             # agent is now actually shown, and it is swept here for exactly
+             # the reason the other four are -- a number in the observation
+             # that no check enumerates is how T1's confound survived three
+             # rounds of review.
+             #
+             # NOT in rules.ENUMERATED_VARS: that check is per-pair with
+             # per-pair orientation, so any variable differing between two
+             # halves scores 1.0 by construction, and this one differs BY
+             # DESIGN because it is the flip. See rules.py's two-check
+             # doctrine and this plan's Task 11 deviation note.
+             "largest_restorable_group_ecar_gbps")
 
 
 @dataclass(frozen=True)
@@ -417,6 +433,15 @@ class FlipScalars:
     # reading" the design spec's 89.4 G claim rested on -- see the FLIP_VARS
     # comment above and the module docstring.
     claimant_ecar_min_over_horizons: float
+    # The largest co-terminating group's expected capacity at risk AT THE
+    # EXPOSURE HORIZON -- the same statistic `observation._horizon_totals`
+    # puts in front of the decider, computed through the SAME
+    # `observation._restorable_groups` function so the whole-suite check and
+    # what the agent saw cannot drift apart. Zero when no `endpoint_sites`
+    # is supplied (no caller can assert eligibility, so no group is formed),
+    # matching `build_observation`'s own "honest answer when the caller
+    # cannot say what terminates where".
+    largest_restorable_group_ecar_gbps: float
     # SUT-own expected capacity at risk at EVERY horizon of the decision-hour
     # issuance. Not a claimant quantity -- it is here because W1.5's
     # flip-dominance check needs both sides of the same comparison and
@@ -454,11 +479,18 @@ def flip_scalars_from_spans(
     scenario: ScenarioFile, *,
     spans: dict[str, tuple[Segment, ...]],
     demands_gbps: dict[str, float],
+    endpoint_sites: dict[str, tuple[str, str]] | None = None,
 ) -> FlipScalars:
     """The pure half of W1.1: the claimant aggregates, given every service's
     storm-cuttable spans and demand. Split out from `flip_scalars_for` for the
     same reason `derived_geometry_from_spans` is -- so the arithmetic is
-    unit-testable without a server."""
+    unit-testable without a server.
+
+    `endpoint_sites` (service id -> (src_site, dst_site)) drives
+    `largest_restorable_group_ecar_gbps` exactly the way it drives
+    `observation.build_observation`'s `restorable_groups` -- optional and
+    defaulted to empty, like that function's own parameter, so every existing
+    caller with no depot context to offer keeps constructing."""
     issuance = decision_issuance(scenario)
     exposure_horizon = exposure_horizon_hour(scenario)
     exposure_index = scenario.hours.index(exposure_horizon)
@@ -496,6 +528,28 @@ def flip_scalars_from_spans(
                              scenario.damage_radius_km)
         sut_ecar[horizon] = expected_capacity_at_risk_gbps(p_cut, sut_demand)
 
+    # Per-service (not summed) exposure, in the exact shape
+    # `observation._restorable_groups` consumes -- so this reuses THAT
+    # function rather than reimplementing its co-terminating logic, and the
+    # whole-suite check can never see a different grouping than the one
+    # `build_observation` puts in front of the decider.
+    per_service_exposure = {
+        svc_id: {
+            horizon: {"expected_capacity_at_risk_gbps":
+                     expected_capacity_at_risk_gbps(
+                         p_cut_region(svc_spans, cone.center["lat"],
+                                     cone.center["lon"], cone.width_km,
+                                     scenario.damage_radius_km),
+                         float(demands_gbps.get(svc_id, 0.0)))}
+            for horizon, cone in issuance.horizons.items()}
+        for svc_id, svc_spans in spans.items()}
+    groups_by_horizon = _restorable_groups(
+        per_service_exposure, endpoint_sites or {}, depot_site=scenario.depot_site,
+        service_under_test=sut)
+    largest_restorable_group_ecar_gbps = max(
+        (g["ecar_gbps"] for g in groups_by_horizon.get(exposure_horizon, ())),
+        default=0.0)
+
     return FlipScalars(
         scenario_id=scenario.id,
         exposure_horizon=exposure_horizon,
@@ -507,6 +561,7 @@ def flip_scalars_from_spans(
                                              default=0.0),
         claimant_ecar_min_over_horizons=min(per_horizon.values(),
                                             default=0.0),
+        largest_restorable_group_ecar_gbps=largest_restorable_group_ecar_gbps,
         sut_ecar_by_horizon=sut_ecar)
 
 
@@ -528,7 +583,8 @@ async def flip_scalars_for(client: "Client", scenarios: list[ScenarioFile],
     services = await call_tool_json(client, "get_services")
     demands = {s["id"]: float(s["demand_gbps"]) for s in services["services"]}
     return {s.id: flip_scalars_from_spans(s, spans=geometry.cuttable_spans,
-                                          demands_gbps=demands)
+                                          demands_gbps=demands,
+                                          endpoint_sites=geometry.endpoint_sites)
             for s in scenarios}
 
 

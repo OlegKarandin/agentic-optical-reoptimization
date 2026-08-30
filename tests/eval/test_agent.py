@@ -4,6 +4,7 @@ import ast
 import json
 import tomllib
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -23,12 +24,22 @@ from storm_reoptimizer.eval.scenario_file import ConeAtHorizon, Issuance
 from storm_reoptimizer.eval.suite import build_arg_parser, build_deciders
 
 HORIZON = "t3"
+# T3a's own depot_site (scenarios/T3a.yaml). storm-svc-1 terminates
+# satna<->allahabad -- the only service in the shipped state that touches it.
+DEPOT_SITE = "satna"
 
 
 def _obs(*, others=(), sut_p_cut=0.3410, iteration=0, last_rejection=None):
     """T3a's shape at t1: the service under test centred in the far cone,
     plus whichever other claimants the test wants to place. `others` is a
-    sequence of (service_id, p_cut, demand_gbps)."""
+    sequence of (service_id, p_cut, demand_gbps).
+
+    Every claimant placed this way terminates at `DEPOT_SITE` (paired with a
+    site unique to it, so co-terminating grouping never merges two of them),
+    which makes it depot-eligible by construction -- these are the pre-Task-11
+    enumeration-threshold tests, not the eligibility-filter ones
+    (`_wide_observation` below is that one), so the claimants here should
+    survive projection exactly as they did before the eligibility split."""
     exposure = {"storm-svc-1": {HORIZON: {
         "hours_ahead": 2, "offset_km": 0.0, "width_km": 320.0,
         "p_cut": sut_p_cut, "demand_gbps": 300.0}}}
@@ -37,12 +48,62 @@ def _obs(*, others=(), sut_p_cut=0.3410, iteration=0, last_rejection=None):
                  "dst_router": "router_allahabad",
                  "working_path": ["ipl-cand-storm-svc-1-0"],
                  "protection_path": ["ipl-prot-storm-svc-1-0"]}]
+    groups = []
     for svc_id, p_cut, demand in others:
         exposure[svc_id] = {HORIZON: {
             "hours_ahead": 2, "offset_km": 129.3, "width_km": 320.0,
             "p_cut": p_cut, "demand_gbps": demand}}
         services.append({"id": svc_id, "demand_gbps": demand,
                          "src_router": "router_a", "dst_router": "router_b",
+                         "working_path": [], "protection_path": []})
+        groups.append({"endpoints": (DEPOT_SITE, svc_id), "members": (svc_id,),
+                       "ecar_gbps": round(p_cut * demand, 3)})
+    return Observation(
+        scenario_id="T3a", service_under_test="storm-svc-1", hour="t1",
+        hour_index=1, hours_remaining=2,
+        issuance=Issuance(issued_at="t1", horizons={
+            HORIZON: ConeAtHorizon(
+                cone={"type": "Polygon", "coordinates": []}, width_km=320.0,
+                center={"lat": 24.855553, "lon": 81.327777})}),
+        exposure=exposure, services=tuple(services), spares_on_hand=1,
+        lead_time_hours=1, risk_group_ids={HORIZON: "rg_T3a_t1_t3"},
+        iteration=iteration, last_rejection=last_rejection,
+        restorable_groups={HORIZON: tuple(groups)} if groups else {})
+
+
+def _wide_observation():
+    """T3a's shape at t1, widened with a full eligible/ineligible/quiet
+    claimant roster (design spec §4.2's worked example): svc-b and svc-c
+    terminate at `DEPOT_SITE` and clear the enumeration threshold; svc-d is
+    heavily exposed but terminates kolkata<->mumbai, nowhere near the depot;
+    svc-e terminates at `DEPOT_SITE` too but clears no threshold at all."""
+    exposure = {"storm-svc-1": {HORIZON: {
+        "hours_ahead": 2, "offset_km": 0.0, "width_km": 320.0,
+        "p_cut": 0.3410, "demand_gbps": 300.0}}}
+    services = [{"id": "storm-svc-1", "demand_gbps": 300.0,
+                 "src_router": "router_satna",
+                 "dst_router": "router_allahabad",
+                 "working_path": ["ipl-cand-storm-svc-1-0"],
+                 "protection_path": ["ipl-prot-storm-svc-1-0"]}]
+    # (service_id, p_cut, demand_gbps, depot-eligible?)
+    claimants = [("svc-b", 0.30, 100.0, True),
+                 ("svc-c", 0.20, 100.0, True),
+                 ("svc-d", 0.90, 100.0, False),
+                 ("svc-e", 0.001, 100.0, True)]
+    groups = []
+    for svc_id, p_cut, demand, eligible in claimants:
+        exposure[svc_id] = {HORIZON: {
+            "hours_ahead": 2, "offset_km": 129.3, "width_km": 320.0,
+            "p_cut": p_cut, "demand_gbps": demand}}
+        if eligible:
+            src, dst = f"router_{DEPOT_SITE}", f"router_{svc_id}"
+            groups.append({"endpoints": (DEPOT_SITE, svc_id),
+                           "members": (svc_id,),
+                           "ecar_gbps": round(p_cut * demand, 3)})
+        else:
+            src, dst = "router_kolkata", "router_mumbai"
+        services.append({"id": svc_id, "demand_gbps": demand,
+                         "src_router": src, "dst_router": dst,
                          "working_path": [], "protection_path": []})
     return Observation(
         scenario_id="T3a", service_under_test="storm-svc-1", hour="t1",
@@ -53,7 +114,31 @@ def _obs(*, others=(), sut_p_cut=0.3410, iteration=0, last_rejection=None):
                 center={"lat": 24.855553, "lon": 81.327777})}),
         exposure=exposure, services=tuple(services), spares_on_hand=1,
         lead_time_hours=1, risk_group_ids={HORIZON: "rg_T3a_t1_t3"},
-        iteration=iteration, last_rejection=last_rejection)
+        restorable_groups={HORIZON: tuple(groups)})
+
+
+def _settled_observation():
+    """The far cone has passed and the service under test reads zero
+    exposure everywhere -- it must still be the one thing the projection
+    unconditionally keeps, because it is the only service these tools can
+    act on."""
+    return Observation(
+        scenario_id="T3a", service_under_test="storm-svc-1", hour="t2",
+        hour_index=2, hours_remaining=1,
+        issuance=Issuance(issued_at="t1", horizons={
+            HORIZON: ConeAtHorizon(
+                cone={"type": "Polygon", "coordinates": []}, width_km=320.0,
+                center={"lat": 24.855553, "lon": 81.327777})}),
+        exposure={"storm-svc-1": {HORIZON: {
+            "hours_ahead": 1, "offset_km": 400.0, "width_km": 320.0,
+            "p_cut": 0.0, "demand_gbps": 300.0}}},
+        services=({"id": "storm-svc-1", "demand_gbps": 300.0,
+                   "src_router": "router_satna",
+                   "dst_router": "router_allahabad",
+                   "working_path": ["ipl-cand-storm-svc-1-0"],
+                   "protection_path": ["ipl-prot-storm-svc-1-0"]},),
+        spares_on_hand=1, lead_time_hours=1,
+        risk_group_ids={HORIZON: "rg_T3a_t2_t3"})
 
 
 # The three claimants T3a's authoring note enumerates, plus two the same note
@@ -92,6 +177,9 @@ def test_projection_keys_on_cut_probability_not_cone_containment():
     obs.exposure["d0001"] = {HORIZON: {
         "hours_ahead": 2, "offset_km": 58.4, "width_km": 15.0,
         "p_cut": 0.976, "demand_gbps": 100.0}}
+    obs.restorable_groups[HORIZON] = (
+        {"endpoints": (DEPOT_SITE, "d0001"), "members": ("d0001",),
+         "ecar_gbps": 97.6},)
     payload = project_observation(obs)
     assert "d0001" in payload["exposure"]
 
@@ -99,20 +187,30 @@ def test_projection_keys_on_cut_probability_not_cone_containment():
 def test_the_omission_summary_accounts_for_every_service_it_dropped():
     payload = project_observation(_obs(others=CLAIMANTS + BELOW_THRESHOLD))
     omitted = payload["omitted_services"]
-    assert omitted["count"] == 2
     assert omitted["p_cut_threshold"] == 0.005
-    assert omitted["max_p_cut"] == 0.004
+    # CLAIMANTS and BELOW_THRESHOLD are all depot-eligible by _obs's own
+    # construction, so the below-threshold two land in that bucket and
+    # nothing lands in ineligible_for_depot.
+    assert omitted["below_threshold"]["count"] == 2
+    assert omitted["below_threshold"]["max_p_cut"] == 0.004
     # 0.004*100 + 0.002*300 = 0.4 + 0.6
-    assert omitted["summed_expected_capacity_at_risk_gbps"] == pytest.approx(
-        1.0)
+    assert omitted["below_threshold"][
+        "summed_expected_capacity_at_risk_gbps"] == pytest.approx(1.0)
+    assert omitted["ineligible_for_depot"] == {
+        "count": 0, "max_p_cut": 0.0,
+        "summed_expected_capacity_at_risk_gbps": 0.0}
     assert payload["n_services_total"] == 6
 
 
 def test_nothing_is_omitted_when_every_service_clears_the_threshold():
     payload = project_observation(_obs(others=CLAIMANTS))
     assert payload["omitted_services"] == {
-        "count": 0, "p_cut_threshold": 0.005, "max_p_cut": 0.0,
-        "summed_expected_capacity_at_risk_gbps": 0.0}
+        "p_cut_threshold": 0.005,
+        "below_threshold": {"count": 0, "max_p_cut": 0.0,
+                            "summed_expected_capacity_at_risk_gbps": 0.0},
+        "ineligible_for_depot": {"count": 0, "max_p_cut": 0.0,
+                                 "summed_expected_capacity_at_risk_gbps": 0.0},
+    }
 
 
 def test_projection_preserves_every_field_the_decision_points_read():
@@ -137,7 +235,8 @@ def test_projection_bounds_the_prompt_against_a_full_573_service_roster():
     assert len(json.dumps(obs.to_dict())) > 100_000
     payload = project_observation(obs)
     assert payload["n_services_total"] == 572
-    assert payload["omitted_services"]["count"] == 571
+    assert payload["omitted_services"]["below_threshold"]["count"] == 571
+    assert payload["omitted_services"]["ineligible_for_depot"]["count"] == 0
     assert len(json.dumps(payload)) < 5_000
 
 
@@ -155,6 +254,59 @@ def test_the_projection_does_not_mutate_the_observation():
     before = dict(obs.horizon_totals)
     project_observation(obs)
     assert obs.horizon_totals == before
+
+
+def test_the_omission_account_separates_quiet_from_ineligible():
+    # Trimming silently would be worse than not trimming (agent.py's own
+    # docstring). But a single bucket hands the agent a large `max_p_cut` it
+    # cannot interpret: a badly-exposed service that cannot draw on THIS
+    # depot is not a competing claim, and folding it in with the quiet ones
+    # invites exactly the overstatement D2 found in the gold rationales.
+    payload = project_observation(_wide_observation())
+    omitted = payload["omitted_services"]
+    assert set(omitted["below_threshold"]) == {
+        "count", "max_p_cut", "summed_expected_capacity_at_risk_gbps"}
+    assert set(omitted["ineligible_for_depot"]) == {
+        "count", "max_p_cut", "summed_expected_capacity_at_risk_gbps"}
+    # svc-d is heavily exposed but terminates kolkata <-> mumbai.
+    assert omitted["ineligible_for_depot"]["count"] == 1
+    assert omitted["ineligible_for_depot"]["max_p_cut"] > 0.5
+    assert omitted["below_threshold"]["max_p_cut"] < 0.005
+
+
+def test_the_projection_keeps_only_depot_eligible_claimants():
+    payload = project_observation(_wide_observation())
+    assert set(payload["exposure"]) == {"storm-svc-1", "svc-b", "svc-c"}
+
+
+def test_the_actionable_service_survives_even_at_zero_exposure():
+    payload = project_observation(_settled_observation())
+    assert "storm-svc-1" in payload["exposure"]
+
+
+def test_the_prompt_no_longer_claims_a_shared_global_depot():
+    assert ("Other services on this network draw on the same inventory"
+           not in SYSTEM_PROMPT)
+    assert "spare_inventory" in SYSTEM_PROMPT
+    assert "each of its two endpoint sites" in SYSTEM_PROMPT
+    assert "ineligible_for_depot" in SYSTEM_PROMPT
+    # The transponders cost-term warning survives, re-pointed.
+    assert "reason about spares from `spares_needed`" in SYSTEM_PROMPT.lower() \
+        or "spares_needed" in SYSTEM_PROMPT
+    assert "pairs_needed" not in SYSTEM_PROMPT
+
+
+def test_a_contested_claim_must_still_name_a_service_in_exposure():
+    # Free consequence of the eligibility filter: agent._check_contested_claim's
+    # existing "must be in `exposure`" rule becomes exactly the right
+    # depot-eligibility check, with no new validation logic. svc-d is real
+    # (it is in the full Observation's `exposure`) but was filtered out of
+    # the payload for being depot-ineligible, so naming it must still fail.
+    payload = project_observation(_wide_observation())
+    decision = SimpleNamespace(contested_claim={
+        "service_id": "svc-d", "expected_capacity_at_risk_gbps": 90.0})
+    with pytest.raises(DecisionError, match="svc-d"):
+        ClaudeDecider._check_contested_claim(decision, payload, TIMING_TOOL)
 
 
 MENU = {
@@ -450,7 +602,7 @@ def test_the_system_prompt_describes_the_unconstrained_menu():
 
 def test_the_system_prompt_warns_that_transponders_is_a_network_wide_count():
     assert "transponders" in SYSTEM_PROMPT
-    assert "pairs_needed" in SYSTEM_PROMPT
+    assert "spares_needed" in SYSTEM_PROMPT
 
 
 def test_the_system_prompt_never_leaks_scoring_internals():
@@ -486,8 +638,10 @@ def test_the_system_prompt_names_the_precomputed_risk_field():
 
 
 def test_the_prompt_states_that_the_depot_is_shared():
-    assert "The depot is SHARED" in SYSTEM_PROMPT
-    assert "a pair held is a pair they can use" in SYSTEM_PROMPT
+    # Rewritten for the node-local depot (2026-08-30): shared with the
+    # services that terminate at the SAME site, not the whole network.
+    assert "That depot is SHARED" in SYSTEM_PROMPT
+    assert "their claim on this site's inventory is real" in SYSTEM_PROMPT
 
 
 def test_the_prompt_states_the_queue_discipline_both_ways():
@@ -659,7 +813,7 @@ def test_the_audit_sidecar_records_what_the_model_was_shown(tmp_path):
     assert record["attempts"] == 1
     assert record["shown_services"] == ["d0212", "d0363", "d0462",
                                         "storm-svc-1"]
-    assert record["omitted_services"]["count"] == 2
+    assert record["omitted_services"]["below_threshold"]["count"] == 2
     assert record["n_services_total"] == 6
     assert record["result"] == {**TIMING_OK, "contested_claim": None}
 
@@ -703,8 +857,12 @@ def test_the_arm_is_named_so_one_results_table_can_hold_both():
 
 
 def test_there_is_one_prompt_and_it_names_the_summed_rival_figure():
-    assert "non_sut_total_ecar_gbps" in SYSTEM_PROMPT
+    # Rewritten for Task 10's co-terminating-group statistic: the old
+    # network-wide `non_sut_total_ecar_gbps` sum is gone.
     assert "sut_ecar_gbps" in SYSTEM_PROMPT
+    assert "largest_restorable_group_ecar_gbps" in SYSTEM_PROMPT
+    assert "non_sut_ineligible_ecar_gbps" in SYSTEM_PROMPT
+    assert "restorable_groups" in SYSTEM_PROMPT
     assert not hasattr(agent_module, "SYSTEM_PROMPT_WITH_RIVAL_TOTALS")
 
 

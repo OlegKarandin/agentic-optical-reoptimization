@@ -13,13 +13,16 @@ import textwrap
 import pytest
 
 from storm_reoptimizer.eval.cone import (
-    nearest_span_offset_km, p_cut_region, radial_offset_km,
+    expected_capacity_at_risk_gbps, nearest_span_offset_km, p_cut_region,
+    radial_offset_km,
 )
 from storm_reoptimizer.eval.derived import (
-    DERIVED_VARS, FLIP_VARS, DerivedGeometryError, derived_geometry_from_spans,
-    exposure_horizon_hour, flip_scalars_from_spans, horizon_widths_km,
-    sut_p_cut_at_exposure_horizon, within_issuance_cone_motion_kmh,
+    DERIVED_VARS, FLIP_VARS, DerivedGeometryError, decision_issuance,
+    derived_geometry_from_spans, exposure_horizon_hour, flip_scalars_from_spans,
+    horizon_widths_km, sut_p_cut_at_exposure_horizon,
+    within_issuance_cone_motion_kmh,
 )
+from storm_reoptimizer.eval.observation import _restorable_groups
 from storm_reoptimizer.eval.rules import (
     ENUMERATED_VARS, OBSERVABLE_VARS, best_rule, observables,
 )
@@ -376,13 +379,14 @@ def test_the_flip_values_view_carries_exactly_the_swept_scalars(
 
     assert set(flip.values()) == set(FLIP_VARS)
     # Named explicitly, not just "whatever FLIP_VARS says": enumerating three
-    # of these four and believing the enumeration complete is exactly the
-    # mistake that let a solving policy sit in the shipped suite (see
-    # derived.py's module docstring).
+    # of these four (now five) and believing the enumeration complete is
+    # exactly the mistake that let a solving policy sit in the shipped suite
+    # (see derived.py's module docstring).
     assert set(FLIP_VARS) == {"claimant_ecar_at_exposure_horizon",
                               "claimant_ecar_before_exposure_horizon",
                               "claimant_ecar_peak_over_horizons",
-                              "claimant_ecar_min_over_horizons"}
+                              "claimant_ecar_min_over_horizons",
+                              "largest_restorable_group_ecar_gbps"}
 
 
 def test_a_missing_sut_point_raises_rather_than_silently_zeroing(
@@ -398,3 +402,62 @@ def test_a_missing_sut_point_raises_rather_than_silently_zeroing(
         flip_scalars_from_spans(
             scenario, spans={"svc-b": (_span(25.0, 81.0),)},
             demands_gbps={"storm-svc-1": 300.0, "svc-b": 100.0})
+
+
+def test_the_new_group_total_is_swept_by_the_whole_suite_check():
+    # rules.py enumerated only author-DECLARED metadata, which is why T1's
+    # original confound survived three review rounds -- nobody had declared
+    # the number that solved the pair. We are adding a new number to the
+    # observation; if it is not in the enumerated rule space we repeat that
+    # mistake exactly.
+    #
+    # It belongs to the WHOLE-SUITE check, not the per-pair one: it is a
+    # claimant-side aggregate, it IS the flip, and rules.py's per-pair
+    # scoring would rate any differing variable 1.0 by construction. See the
+    # deviation note in Task 11's brief, and rules.py's two-check doctrine.
+    assert "largest_restorable_group_ecar_gbps" in FLIP_VARS
+    assert "largest_restorable_group_ecar_gbps" not in ENUMERATED_VARS
+
+
+def test_the_group_total_is_computed_from_the_same_grouping_the_agent_sees(
+        example_scenario_yaml, write_scenario):
+    """One function, two readers: if the check and the payload could
+    disagree, the check is validating a number nobody was shown."""
+    scenario = load_scenario(write_scenario(example_scenario_yaml))
+    # svc-b and svc-c co-terminate at satna<->raipur -- the depot site is
+    # satna (example_scenario_yaml's own depot_site) -- and jointly restored
+    # by one lightpath, so their ECARs add. svc-d carries by far the largest
+    # demand but terminates kolkata<->mumbai, nowhere near the depot: if the
+    # new field were a naive sum over every non-SUT service (T2a's D2
+    # mistake) it would be dominated by svc-d's 900 Gbps; the honest figure
+    # excludes it entirely.
+    endpoint_sites = {"svc-b": ("satna", "raipur"),
+                      "svc-c": ("satna", "raipur"),
+                      "svc-d": ("kolkata", "mumbai")}
+    spans = {"storm-svc-1": (_span(25.0, 81.0),),
+             "svc-b": (_span(25.2, 81.0),),
+             "svc-c": (_span(25.2, 81.0),),
+             "svc-d": (_span(25.2, 81.0),)}
+    demands = {"storm-svc-1": 300.0, "svc-b": 100.0, "svc-c": 50.0,
+              "svc-d": 900.0}
+
+    flip = flip_scalars_from_spans(scenario, spans=spans, demands_gbps=demands,
+                                   endpoint_sites=endpoint_sites)
+
+    cone = decision_issuance(scenario).horizons["t3"]
+    exposure = {
+        svc_id: {"t3": {"expected_capacity_at_risk_gbps":
+                       expected_capacity_at_risk_gbps(
+                           p_cut_region(svc_spans, cone.center["lat"],
+                                       cone.center["lon"], cone.width_km,
+                                       scenario.damage_radius_km),
+                           demands[svc_id])}}
+        for svc_id, svc_spans in spans.items()}
+    groups = _restorable_groups(exposure, endpoint_sites,
+                                depot_site=scenario.depot_site,
+                                service_under_test="storm-svc-1")
+
+    assert flip.largest_restorable_group_ecar_gbps == pytest.approx(
+        max(g["ecar_gbps"] for g in groups["t3"]), abs=1e-6)
+    assert flip.largest_restorable_group_ecar_gbps < 900.0
+    assert flip.largest_restorable_group_ecar_gbps > 0.0
