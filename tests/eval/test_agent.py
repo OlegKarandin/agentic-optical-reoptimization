@@ -279,6 +279,31 @@ def test_the_projection_keeps_only_depot_eligible_claimants():
     assert set(payload["exposure"]) == {"storm-svc-1", "svc-b", "svc-c"}
 
 
+def test_a_mixed_group_survives_whole_not_partially_trimmed():
+    # svc-f and svc-g co-terminate (one restoring lightpath serves both), but
+    # only svc-f individually clears the enumeration threshold. Trimming the
+    # group to ONLY kept members (or dropping the group outright because not
+    # every member is kept) would either understate `ecar_gbps` below what
+    # `horizon_totals.largest_restorable_group_ecar_gbps` maxes over, or hide
+    # the group entirely even though svc-f -- a service the agent IS shown --
+    # is a member of it. The group must appear whole: both members, and the
+    # same `ecar_gbps` the group total is built from.
+    obs = _obs(others=[("svc-f", 0.30, 100.0)])
+    obs.exposure["svc-g"] = {HORIZON: {
+        "hours_ahead": 2, "offset_km": 129.3, "width_km": 320.0,
+        "p_cut": 0.001, "demand_gbps": 50.0}}
+    obs.restorable_groups[HORIZON] = (
+        {"endpoints": (DEPOT_SITE, "raipur"), "members": ("svc-f", "svc-g"),
+         "ecar_gbps": 30.05},)
+    payload = project_observation(obs)
+    assert "svc-f" in payload["exposure"]
+    assert "svc-g" not in payload["exposure"]
+    groups = payload["restorable_groups"][HORIZON]
+    assert len(groups) == 1
+    assert groups[0]["members"] == ("svc-f", "svc-g")
+    assert groups[0]["ecar_gbps"] == pytest.approx(30.05)
+
+
 def test_the_actionable_service_survives_even_at_zero_exposure():
     payload = project_observation(_settled_observation())
     assert "storm-svc-1" in payload["exposure"]

@@ -93,9 +93,21 @@ def project_observation(
     AND whose peak p_cut reaches `p_cut_threshold`. `services` is trimmed to
     the same set -- `exposure` already carries each service's `demand_gbps`,
     so the roster is nearly redundant with it for decision purposes.
-    `restorable_groups` is trimmed too, to groups whose members are ALL kept
-    -- otherwise a service's id would leak through that field even though it
-    was dropped everywhere else.
+
+    `restorable_groups` keeps a group WHOLE -- every member, and `ecar_gbps`
+    unchanged -- if it contains AT LEAST ONE kept member, and drops the group
+    entirely otherwise. Two things this is NOT: it does not drop a member
+    from an otherwise-kept group just because that member alone is below
+    threshold (a mixed group would then show a smaller `ecar_gbps` than the
+    one `horizon_totals.largest_restorable_group_ecar_gbps` maxes over, and a
+    service already visible in `exposure` for being individually above
+    threshold could vanish from the group view because a groupmate is not);
+    and it does not partially trim a group's members while keeping its full
+    summed `ecar_gbps` (same disagreement, the other way). Showing the real
+    group intact is what keeps the group total honest against the totals
+    bullet. A group with NO kept member is dropped entirely -- otherwise a
+    below-threshold or ineligible service's id would leak through this field
+    even though it was dropped everywhere else.
 
     Everything dropped is accounted for, split into TWO buckets rather than
     one (design spec §4.2): `below_threshold` for depot-eligible services
@@ -141,7 +153,7 @@ def project_observation(
     payload["services"] = [s for s in all_services if s["id"] in keep]
     payload["restorable_groups"] = {
         horizon: tuple(g for g in groups
-                      if all(m in keep for m in g["members"]))
+                      if any(m in keep for m in g["members"]))
         for horizon, groups in payload["restorable_groups"].items()}
     payload["n_services_total"] = len(all_services)
     # Roster entries with no exposure data at all (no storm-cuttable span --
@@ -309,13 +321,16 @@ the same candidate there.
 - `iteration`, `last_rejection` -- within one hour you may get up to five \
 attempts. `last_rejection` tells you why the previous attempt failed.
 - `n_services_total` and `omitted_services` -- the observation shows you the \
-actionable service plus every other DEPOT-ELIGIBLE service whose cut \
-probability is high enough to be shown individually. The rest are \
-summarized, split into two accounts so a large number in one is never \
-misread as the other: one bucket for depot-eligible services that are \
-simply quiet, and `omitted_services.ineligible_for_depot` for services that \
-may be badly exposed but do not terminate at `depot_site` at all, so they \
-are no part of this contest. Each bucket carries `count`, `max_p_cut`, and \
+actionable service plus every other service that is BOTH known to terminate \
+at `depot_site` AND whose cut probability is high enough to be shown \
+individually. The rest are summarized, split into two accounts so a large \
+number in one is never misread as the other: one bucket for services simply \
+not shown individually here (too quiet to clear the bar, or with no \
+exposure data at all to judge against `depot_site` in the first place -- \
+this bucket does NOT assert they all terminate at `depot_site`, only that \
+none is confirmed not to), and `omitted_services.ineligible_for_depot` for \
+services CONFIRMED not to terminate at `depot_site`, so they are no part of \
+this contest. Each bucket carries `count`, `max_p_cut`, and \
 `summed_expected_capacity_at_risk_gbps` -- the services in that bucket taken \
 at their own worst horizon, then summed. Read both before assuming the \
 network is as small as the list you were given. The actionable service is \

@@ -266,6 +266,14 @@ def _flip(scenario_id, *, at, sut_by_horizon, before=0.0, exposure="t3"):
         claimant_ecar_before_exposure_horizon=before,
         claimant_ecar_peak_over_horizons=max(at, before) if earlier else at,
         claimant_ecar_min_over_horizons=min(at, before) if earlier else at,
+        # 0.0 in every call site below: `assert_flip_dominates` takes a max()
+        # over FLIP_VARS' inter-half DIFFERENCES, and this helper's two
+        # `_flip(...)` calls in each test always pass the SAME 0.0 for this
+        # field on both halves, so its difference is 0.0 and can never be the
+        # variable that decides the max -- not a load-bearing zero, the same
+        # way `before`'s own comment above explains. No dataclass default is
+        # added for it: a real (non-test) caller must always name a value.
+        largest_restorable_group_ecar_gbps=0.0,
         sut_ecar_by_horizon=dict(sut_by_horizon))
 
 
