@@ -28,8 +28,11 @@ def test_resolve_exposed_assets_delegates_to_the_real_geo_mapper():
         if e.valid_at == "2014-10-13T23:30:00+00:00"
     )
     exposed = resolve_exposed_assets(edges, both_ring_halves_hour, get_filter("storm"))
+    # satna-jabalpur is also exposed this hour: the third aerial direction
+    # added in the exposure-and-depot design (§3.2, Option B) sits inside
+    # the same storm cone as the other two satna legs.
     assert {(e.src, e.dst) for e in exposed} == {
-        ("satna", "jhansi"), ("satna", "rewa"),
+        ("satna", "jhansi"), ("satna", "rewa"), ("satna", "jabalpur"),
     }
 
 

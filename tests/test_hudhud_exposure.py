@@ -36,10 +36,13 @@ def test_both_ring_halves_are_exposed_together_at_least_one_hour():
     # The canonical both-legs case needs both satna-jhansi and satna-rewa
     # exposed at some point the risk group's union will include -- this
     # confirms the real geo-mapper output actually delivers that, not just
-    # the topology-structure argument in the design spec.
+    # the topology-structure argument in the design spec. satna-jabalpur is
+    # also exposed the same hour: it's the third aerial direction added in
+    # the exposure-and-depot design (§3.2, Option B) and it sits inside the
+    # same storm cone as the other two satna legs.
     by_hour = _exposed_pairs_by_hour()
     assert by_hour["2014-10-13T23:30:00+00:00"] == {
-        ("satna", "jhansi"), ("satna", "rewa"),
+        ("satna", "jhansi"), ("satna", "rewa"), ("satna", "jabalpur"),
     }
 
 

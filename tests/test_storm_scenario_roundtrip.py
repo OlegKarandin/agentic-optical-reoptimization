@@ -38,7 +38,7 @@ async def _run(state_path, local_server_command, local_server_env):
         return result
 
 
-def test_full_storm_pipeline_finds_and_replans_the_forced_service(
+def test_full_storm_pipeline_finds_the_forced_service_but_cannot_replan_it(
     storm_state_path, local_server_command, local_server_env,
 ):
     result = asyncio.run(
@@ -50,24 +50,38 @@ def test_full_storm_pipeline_finds_and_replans_the_forced_service(
     # directly against src/storm_reoptimizer/data/toy_india_topology.json's
     # graph.edges array, which lists satna->rewa before satna->jhansi; the
     # brief's inline comment claiming the reverse was a documentation slip,
-    # not a code issue -- see task-7-report.md).
+    # not a code issue -- see task-7-report.md). satna->jabalpur trails the
+    # other two, matching that same fixed edge order -- it's the third
+    # aerial direction added in the exposure-and-depot design (§3.2,
+    # Option B) and it sits inside the same storm cone this hour.
     assert result.exposed_by_hour["2014-10-13T23:30:00+00:00"] == [
-        ("satna", "rewa"), ("satna", "jhansi"),
+        ("satna", "rewa"), ("satna", "jhansi"), ("satna", "jabalpur"),
     ]
 
     exposed_ids = {s["service"]["id"] for s in result.exposed_services}
     assert "storm-svc-1" in exposed_ids
 
+    # satna has degree 3 and all three of its spans are now aerial (§3.2,
+    # Option B); this hour's cone -- run over the FULL forecast track, per
+    # run_storm_scenario's "reroute clear of the full forecast cone" design
+    # (CLAUDE.md, scenario 1) -- covers all three simultaneously. A service
+    # terminating at satna therefore has no egress left outside the risk
+    # group at all: "avoid the risk group" and "reach satna" are mutually
+    # exclusive, so no_solution is the correct, physically honest outcome,
+    # not a solver defect. The old buried-jabalpur topology masked this real
+    # vulnerability -- a storm wide enough to reach every aerial direction
+    # out of a hub really does strand it. (This is the real historical
+    # Hudhud track against the real topology, not a synthetic fixture --
+    # unlike tests/eval/test_runner.py's EXPOSURE_SMOKE, there is no cone to
+    # retune here without falsifying the scenario.)
     replan = result.replans["storm-svc-1"]
-    assert replan["status"] in ("solution", "partial")
+    assert replan["status"] == "no_solution"
+    assert replan["path_a"] is None and replan["path_b"] is None
 
-    qot = result.qot_checks["storm-svc-1"]["path_a"]
-    assert isinstance(qot["gsnr_db"], float)
-    # Both replanned legs are actually QoT-verified, not just the working
-    # leg -- the scenario's premise is that BOTH legs were exposed and BOTH
-    # get replanned.
-    assert "path_b" in result.qot_checks["storm-svc-1"]
-    assert isinstance(result.qot_checks["storm-svc-1"]["path_b"]["gsnr_db"], float)
+    # No candidate route exists, so nothing was QoT-verified for this
+    # service -- verify_qot is never called for it (see run_storm_scenario's
+    # `if replan.get("path_a") is not None` gate).
+    assert "storm-svc-1" not in result.qot_checks
 
     assert isinstance(result.validation["violations"], list)
 

@@ -195,19 +195,54 @@ SMOKE = textwrap.dedent("""
       spares_on_hand: 2
 """)
 
-# Same shape as SMOKE, but the t0 cone is T2a.yaml's t1:t6 (far) cone,
-# copied verbatim -- NOT its t1:t2 (near) cone. The near one sits 300km
-# from storm-svc-1 against a 30km half-width and never exposes it
-# (T2a.yaml's own comment; docs/superpowers/rehearsals/T2.md lines
-# 533-539: "the nearest exposed horizon is therefore t6"). t6 is centred
-# ON storm-svc-1's own point and excludes both satna<->rewa (working) and
-# satna<->jhansi (protection) -- the wide avoid group that funnels every
-# real reroute candidate through jhansi<->allahabad, protection's own
-# segment, producing the genuine disjointness_collapse
-# `test_t2a_carries_a_real_validate_plan_rejection` already proves
-# recovers via widen-and-retry. A plain ForecastBlindBaseline("immediate")
-# never recovers from this (it hits the cap with zero commits), so this
-# fixture is reserved for tests that pair it with
+# Originally the t0 cone was T2a.yaml's t1:t6 (far) cone, copied verbatim --
+# a ~100km-radius circle centred ON storm-svc-1's own point (24.855553,
+# 81.327777), 200km wide. That circle excluded both satna<->rewa (working)
+# and satna<->jhansi (protection), the wide avoid group that funnelled every
+# real reroute candidate through jhansi<->allahabad (protection's own
+# segment), producing the genuine disjointness_collapse
+# `test_t2a_carries_a_real_validate_plan_rejection` already proves recovers
+# via widen-and-retry.
+#
+# Retuned 2026-08-30 (exposure-and-depot design, satna<->jabalpur going
+# aerial, §3.2 Option B). satna has degree 3 and, once jabalpur is aerial
+# too, that same circle also swept up satna<->jabalpur (its nearest point to
+# the circle's centre is ~65km, well inside the ~100km radius) -- fully
+# enclosing satna. With NO edge left outside the avoid set, "avoid the risk
+# group" and "reach satna" become mutually exclusive and the menu comes back
+# no_solution even after widening: there was no longer an escape route left
+# to find. jabalpur is the escape route this scenario needs to prove exists
+# (that's the whole point of "exposure follows the service after it
+# reroutes" -- a reroute has to actually be possible), so the fix is
+# geometric, not a parameter tweak: the circle can't simply shrink, because
+# jhansi and jabalpur's spans are BOTH ~65km from this centre along nearly
+# the same distance band (satna is their common near endpoint), so no radius
+# alone separates "expose jhansi" from "expose jabalpur" -- confirmed by
+# sweeping every radius from 20-125km, which flips both together every time
+# (scratchpad/sweep_exposure_smoke_radius.py). What DOES separate them is
+# direction: jhansi sits at bearing ~291 deg from satna, rewa at ~96 deg,
+# jabalpur at ~212 deg -- three very different directions. The cone below is
+# the same technique Task 3 used for `SMOKE` (the `cone` polygon that
+# `map_geo_event_to_assets` actually routes against and `center`/`width_km`,
+# which only feed `p_cut_region`/`nearest_span_offset_km`'s scoring, are
+# never cross-checked against each other -- confirmed in `scenario_file.py`)
+# taken one step further: `cone` is now a hand-built "keyhole" polygon --
+# the same ~90km-radius disc, centred at satna itself this time, with a
+# small hole directly over satna's own point (so all three of satna's edges
+# don't trivially touch it at their shared origin) and an 80 deg wide wedge
+# cut out toward jabalpur's bearing (212 +/- 40 deg, comfortably clear of
+# rewa's 96 deg and jhansi's 291 deg) removed. `center`/`width_km` are left
+# exactly as they were (still the real storm-svc-1 point, 200km) since they
+# don't drive routing and this fixture's own p_cut/offset_km assertions
+# still hold under them (rewa's offset from that centre, ~36km, is smaller
+# than jabalpur's, ~65-100km, so p_cut still drops after the reroute onto
+# jabalpur, as the test requires). Verified against the real geo_mapper:
+# exposed == {(satna,rewa), (satna,jhansi)} only, both before and after
+# rounding coordinates to 5 decimals (scratchpad/build_exposure_smoke_cone.py,
+# scratchpad/finalize_exposure_smoke_cone.py). A plain
+# ForecastBlindBaseline("immediate") still never recovers from the
+# rewa+jhansi disjointness_collapse (it hits the cap with zero commits), so
+# this fixture remains reserved for tests that pair it with
 # `_WidensOnDisjointnessRejection`.
 EXPOSURE_SMOKE = textwrap.dedent("""
     id: EXPOSURE_SMOKE
@@ -223,7 +258,7 @@ EXPOSURE_SMOKE = textwrap.dedent("""
     reference_avoid: {}
     forecast:
       t0:
-        t1: {cone: {type: Polygon, coordinates: [[[81.32778, 25.75487], [81.5843, 25.72423], [81.82334, 25.63439], [82.02861, 25.49147], [82.18612, 25.30521], [82.28513, 25.08831], [82.31891, 24.85555], [82.28513, 24.62279], [82.18612, 24.40589], [82.02861, 24.21964], [81.82334, 24.07672], [81.5843, 23.98688], [81.32778, 23.95623], [81.07125, 23.98688], [80.83221, 24.07672], [80.62694, 24.21964], [80.46943, 24.40589], [80.37042, 24.62279], [80.33665, 24.85555], [80.37042, 25.08831], [80.46943, 25.30521], [80.62694, 25.49147], [80.83221, 25.63439], [81.07125, 25.72423], [81.32778, 25.75487]]]}, width_km: 200, center: {lat: 24.855553333333333, lon: 81.32777666666667}}
+        t1: {cone: {type: Polygon, coordinates: [[[81.62627533988763, 24.425603365240285], [81.6069971776491, 24.34864062744429], [81.58026817756033, 24.27393807660027], [81.5463457545037, 24.202215139109416], [81.50555659995715, 24.134162546067515], [81.45829353577656, 24.07043568114689], [81.40501173110663, 24.011648268893378], [81.34622431885312, 23.95836646422344], [81.28249745393249, 23.911103400042858], [81.2144448608906, 23.8703142454963], [81.14272192339973, 23.836391822439673], [81.06801937255571, 23.80966282235089], [80.99105663475972, 23.790384660112373], [80.9471105934481, 23.783865880676014], [80.85224219210275, 24.450446012092105], [80.85961777245996, 24.45117244335206], [80.88489532056663, 24.458840303739944], [80.90819124232209, 24.471292233340478], [80.92861028851777, 24.48804971148223], [80.94536776665953, 24.50846875767792], [80.95781969626006, 24.53176467943338], [80.96548755664794, 24.557042227540048], [80.96807667624866, 24.58333], [80.96548755664794, 24.609617772459952], [80.95781969626006, 24.63489532056662], [80.94536776665953, 24.65819124232208], [80.92861028851777, 24.67861028851777], [80.90819124232209, 24.695367766659523], [80.88489532056663, 24.707819696260056], [80.85961777245996, 24.71548755664794], [80.83333, 24.718076676248653], [80.80704222754005, 24.71548755664794], [80.78176467943338, 24.707819696260056], [80.75846875767792, 24.695367766659523], [80.73804971148223, 24.67861028851777], [80.72129223334048, 24.65819124232208], [80.70884030373995, 24.63489532056662], [80.70117244335206, 24.609617772459952], [80.69858332375135, 24.58333], [80.70117244335206, 24.557042227540048], [80.70583876097633, 24.541659439870248], [80.06548793506103, 24.332360528040812], [80.0596628223509, 24.34864062744429], [80.04038466011238, 24.425603365240285], [80.02874299496499, 24.504085096751165], [80.02484994250808, 24.58333], [80.02874299496499, 24.662574903248835], [80.04038466011238, 24.741056634759715], [80.0596628223509, 24.81801937255571], [80.08639182243968, 24.89272192339973], [80.1203142454963, 24.964444860890584], [80.16110340004286, 25.032497453932486], [80.20836646422345, 25.09622431885311], [80.26164826889338, 25.155011731106622], [80.32043568114689, 25.20829353577656], [80.38416254606751, 25.255556599957142], [80.45221513910941, 25.2963457545037], [80.52393807660027, 25.330268177560328], [80.5986406274443, 25.35699717764911], [80.67560336524029, 25.376275339887627], [80.75408509675117, 25.387917005035014], [80.83333, 25.391810057491917], [80.91257490324884, 25.387917005035014], [80.99105663475972, 25.376275339887627], [81.06801937255571, 25.35699717764911], [81.14272192339973, 25.330268177560328], [81.21444486089058, 25.2963457545037], [81.28249745393249, 25.255556599957142], [81.34622431885312, 25.20829353577656], [81.40501173110663, 25.155011731106622], [81.45829353577656, 25.09622431885311], [81.50555659995715, 25.032497453932486], [81.5463457545037, 24.964444860890584], [81.58026817756033, 24.892721923399733], [81.6069971776491, 24.81801937255571], [81.62627533988763, 24.741056634759715], [81.63791700503502, 24.662574903248835], [81.64181005749192, 24.58333], [81.63791700503502, 24.504085096751165], [81.62627533988763, 24.425603365240285]]]}, width_km: 200, center: {lat: 24.855553333333333, lon: 81.32777666666667}}
     realized:
       t1: []
     gold:
