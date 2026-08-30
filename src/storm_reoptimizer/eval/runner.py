@@ -190,9 +190,9 @@ def observation_record(obs, geometry: ServiceGeometry) -> dict:
     `horizon_totals` and `restorable_groups` are kept WHOLE while the rows are
     trimmed: both are already computed over the full roster, and a total (or
     a group list) silently covering only the visible rows "would be worse
-    than no total at all" (observation.py:70). Neither key is touched below
-    -- `payload = obs.to_dict()` already carries both, and trimming only
-    reaches `exposure`/`services`."""
+    than no total at all" (observation.py's `_horizon_totals`, docstring).
+    Neither key is touched below -- `payload = obs.to_dict()` already carries
+    both, and trimming only reaches `exposure`/`services`."""
     visible = _visible_services(obs)
     payload = obs.to_dict()
     payload["exposure"] = {s: payload["exposure"][s] for s in visible}

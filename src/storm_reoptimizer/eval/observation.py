@@ -118,6 +118,11 @@ def _horizon_totals(exposure: dict, endpoint_sites: dict, *,
     endpoint_sites and depot_site -- passed in rather than recomputed so the
     two can never disagree about which services are depot-eligible.
 
+    Both totals are summed over EVERY service with a representative point,
+    not merely the ones a projection later chooses to list -- the aggregate
+    is a fact about the network, and a total that silently covered only the
+    visible rows would be worse than no total at all.
+
     Deliberately NOT shared with derived._ecar_at_cone, which computes the
     same shape from the UNROUNDED cut probability. That one feeds FLIP_VARS
     and assert_no_global_policy_solves_the_suite, whose interleave margins
