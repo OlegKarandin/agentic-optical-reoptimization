@@ -571,11 +571,15 @@ def test_a_claimant_terminating_at_the_depot_is_not_a_violation():
 # `claimant_services` (making `claimed_competing_ecar_gbps`/`_at`
 # CONDITIONALLY required, scenario_file.py) and its own claim horizon
 # EXPLICITLY via `claimed_competing_ecar_at` -- 2026-08-30 review fix,
-# finding 1: the claim's horizon is declared, never inferred from the SUT's
-# own `exposure_horizon_hours` (which is a different hour for T2/T3-shaped
-# episodes; see `assert_claim_is_one_lightpath`'s own docstring). The
-# arithmetic under test is entirely in `groups` and the two declared
-# metadata values.
+# round 1, finding 1: the claim's horizon is declared, never inferred from
+# the SUT's own `exposure_horizon_hours` (which is a different hour for
+# T2/T3-shaped episodes; see `assert_claim_is_one_lightpath`'s own
+# docstring). `claimants` parameterizes WHICH services the claim names --
+# needed since round 2's fix restricts the group comparison to only the
+# groups the claim's OWN named services belong to (see the group-scoping
+# tests below), so different tests need different claimant/group overlaps.
+# The rationale text names every one of `claimants` literally, satisfying
+# `claimant_service_ids`'s own cross-check against `gold.rationale`.
 _CLAIM_SCENARIO = textwrap.dedent("""
     id: CLAIM
     seed: 17
@@ -601,7 +605,7 @@ _CLAIM_SCENARIO = textwrap.dedent("""
       max_spares_wasted: 0
       decision_at_t0: wait
       label: wait
-      rationale: fixture naming claim-fixture-service in its arithmetic
+      rationale: fixture naming {rationale_names} in its arithmetic
     flip_variable: [claimant]
     metadata:
       label_rule: timing_at_decision_hour
@@ -610,25 +614,29 @@ _CLAIM_SCENARIO = textwrap.dedent("""
       n_future_claimants: 1
       exposure_horizon_hours: 2
       spares_on_hand: 1
-      claimant_services: [claim-fixture-service]
+      claimant_services: [{claimants_yaml}]
       claimed_competing_ecar_gbps: {claimed}
       claimed_competing_ecar_at: {at}
 """)
 
 
-def _scenario_claiming(tmp_path, claimed, at="t6"):
+def _scenario_claiming(tmp_path, claimed, at="t6",
+                       claimants=("claim-fixture-service",)):
     path = tmp_path / "CLAIM.yaml"
-    path.write_text(_CLAIM_SCENARIO.format(claimed=claimed, at=at),
-                    encoding="utf-8")
+    path.write_text(_CLAIM_SCENARIO.format(
+        claimed=claimed, at=at, claimants_yaml=", ".join(claimants),
+        rationale_names=" ".join(claimants)),
+        encoding="utf-8")
     return load_scenario(path)
 
 
 def test_a_claimant_aggregate_above_the_largest_group_fails_the_build(
         tmp_path):
     """Would have caught D2. The rationale bills 108.8 G across THREE
-    co-terminating groups (agra<->gwalior 24.0, allahabad<->delhi 29.5,
-    delhi<->kanpur 55.3); one spare buys one lightpath, so its honest figure
-    is the largest of those, 55.3 G."""
+    co-terminating groups it names members of (agra<->gwalior 24.0,
+    allahabad<->delhi 29.5, delhi<->kanpur 55.3); one spare buys one
+    lightpath, so its honest figure is the largest of THOSE (the claim's
+    OWN groups), 55.3 G."""
     groups = {"t6": ({"endpoints": ("agra", "gwalior"), "members": ("x",),
                       "ecar_gbps": 24.0},
                      {"endpoints": ("allahabad", "delhi"),
@@ -637,26 +645,28 @@ def test_a_claimant_aggregate_above_the_largest_group_fails_the_build(
                       "ecar_gbps": 55.3})}
     with pytest.raises(PairInvalid, match="55.3"):
         assert_claim_is_one_lightpath(
-            _scenario_claiming(tmp_path, 108.8, at="t6"), groups)
+            _scenario_claiming(tmp_path, 108.8, at="t6",
+                               claimants=("x", "w", "y", "z")), groups)
 
 
 def test_a_claimant_aggregate_at_or_below_the_largest_group_passes(tmp_path):
     groups = {"t6": ({"endpoints": ("delhi", "kanpur"), "members": ("y", "z"),
                       "ecar_gbps": 55.3},)}
     assert_claim_is_one_lightpath(
-        _scenario_claiming(tmp_path, 55.3, at="t6"), groups)
+        _scenario_claiming(tmp_path, 55.3, at="t6", claimants=("y", "z")),
+        groups)
 
 
 def test_the_claim_is_checked_against_its_OWN_declared_horizon(tmp_path):
-    """2026-08-30 review fix, finding 1: T2a/T3a-shaped defect. This
-    scenario's SUT exposure horizon (`exposure_horizon_hours: 2` from
+    """2026-08-30 review fix, round 1, finding 1: T2a/T3a-shaped defect.
+    This scenario's SUT exposure horizon (`exposure_horizon_hours: 2` from
     decision_hour `t1`) resolves to `t6`, but the claim is declared at `t2`
     -- exactly the T2/T3 shape, where the competing claim is billed at the
     NEAR horizon while the SUT's own exposure is graded at the FAR one. If
     the check used the SUT's horizon instead of the declared one, it would
     compare 60.0 against t6's 999.0 group and WRONGLY pass; using the
-    declared `t2` horizon, it correctly compares against t2's 55.3 and
-    fails."""
+    declared `t2` horizon, it correctly compares against t2's 55.3 (the
+    claim's own group there) and fails."""
     groups = {
         "t2": ({"endpoints": ("delhi", "kanpur"), "members": ("y", "z"),
                "ecar_gbps": 55.3},),
@@ -665,7 +675,44 @@ def test_the_claim_is_checked_against_its_OWN_declared_horizon(tmp_path):
     }
     with pytest.raises(PairInvalid, match="55.3"):
         assert_claim_is_one_lightpath(
-            _scenario_claiming(tmp_path, 60.0, at="t2"), groups)
+            _scenario_claiming(tmp_path, 60.0, at="t2",
+                               claimants=("y", "z")), groups)
+
+
+def test_the_claim_is_checked_against_its_OWN_group_not_an_unrelated_one(
+        tmp_path):
+    """2026-08-30 review fix, round 2: T3a-shaped defect. The claim's own
+    named services (y, z) sit in a SMALL group (12.1 G) while an unrelated
+    service (w, not named by this claim) sits in a much LARGER group
+    (999.0 G) at the SAME horizon -- exactly T3a's live shape (its own
+    claimants are not members of the one depot-eligible group that exists
+    today). Comparing against the largest group ANYWHERE in the network (the
+    original implementation) would let a real 20.0 G over-claim pass for
+    reasons that have nothing to do with the claim itself; comparing only
+    against the claim's OWN group (12.1 G) correctly rejects it."""
+    groups = {"t6": (
+        {"endpoints": ("delhi", "kanpur"), "members": ("y", "z"),
+         "ecar_gbps": 12.1},
+        {"endpoints": ("agra", "gwalior"), "members": ("w",),
+         "ecar_gbps": 999.0},
+    )}
+    with pytest.raises(PairInvalid, match="12.1"):
+        assert_claim_is_one_lightpath(
+            _scenario_claiming(tmp_path, 20.0, at="t6",
+                               claimants=("y", "z")), groups)
+
+
+def test_a_claim_within_its_own_group_passes_despite_a_larger_unrelated_one(
+        tmp_path):
+    groups = {"t6": (
+        {"endpoints": ("delhi", "kanpur"), "members": ("y", "z"),
+         "ecar_gbps": 12.1},
+        {"endpoints": ("agra", "gwalior"), "members": ("w",),
+         "ecar_gbps": 999.0},
+    )}
+    assert_claim_is_one_lightpath(
+        _scenario_claiming(tmp_path, 12.1, at="t6", claimants=("y", "z")),
+        groups)
 
 
 def test_claim_is_one_lightpath_is_a_noop_when_no_claimants_are_declared():
@@ -675,6 +722,21 @@ def test_claim_is_one_lightpath_is_a_noop_when_no_claimants_are_declared():
     red window" table in the Task 12 report for what checking it against
     live data finds.)"""
     scenario = load_scenario(SCENARIOS_DIR / "D1.yaml")
+    assert_claim_is_one_lightpath(scenario, {})   # must not raise
+
+
+def test_claim_is_one_lightpath_is_a_noop_even_with_a_stray_declared_value():
+    """2026-08-30 review fix, round 2, small fix: the no-op decision is
+    gated on `claimant_service_ids(scenario)` (the PARSED, cross-checked
+    list), not on the raw `claimed_competing_ecar_gbps` metadata key.
+    scenario_file.py only makes the two claim keys required TOGETHER when
+    claimant_services is non-empty -- it does not forbid a stray
+    claimed_competing_ecar_gbps on an episode whose claimant list is EMPTY,
+    so D1 with such a stray value (and no claimed_competing_ecar_at at all)
+    must still no-op cleanly rather than raise a bare KeyError reading the
+    missing horizon key."""
+    scenario = load_scenario(SCENARIOS_DIR / "D1.yaml")
+    scenario.metadata["claimed_competing_ecar_gbps"] = 999.0
     assert_claim_is_one_lightpath(scenario, {})   # must not raise
 
 

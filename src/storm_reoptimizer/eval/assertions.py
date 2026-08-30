@@ -1041,50 +1041,84 @@ def assert_claim_is_one_lightpath(
 ) -> None:
     """The gold rationale's claimed aggregate ECAR
     (`metadata.claimed_competing_ecar_gbps`, when declared) must not exceed
-    the LARGEST co-terminating group's ECAR at the claim's OWN declared
-    horizon (`metadata.claimed_competing_ecar_at`) -- one spare buys ONE
-    lightpath, so the honest competing figure across co-terminating groups
-    is a MAXIMUM, never a sum (`observation._restorable_groups`'s own
-    docstring). This is the check that would have caught D2: 108.8 G billed
-    across three co-terminating groups where the honest figure was the
-    largest single group, 55.3 G.
+    the LARGEST of the CLAIM'S OWN co-terminating groups' ECAR at the
+    claim's OWN declared horizon (`metadata.claimed_competing_ecar_at`) --
+    one spare buys ONE lightpath, so the honest competing figure across
+    co-terminating groups is a MAXIMUM, never a sum
+    (`observation._restorable_groups`'s own docstring). This is the check
+    that would have caught D2: 108.8 G billed across three co-terminating
+    groups where the honest figure was the largest single group, 55.3 G.
+
+    **"The claim's OWN groups", not "the largest group anywhere in the
+    network at that horizon" -- fixed 2026-08-30, round 2 review.** The
+    first cut of this check took `max` over EVERY group `groups[horizon]`
+    lists, regardless of who is in it. That is a different, wrong question:
+    it let T3a's claim pass by comparing it against an unrelated group its
+    own named claimants (`metadata.claimant_services`) are not even members
+    of -- a pass with nothing to do with T3a's own claim, made possible only
+    because today's live state happens to have exactly one depot-eligible
+    group at that horizon; a second, unrelated group would make it worse,
+    not better. Confirmed against two independent sources: the design
+    spec's own worked D2 example computes "Honest (max group)" over the
+    CLAIM's OWN groups, not the network's; and the brief's own Step 1 test
+    text -- "its honest figure is the largest of THOSE [the claim's own
+    three named groups]" -- names the claim's groups specifically. So the
+    comparison set is now `groups[horizon]` FILTERED to only the groups
+    whose `members` intersect `claimant_service_ids(scenario)` -- the same
+    named list the claim itself is about.
 
     **The claim's horizon is NOT `derived.exposure_horizon_hour`,
-    fixed 2026-08-30 whole-branch re-review.** That function returns the
-    SERVICE UNDER TEST'S OWN exposure horizon, which only happens to be the
-    claim's horizon for T1 -- `assert_flip_dominates`'s own docstring
-    states the general rule: "T1's is at the exposure horizon, T2's and
-    T3's are before it" (T2a/T3a bill their competing claim at the NEAR
-    horizon, e.g. `t2`, while the SUT's own exposure is graded at the FAR
-    one, e.g. `t6`). Using the SUT's horizon for T2/T3 would silently
-    compare the claim against the wrong horizon's groups -- once real
-    numbers exist, that could pass a real over-claim or reject an honest
-    one. So the claim declares its OWN horizon explicitly
-    (`metadata.claimed_competing_ecar_at`) rather than borrowing the SUT's.
+    fixed 2026-08-30, round 1 review.** That function returns the SERVICE
+    UNDER TEST'S OWN exposure horizon, which only happens to be the claim's
+    horizon for T1 -- `assert_flip_dominates`'s own docstring states the
+    general rule: "T1's is at the exposure horizon, T2's and T3's are
+    before it" (T2a/T3a bill their competing claim at the NEAR horizon,
+    e.g. `t2`, while the SUT's own exposure is graded at the FAR one, e.g.
+    `t6`). Using the SUT's horizon for T2/T3 would silently compare the
+    claim against the wrong horizon's groups -- once real numbers exist,
+    that could pass a real over-claim or reject an honest one. So the claim
+    declares its OWN horizon explicitly (`metadata.claimed_competing_ecar_
+    at`) rather than borrowing the SUT's.
 
     `groups` is `observation._restorable_groups`'s own output shape,
     `dict[horizon, tuple[group_dict, ...]]`, so the check and the
     observation the agent reads can never disagree about what the largest
     group is.
 
-    No-op when `metadata.claimed_competing_ecar_gbps` is undeclared --
-    `scenario_file.py` makes it (and its horizon) required together
-    whenever `metadata.claimant_services` is non-empty, so `None` here
-    means there is no claim to check (an empty claimant list, e.g. D1)."""
-    claimed = scenario.metadata.get("claimed_competing_ecar_gbps")
-    if claimed is None:
+    No-op when `claimant_service_ids(scenario)` is empty (an episode with
+    no named claimants, e.g. D1) -- gated on the PARSED claimant list, not
+    on the raw `claimed_competing_ecar_gbps` metadata key, so a stray
+    leftover value on an otherwise-empty-claimant episode (schema does not
+    forbid it; `scenario_file.py` only makes the two claim keys required
+    TOGETHER when the claimant list is non-empty) cannot fall through to a
+    bare `KeyError` on the missing horizon key below."""
+    claimant_ids = set(claimant_service_ids(scenario))
+    if not claimant_ids:
         return
-    horizon = scenario.metadata["claimed_competing_ecar_at"]
-    largest = max((g["ecar_gbps"] for g in groups.get(horizon, ())),
-                 default=0.0)
+    claimed = scenario.metadata.get("claimed_competing_ecar_gbps")
+    horizon = scenario.metadata.get("claimed_competing_ecar_at")
+    if claimed is None or horizon is None:
+        raise PairInvalid(
+            f"{scenario.id}: metadata.claimant_services is non-empty "
+            f"({sorted(claimant_ids)!r}) but claimed_competing_ecar_gbps/"
+            f"claimed_competing_ecar_at is missing -- scenario_file.py's "
+            f"load_scenario is supposed to require both together whenever "
+            f"claimant_services is non-empty; a hand-built ScenarioFile "
+            f"(e.g. in a test) likely bypassed it")
+    own_groups = [g for g in groups.get(horizon, ())
+                 if claimant_ids & set(g.get("members") or ())]
+    largest = max((g["ecar_gbps"] for g in own_groups), default=0.0)
     if claimed > largest + DERIVED_TOLERANCE:
         raise PairInvalid(
             f"{scenario.id}: metadata.claimed_competing_ecar_gbps="
-            f"{claimed:.1f} exceeds the largest co-terminating group's ECAR "
-            f"at its own declared horizon "
-            f"(metadata.claimed_competing_ecar_at={horizon!r}), {largest:.1f}"
-            f" -- one spare buys ONE lightpath, so the honest competing "
-            f"claim is the largest single group, not a sum across groups")
+            f"{claimed:.1f} exceeds the largest of the CLAIM'S OWN "
+            f"co-terminating groups (the ones whose members intersect "
+            f"metadata.claimant_services {sorted(claimant_ids)!r}) at its "
+            f"declared horizon (metadata.claimed_competing_ecar_at="
+            f"{horizon!r}), {largest:.1f} -- one spare buys ONE lightpath, "
+            f"so the honest competing claim is the largest single group "
+            f"among the claim's OWN named services, not a sum across "
+            f"groups and not an unrelated group elsewhere in the network")
 
 
 # Invariant 5.
