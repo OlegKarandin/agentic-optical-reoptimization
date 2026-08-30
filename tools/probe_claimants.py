@@ -10,7 +10,6 @@ from multilayer_optical_network.model.allocation import (
     make_adapter_evaluator, solve_allocation_model)
 from multilayer_optical_network.model.modes import default_modes
 from multilayer_optical_network.model.qot_results import QoTCache, QoTResultStore
-from multilayer_optical_network.model.solvers import SolverStatus
 from multilayer_optical_network.state_file import load_model_from_state_file
 
 DEPOT = "satna"
@@ -84,7 +83,6 @@ def main() -> None:
                 {DEPOT: 4, dst: 4})
             print(f"  pin {dst:14s} {demand:6.0f}G -> {result.status.name} "
                   f"unplaced={result.unplaced}")
-            assert result.status is not SolverStatus.NO_SOLUTION or True
 
 
 if __name__ == "__main__":
