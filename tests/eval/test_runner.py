@@ -147,13 +147,22 @@ def test_a_menu_with_no_solution_projects_to_an_empty_candidate_list():
 # straight through protection's own corridor (satna<->jhansi<->allahabad),
 # which is exactly the disjointness_collapse `_WidensOnDisjointnessRejection`
 # exists to recover from -- not something a plain ForecastBlindBaseline
-# ever will. `ConeAtHorizon` never cross-checks its `cone` polygon against
-# its `center`/`width_km` (scenario_file.py), so this split is legal, and it
-# is exactly the trick the pre-Task-3 fixture already relied on (its own
-# polygon intersected nothing aerial either, while its center/width_km sat
-# near storm-svc-1's OLD averaged-midpoint reading). Tests that need a
-# genuine disjointness collapse and widen-and-retry use EXPOSURE_SMOKE below
-# instead of mutating this one out from under every other test in this file.
+# ever will.
+#
+# `ConeAtHorizon` never cross-checks its `cone` polygon against its
+# `center`/`width_km` (scenario_file.py), so this split is legal -- but it is
+# a NEW incoherence, not an inherited one: the OLD, pre-Task-3 fixture's
+# `center`/`width_km` (25.1, 81.8 / 120) was itself roughly the centroid and
+# extent of ITS OWN polygon (the same box below, near allahabad) -- the two
+# fields agreed, and its "empty risk group" property fell out of the polygon
+# alone sitting off every aerial edge. Task 3 moved exposure scoring onto the
+# real span, which is nowhere near that polygon, so THIS fixture is the first
+# one in the suite to deliberately point `center`/`width_km` at a location
+# its own `cone` polygon doesn't cover. That's a real, new fiction, kept
+# because the alternative -- a `cone` that actually reaches the real span --
+# makes the avoid set non-empty and forces the genuine disjointness_collapse
+# above, which is exactly what SMOKE exists NOT to exercise (that's
+# EXPOSURE_SMOKE's job, paired with `_WidensOnDisjointnessRejection`, below).
 SMOKE = textwrap.dedent("""
     id: SMOKE
     seed: 17
