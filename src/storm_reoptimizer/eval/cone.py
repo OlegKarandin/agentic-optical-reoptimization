@@ -81,6 +81,145 @@ def p_cut_point(offset_km: float, width_km: float,
                           nc=(offset_km / sigma) ** 2))
 
 
+from scipy.stats import norm, qmc
+from shapely import contains, points as _points, prepare
+from shapely.geometry import MultiLineString, Point
+
+# ((lat, lon), (lat, lon)) -- one fibre span, in the same order the topology
+# and events.geo use.
+Segment = tuple[tuple[float, float], tuple[float, float]]
+
+# 2^16 = 65,536 Sobol points, minus the corner one dropped below. Measured
+# worst-case deviation from the ncx2 oracle at this budget: 2.56e-4, against
+# suite decision margins of order 3e-3. Raising it is a contained change --
+# every consumer goes through p_cut_region -- but it is a CONTRACT: two
+# different values give two different (deterministic) answers, and the
+# episodes' frozen scalars are computed at this one.
+SOBOL_M = 16
+
+# NOT shapely's default of 8. The end caps of a buffered segment are polygonal
+# approximations of a half-disc, and at quad_segs=8 they under-approximate it
+# enough to bias p_cut by up to 8.0e-3 -- LARGER than the decision margins this
+# suite resolves, and a bias that would sit undetected inside a sampling error
+# thirty times smaller. Measured worst deviation from the closed form over 45
+# (offset, width) cases: 2.56e-4 at 64, 7.99e-3 at 8.
+BUFFER_QUAD_SEGS = 64
+
+
+def _standard_normal_points():
+    """A deterministic shapely point array of standard-normal sample locations.
+
+    Sobol supplies low-discrepancy positions (integration error ~ (log N)^2/N
+    rather than 1/sqrt(N)); `norm.ppf` maps them from the unit square onto a
+    standard 2-D Gaussian by inverse transform, which is valid coordinate-wise
+    precisely because the two axes are independent.
+
+    Row 0 of an UNSCRAMBLED Sobol sequence is the corner (0, 0), whose inverse
+    transform is (-inf, -inf). It is dropped rather than nudged: a point at
+    infinity is outside every bounded region, so keeping it would silently
+    shave 1/N off every probability, and nudging it would put a sample where
+    the sequence never placed one.
+
+    Built ONCE, at import. That is only possible because p_cut_region scales
+    the REGION into units of sigma rather than scaling these points into km --
+    see its docstring."""
+    unit = qmc.Sobol(d=2, scramble=False).random_base2(SOBOL_M)[1:]
+    z = norm.ppf(unit)
+    return _points(z[:, 0], z[:, 1])
+
+
+_STANDARD_NORMAL_POINTS = _standard_normal_points()
+
+
+def project_to_km(center_lat: float, center_lon: float,
+                  lat: float, lon: float) -> tuple[float, float]:
+    """(east_km, north_km) of a point relative to a cone centre, under the
+    same equirectangular flat-earth approximation events.geo.circle_polygon
+    draws the cone with and radial_offset_km measures against."""
+    dlat = math.radians(lat - center_lat)
+    dlon = math.radians(lon - center_lon) * math.cos(math.radians(center_lat))
+    return EARTH_RADIUS_KM * dlon, EARTH_RADIUS_KM * dlat
+
+
+def spans_to_km(spans, center_lat: float, center_lon: float) -> list[list[tuple[float, float]]]:
+    """Every span rewritten into the local km frame about the cone centre."""
+    return [[project_to_km(center_lat, center_lon, *end) for end in span]
+            for span in spans]
+
+
+def _region_in_sigmas(spans, center_lat, center_lon, damage_radius_km,
+                      sigma):
+    """The set of storm-centre positions that would cut at least one span --
+    the Minkowski sum of the spans with a disc of radius `damage_radius_km` --
+    expressed in units of sigma.
+
+    shapely owns geometry ONLY. `.buffer()` builds the union of capsules --
+    each a rectangle of length L and width 2r with two half-disc end caps --
+    and merges overlapping ones on a bent path into a single polygon. It never
+    sees a probability.
+
+    Everything is divided by sigma so the region can be tested against a FIXED
+    standard-normal point set. Uniform isotropic scaling commutes with
+    buffering, so this is not an approximation: verified bit-identical against
+    the scale-the-points form at widths 15, 60, 90 and 320."""
+    if damage_radius_km <= 0:
+        raise ValueError(
+            f"damage_radius_km must be > 0, got {damage_radius_km!r}")
+    scaled = [[(x / sigma, y / sigma) for x, y in span]
+              for span in spans_to_km(spans, center_lat, center_lon)]
+    region = MultiLineString(scaled).buffer(damage_radius_km / sigma,
+                                            quad_segs=BUFFER_QUAD_SEGS)
+    # 23x on the measured workload (234 ms -> 10.1 ms per service-horizon),
+    # bit-identical results. shapely builds a spatial index over the region's
+    # segments; without it every one of the 65,535 membership tests walks the
+    # whole ring.
+    prepare(region)
+    return region
+
+
+def p_cut_region(spans, center_lat: float, center_lon: float,
+                 width_km: float, damage_radius_km: float) -> float:
+    """P(at least one of `spans` is cut) for a cone of diameter `width_km`
+    centred at (center_lat, center_lon).
+
+    Change of viewpoint, which is what makes this tractable: rather than "a
+    disc around the storm touches the span", ask "the storm centre lands in a
+    region around the span". The two are the same event, and the second is a
+    single random point against a single fixed region -- a probability
+    integral, estimated as the fraction of Gaussian-drawn points inside it.
+
+    Deliberately NOT 1 - prod(1 - p_i) over the spans: ONE storm centre cuts
+    all of them, so the per-span events are strongly positively correlated and
+    the product form overstates the union. Only the union region is correct.
+
+    Only spans the event's own filter admits are passed in (the caller does
+    that filtering, so this module stays free of event vocabulary): buried
+    conduit contributes nothing to a storm, and a service with none is
+    certainly not cut."""
+    if not spans:
+        return 0.0
+    sigma = cross_track_sigma_km(width_km)
+    region = _region_in_sigmas(spans, center_lat, center_lon,
+                               damage_radius_km, sigma)
+    return float(contains(region, _STANDARD_NORMAL_POINTS).mean())
+
+
+def nearest_span_offset_km(spans, center_lat: float,
+                           center_lon: float) -> float:
+    """Distance from the cone centre to the nearest point of any span, 0.0
+    when the centre lies on one and `inf` when there are no spans.
+
+    This is what the exposure row's `offset_km` now means, and what
+    baseline._nearest_exposed_horizon's containment test now reads: `offset_km
+    <= width_km / 2` asks "is a cuttable span of this service inside the cone
+    footprint", where it used to ask the strictly weaker "is the midpoint of
+    its whole path inside"."""
+    if not spans:
+        return float("inf")
+    return float(MultiLineString(
+        spans_to_km(spans, center_lat, center_lon)).distance(Point(0.0, 0.0)))
+
+
 def radial_offset_km(center_lat: float, center_lon: float,
                      lat: float, lon: float) -> float:
     """Distance from a cone's centre to a point, under the same
