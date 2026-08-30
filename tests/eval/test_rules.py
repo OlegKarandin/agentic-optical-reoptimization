@@ -23,22 +23,6 @@ TOPOLOGY_PATH = (
     / "src" / "storm_reoptimizer" / "data" / "toy_india_topology.json"
 )
 
-# Same root cause, same fix condition as test_episodes.py's own
-# `_AWAITING_REDERIVATION` (not imported from there: tests/eval/ has no
-# __init__.py by design -- see conftest.py's own module docstring on why
-# shared fixtures live in conftest rather than behind a cross-module import --
-# so this is a local marker with the identical reason, not the same object).
-# T1's cone geometry was tuned against the MIDPOINT exposure model; Task 3 of
-# docs/superpowers/plans/2026-08-30-exposure-and-depot.md replaced it with the
-# real-span region model, so T1's DERIVED `sut_p_cut_at_exposure_horizon`
-# moved and a single-variable rule solves the pair again -- the same class of
-# confound this check exists to catch, just not yet re-derived against the
-# real span. Removed in Task 14, which re-derives the geometry and re-solves
-# the tuning jointly. (Controller ruling, 2026-08-30: this test was missed by
-# Task 3's own skip list, which only enumerated tests in test_episodes.py.)
-_AWAITING_REDERIVATION = pytest.mark.skip(
-    reason="geometry re-derived in Task 14 (2026-08-30-exposure-and-depot plan)")
-
 
 def test_the_enumerated_observables_are_the_five_the_spec_names():
     assert OBSERVABLE_VARS == (
@@ -120,7 +104,6 @@ def test_the_shipped_suite_is_not_solved_by_any_single_rule():
     assert_no_single_variable_rule_solves(episodes)
 
 
-@_AWAITING_REDERIVATION
 def test_the_shipped_suite_is_not_solved_by_any_rule_over_DERIVED_geometry(
     loaded_state_path, local_server_command, local_server_env,
 ):

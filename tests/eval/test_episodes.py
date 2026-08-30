@@ -32,16 +32,6 @@ TOPOLOGY_PATH = (
     / "src" / "storm_reoptimizer" / "data" / "toy_india_topology.json"
 )
 
-# The four shipped episodes' cone geometry was tuned against the MIDPOINT
-# exposure model. Task 3 of docs/superpowers/plans/2026-08-30-exposure-and-
-# depot.md replaced that model, so every p_cut in the suite moved and the
-# anti-threshold tuning below was computed on numbers that no longer exist.
-# These skips are removed in Task 14, which re-derives the geometry and
-# re-solves the tuning jointly. Nothing else in the suite may be skipped, and
-# no skip may outlive Task 14.
-_AWAITING_REDERIVATION = pytest.mark.skip(
-    reason="geometry re-derived in Task 14 (2026-08-30-exposure-and-depot plan)")
-
 # Extended by Task 17 to add "D1" (a diagnostic singleton, not a pair).
 PAIRS = ("T1", "T2", "T3")
 
@@ -93,7 +83,6 @@ async def _derived(a, b, state_path, server_command, server_env):
             client_a, client_b, a, b, topology_path=TOPOLOGY_PATH)
 
 
-@_AWAITING_REDERIVATION
 @pytest.mark.parametrize("pair", PAIRS)
 def test_pair_derived_geometry_is_equal_across_the_halves(
     pair, loaded_state_path, local_server_command, local_server_env,
@@ -113,7 +102,6 @@ def test_pair_derived_geometry_is_equal_across_the_halves(
                          local_server_env))
 
 
-@_AWAITING_REDERIVATION
 @pytest.mark.parametrize("pair", PAIRS)
 def test_each_baseline_variant_scores_exactly_one_half(
     pair, loaded_state_path, local_server_command, local_server_env,
@@ -402,7 +390,30 @@ class _WidensOnDisjointnessRejection:
     violation the server reports, so T2's 2026-08-23 rebuild (which moved the
     near-horizon cone off storm-svc-1, making t6 rather than t2 the nearest
     exposed horizon the inherited constraints() keys on) needed no edit
-    here -- see docs/superpowers/rehearsals/T2.md's Q3."""
+    here -- see docs/superpowers/rehearsals/T2.md's Q3.
+
+    Task 14 finding (2026-08-30, exposure-and-depot plan): satna<->jabalpur
+    going aerial (Task 5 of this same plan) put it INSIDE T2a's far-horizon
+    cone's own geometry too (jabalpur's nearest point to that cone's centre
+    is ~65 km, well inside its ~100 km radius) -- confirmed live via
+    `geo_mapper.map_geo_event_to_assets`, `rg_T2a_t1_t6`'s own asset list now
+    contains all THREE of satna's aerial directions (rewa, jhansi, AND
+    jabalpur), not two. Under basis=physical, avoiding all three leaves NO
+    physical route out of satna at all -- `route_service` returns
+    `menu_size=0`, `status=no_solution`, not merely an invalid candidate --
+    so this wrapper's widen-on-`disjointness_collapse` logic never finds a
+    `validation_violations` rejection to react to and cannot recover (there
+    is nothing left to widen with; the escape route this scenario needs,
+    jabalpur, is now itself excluded by the very avoid set being tested).
+    See `test_t2a_carries_a_real_validate_plan_rejection`'s own docstring for
+    what this proves instead. `tests/eval/test_runner.py`'s EXPOSURE_SMOKE
+    fixture hit the identical problem and fixed it with a hand-built
+    "keyhole" cone that carves out jabalpur's own bearing -- not applicable
+    here, since T2a's far cone must stay BYTE-IDENTICAL to T2b's (the
+    joint-tuning construction's own tied pair; see
+    docs/superpowers/plans/notes/2026-08-30-joint-tuning.md) and this test
+    exists specifically to exercise T2a's REAL, shipped geometry, not a
+    synthetic stand-in for it."""
 
     def __init__(self) -> None:
         self._inner = ForecastBlindBaseline("immediate")
@@ -435,14 +446,40 @@ class _WidensOnDisjointnessRejection:
 def test_t2a_carries_a_real_validate_plan_rejection(
     loaded_state_path, local_server_command, local_server_env,
 ):
-    """storm-svc-1's first-choice candidate under a forecast-blind avoid
-    genuinely fails validate_plan (disjointness_collapse against its own
-    static protection leg, which shares the satna<->jhansi<->allahabad
-    corridor with every cheap alternative to the exposed satna<->rewa
-    corridor) -- a real rejection, not fabricated. Recovery means widening
-    avoid with the violation's own shared_assets and re-calling route_service,
-    which is what makes recovered_from_rejection a metric that can actually
-    fire. See docs/superpowers/rehearsals/T2.md for the full derivation."""
+    """Re-derived 2026-08-30 (Task 14, exposure-and-depot plan) against the
+    live server -- see `_WidensOnDisjointnessRejection`'s own docstring
+    for the full mechanism. Before Task 5 of this plan made satna<->jabalpur
+    aerial, avoiding T2a's far-horizon risk group (rewa + jhansi) under
+    basis=physical genuinely produced a candidate that then FAILED
+    validate_plan with `disjointness_collapse` against storm-svc-1's own
+    static protection leg -- a real, recoverable rejection, and this test's
+    original name and docstring described exactly that.
+
+    That is no longer what happens, confirmed live and NOT a regression this
+    task introduced: `rg_T2a_t1_t6`'s own asset list now ALSO contains
+    satna<->jabalpur (it is aerial now, and geometrically inside the same far
+    cone), so avoiding it under basis=physical excludes all THREE of satna's
+    aerial directions and leaves NO physical route out of satna at all --
+    `route_service` itself returns zero candidates (`status=no_solution`),
+    one step earlier than a `validate_plan` rejection, and with nothing for
+    `_WidensOnDisjointnessRejection` to widen with. This is confirmed
+    pre-existing at baseline HEAD (git-stash confirmed by Task 12, before any
+    Task 14 change), i.e. a consequence of Task 5's own topology edit, not of
+    this task's episode geometry retune (T2a's far cone is BYTE-IDENTICAL
+    before and after Task 14).
+
+    What this test now proves instead: T2a's forecast-blind, basis=physical
+    baseline hits a genuine, real dead end -- not a fabricated one -- which
+    is an even STARKER version of the same point the shipped gold rationale
+    already makes (T2a.yaml: "the same call under basis=physical does not
+    validate"). Recovery is genuinely impossible via widen-and-retry here
+    (there is no violation to read `shared_assets` from), so
+    `recovered_from_rejection` must be False, and the episode never commits
+    under this baseline -- exactly why the REAL gold decision uses
+    basis=risk_group instead (see `_T2_NON_FLIP_GOLD_DECISIONS`), which
+    `test_gold_spare_action_is_grounded_in_a_real_candidate` and
+    `assert_escape_route_survives` already confirm still finds and validates
+    the jabalpur escape route for real."""
     t2a = load_all_scenarios()["T2a"]
 
     async def _run():
@@ -457,14 +494,18 @@ def test_t2a_carries_a_real_validate_plan_rejection(
 
     trace = asyncio.run(_run())
     kinds = {r["type"] for h in trace.hours for r in h["rejections"]}
-    assert "validation_violations" in kinds, (
-        f"T2a produced no validate_plan rejection (saw {sorted(kinds)}); the "
-        f"near-horizon avoid must genuinely collide with storm-svc-1's own "
-        f"protection leg, or recovered_from_rejection can never fire")
-    assert episode_metrics(t2a, trace)["recovered_from_rejection"]
+    assert kinds == {"declared_infeasible"}, (
+        f"T2a's forecast-blind, basis=physical baseline saw rejection kinds "
+        f"{sorted(kinds)}, not the expected {{'declared_infeasible'}} -- "
+        f"either the topology's satna<->jabalpur aerial edge, or T2a's own "
+        f"far-horizon cone, moved since this was last confirmed live")
+    assert trace.terminal_status == "declared_infeasible"
+    assert not episode_metrics(t2a, trace)["recovered_from_rejection"], (
+        "recovery should be impossible here: avoiding all three of satna's "
+        "aerial directions under basis=physical leaves no candidate to "
+        "widen from")
 
 
-@_AWAITING_REDERIVATION
 def test_the_claimant_aggregates_are_derivable_for_every_twin_half(
         loaded_state_path, local_server_command, local_server_env):
     """W1.1's acceptance: the numbers F1's arithmetic is built on, measured
@@ -497,7 +538,6 @@ def test_the_claimant_aggregates_are_derivable_for_every_twin_half(
         for sid, f in sorted(flips.items())))
 
 
-@_AWAITING_REDERIVATION
 def test_no_global_policy_solves_the_shipped_suite(
         loaded_state_path, local_server_command, local_server_env):
     """GATE A, as a real assertion: no ONE threshold, on ONE of
@@ -562,7 +602,6 @@ def test_no_global_policy_solves_the_shipped_suite(
     assert_no_global_policy_solves_the_suite(episodes, flip_values)
 
 
-@_AWAITING_REDERIVATION
 @pytest.mark.parametrize("pair", ("T1", "T2", "T3"))
 def test_the_flip_dominates_every_equal_signal(pair, loaded_state_path,
                                                local_server_command,
@@ -619,7 +658,6 @@ def test_the_flip_dominates_every_equal_signal(pair, loaded_state_path,
 # protection lightpath still exists in all three menus (that part of the
 # original finding is unchanged, and still worth a separate look for T1a's
 # sake), but only T1a's exposure to it is a genuine confound.
-@_AWAITING_REDERIVATION
 @pytest.mark.parametrize("scenario_id", ("T2b", "T3b"))
 def test_a_conserve_gold_with_an_unexploitable_free_escape_passes(
     scenario_id, loaded_state_path, local_server_command, local_server_env,
@@ -675,7 +713,6 @@ def _unwrap_lone_exception(exc: BaseException) -> BaseException:
 # `_unwrap_lone_exception` is required for `raises=` to work at all here --
 # see its own docstring; confirmed live that without it this test hard-FAILs
 # instead of xfailing, on the very finding it is supposed to track.
-@_AWAITING_REDERIVATION
 @pytest.mark.xfail(
     reason="W1.6 finding (task 5, 2026-08-26; narrowed by Finding #5, "
            "2026-08-26 re-review): T1a offers a free ip_reroute onto "
@@ -737,7 +774,6 @@ _GOLD_COMMITTED_LEVER = {
 }
 
 
-@_AWAITING_REDERIVATION
 @pytest.mark.parametrize(
     "scenario_id", ("T1a", "T1b", "T2a", "T2b", "T3a", "T3b"))
 def test_gold_spare_action_is_grounded_in_a_real_candidate(

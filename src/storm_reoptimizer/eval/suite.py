@@ -29,7 +29,8 @@ from .assertions import (assert_claim_is_one_lightpath,
                          assert_group_fits_one_lightpath,
                          assert_no_global_policy_solves_the_suite,
                          assert_no_single_variable_rule_solves,
-                         assert_realized_cuts_pass_the_event_filter)
+                         assert_realized_cuts_pass_the_event_filter,
+                         assert_sampling_error_within_margin)
 from .baseline import ForecastBlindBaseline
 from .runner import run_episode, service_geometry
 from .scenario_file import ScenarioFile, load_all_scenarios
@@ -238,9 +239,11 @@ async def _run_dimensional_coherence_invariants(
     all seven episodes, since they share one state file.
 
     Invariant 8 (`assert_sampling_error_within_margin`) is NOT called here:
-    it needs the real, frozen per-episode flip values Task 14 produces, and
-    is exercised only against constructed values until then (see its own
-    docstring)."""
+    it takes the whole suite's `FlipScalars.values()` map directly (the same
+    shape `assert_no_global_policy_solves_the_suite` consumes), which
+    `main()` below already computes once for that other check -- so `main()`
+    calls invariant 8 alongside it rather than this function re-fetching the
+    same data a second time."""
     async with connect() as client:
         from ..mcp_client import call_tool_json
         oms_by_id = {
@@ -352,9 +355,19 @@ def main(argv: list[str] | None = None) -> None:
     # the per-pair one asks whether any scalar the halves SHARE differs; this
     # one asks whether one fixed threshold answers every half. See rules.py's
     # module docstring on why the flip scalar is in exactly one of them.
+    flip_values = {sid: f.values()
+                  for sid, f in asyncio.run(_flip_scalars()).items()}
     assert_no_global_policy_solves_the_suite(
-        list(episodes.values()),
-        {sid: f.values() for sid, f in asyncio.run(_flip_scalars()).items()})
+        list(episodes.values()), flip_values)
+
+    # Invariant 8 (Task 12's own numbering; wired here in Task 14 against the
+    # real, frozen per-episode numbers, per the exposure-and-depot plan) --
+    # the suite's smallest flip margin must clear cone.py's own measured
+    # Sobol sampling noise floor (tests/eval/test_exposure_model.py's bound)
+    # by at least 10x, so the sampler's own noise could never flip a gold
+    # label. Reuses the SAME flip_values just computed for the check above --
+    # one server round trip, two questions asked of the same numbers.
+    assert_sampling_error_within_margin(flip_values, measured_error=2.56e-4)
 
     # Task 12 (exposure-and-depot plan): the eight dimensional-coherence
     # invariants, over the full episode set. Same build-time-gate contract

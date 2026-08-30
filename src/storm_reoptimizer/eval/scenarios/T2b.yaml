@@ -16,43 +16,36 @@ depot_site: satna            # the site whose depot is scarce in this episode
 spare_inventory: {satna: 1}
 damage_radius_km: 74
 reference_avoid: {}          # neutral third value: current exposure only
+# GEOMETRY FROZEN 2026-08-30 (Task 14, exposure-and-depot plan) -- see
+# T2a.yaml's header comment for the full statement of the construction (the
+# real satna-homed claimant identity, the closed-form placement, and why
+# storm-svc-1's own near-horizon exposure stays bitwise 0.0 across bearings).
+# The FAR horizon (t6) is UNCHANGED and byte-identical to T2a's (and to the
+# pre-2026-08-30 file): storm-svc-1's own point, width 200, p_cut
+# 0.49178301670862895 -> ecar 147.5349050125887 G.
+#
+# ONLY the near horizon's CENTRE differs from T2a's: bearing 213.0 deg (202.0
+# deg in T2a) at the SAME 250.0 km radial offset from storm-svc-1's own
+# point, so storm-svc-1's own derived exposure is EQUAL across the halves and
+# no threshold on it can separate the pair (see T2a.yaml's header comment for
+# the fast-path confirmation). What DOES differ is where the real
+# claimant-satna-jabalpur corridor falls: this centre sits DEEPER into the
+# corridor than T2a's. Confirmed live: claimant-satna-jabalpur-fwd's own
+# p_cut at this cone is 0.9888761730373083 -> group ecar (2 * p_cut * 100 G,
+# the co-terminating fwd+rev pair) = 197.77523460746167 G.
 forecast:
-  t0:                        # BYTE-IDENTICAL to T2a -- see T2a.yaml's comment
+  t0:                        # BYTE-IDENTICAL to T2a -- UNCHANGED, see T2a.yaml's comment
     t6: {cone: {type: Polygon, coordinates: [[[79.6, 23.40469], [79.71379, 23.39091], [79.81982, 23.35048], [79.91088, 23.28616], [79.98074, 23.20235], [80.02466, 23.10474], [80.03964, 23.0], [80.02466, 22.89526], [79.98074, 22.79765], [79.91088, 22.71384], [79.81982, 22.64952], [79.71379, 22.60909], [79.6, 22.59531], [79.48621, 22.60909], [79.38018, 22.64952], [79.28912, 22.71384], [79.21926, 22.79765], [79.17534, 22.89526], [79.16036, 23.0], [79.17534, 23.10474], [79.21926, 23.20235], [79.28912, 23.28616], [79.38018, 23.35048], [79.48621, 23.39091], [79.6, 23.40469]]]},
          width_km: 90, center: {lat: 23.0, lon: 79.6}}
-  t1:                        # the revision -- the SAME two horizons as T2a, at
-                              # the SAME two widths (60 near, 200 far), with the
-                              # SAME far centre (storm-svc-1's own point, so the
-                              # far horizon exposes satna<->rewa AND
-                              # satna<->jhansi in both halves and mints an
-                              # identical wide avoid group).  ONLY the near
-                              # horizon's CENTRE differs from T2a's, and it
-                              # differs along the 300.0 km circle about
-                              # storm-svc-1's point -- both halves' offsets err
-                              # by -2.2737367544323206e-13 km, the SAME float,
-                              # so they are bitwise equal.  Each centre is
-                              # placed along a fixed bearing (296.0 deg here,
-                              # 290.0 deg in T2a) measured in
-                              # cone.radial_offset_km's own frame; see
-                              # T2a.yaml's comment for the closed form.  So
-                              # storm-svc-1's own derived exposure -- its p_cut
-                              # at the exposure horizon, the within-issuance
-                              # cone motion, every horizon's width -- is EQUAL
-                              # across the halves and no threshold on any of
-                              # them can separate the pair.
-                              #
-                              # What DOES differ is where the eight kanpur/agra
-                              # claimants fall: this centre is 31.2 km deeper
-                              # into that cluster than T2a's, taking them from
-                              # p_cut 0.120-0.147 (114.6 G at risk) to
-                              # 0.294-0.454 (347.4 G).  See
-                              # docs/superpowers/rehearsals/T2.md.  (That gap
-                              # was 41.6 km / 71.1 G until 2026-08-26, when
-                              # T2a's near cone was retuned outward -- see
-                              # T2a.yaml's own RETUNED note for why; nothing in
-                              # THIS half moved.)
-    t2: {cone: {type: Polygon, coordinates: [[[78.62893, 26.30806], [78.70665, 26.29887], [78.77907, 26.27191], [78.84126, 26.22904], [78.88898, 26.17316], [78.91897, 26.10809], [78.92921, 26.03826], [78.91897, 25.96843], [78.88898, 25.90337], [78.84126, 25.84749], [78.77907, 25.80461], [78.70665, 25.77766], [78.62893, 25.76847], [78.55122, 25.77766], [78.4788, 25.80461], [78.41661, 25.84749], [78.36889, 25.90337], [78.33889, 25.96843], [78.32866, 26.03826], [78.33889, 26.10809], [78.36889, 26.17316], [78.41661, 26.22904], [78.4788, 26.27191], [78.55122, 26.29887], [78.62893, 26.30806]]]},
-         width_km: 60, center: {lat: 26.0382632644897, lon: 78.62893218613868}}
+  t1:                        # the revision -- the SAME two horizons as T2a,
+                              # at the SAME two widths (60 near, 200 far), with
+                              # the SAME far centre. ONLY the near horizon's
+                              # CENTRE differs from T2a's (FROZEN 2026-08-30:
+                              # bearing 213.0 deg, radius 250.0 km, width 60;
+                              # see the header comment for the full derivation
+                              # and numbers).
+    t2: {cone: {type: Polygon, coordinates: [[[79.99781, 23.23976], [80.07365, 23.23057], [80.14432, 23.20362], [80.20501, 23.16074], [80.25158, 23.10487], [80.28086, 23.0398], [80.29084, 22.96997], [80.28086, 22.90014], [80.25158, 22.83507], [80.20501, 22.77919], [80.14432, 22.73632], [80.07365, 22.70936], [79.99781, 22.70017], [79.92197, 22.70936], [79.85129, 22.73632], [79.7906, 22.77919], [79.74404, 22.83507], [79.71476, 22.90014], [79.70478, 22.96997], [79.71476, 23.0398], [79.74404, 23.10487], [79.7906, 23.16074], [79.85129, 23.20362], [79.92197, 23.23057], [79.99781, 23.23976]]]},
+         width_km: 60, center: {lat: 22.9699669283297, lon: 79.99780876977917}}
     t6: {cone: {type: Polygon, coordinates: [[[81.32778, 25.75487], [81.5843, 25.72423], [81.82334, 25.63439], [82.02861, 25.49147], [82.18612, 25.30521], [82.28513, 25.08831], [82.31891, 24.85555], [82.28513, 24.62279], [82.18612, 24.40589], [82.02861, 24.21964], [81.82334, 24.07672], [81.5843, 23.98688], [81.32778, 23.95623], [81.07125, 23.98688], [80.83221, 24.07672], [80.62694, 24.21964], [80.46943, 24.40589], [80.37042, 24.62279], [80.33665, 24.85555], [80.37042, 25.08831], [80.46943, 25.30521], [80.62694, 25.49147], [80.83221, 25.63439], [81.07125, 25.72423], [81.32778, 25.75487]]]},
          width_km: 200, center: {lat: 24.855553333333333, lon: 81.32777666666667}}
 realized: {}                 # EQUAL to T2a -- nothing realized-cut this episode
@@ -65,53 +58,55 @@ gold:
     ONE spare transponder pair, two claims on it.
       * Spend it now on insurance for storm-svc-1 (WIDE avoid: route clear of
         the full far-horizon group -- an optical_reroute via jabalpur costing
-        1 pair) and its 0.5198630338 x 300 G = 156.0 G of expected loss at t6
-        goes away.
+        1 pair) and its 0.49178301670862895 x 300 G = 147.535 G of expected
+        loss at t6 goes away.
       * Hold it (NARROW avoid: avoid={}, an ip_reroute that reuses the current
-        lightpath and costs nothing) and it stays available for the claimants
-        the t2 cone lands on -- which are cut an hour BEFORE storm-svc-1's own
-        exposure at t6, so they reach the pair first.
-    Both halves publish the SAME far horizon and therefore the SAME 156.0 G;
+        lightpath and costs nothing) and it stays available for
+        claimant-satna-jabalpur-fwd/-rev, which the t2 cone lands on -- cut an
+        hour BEFORE storm-svc-1's own exposure at t6, so they reach the pair
+        first.
+    Both halves publish the SAME far horizon and therefore the SAME 147.535 G;
     only the near horizon's centre moves, and with it the competing claim.
 
-    Real numbers, this half: the t2 cone (300.0 km from storm-svc-1, width 60)
-    sits ON the kanpur/agra cluster.  Its eight 100 G services are exposed at
-    p_cut 0.2941 (d0004, d0301), 0.4510 (d0028, d0123) and 0.4537 (d0188,
-    d0189, d0349, d0350) -- 330.5 G, or 347.4 G summed over every one of the
-    572 non-SUT services.  347.4 G > 156.0 G (2.23x): the pair is far more
-    valuable held for the hour-earlier claimants than spent on insurance for
-    storm-svc-1.  Correct: NARROW.
-
-    The t6 cone also sits on five further services (d0361 0.3973, d0029 and
-    d0348 0.2814, d0212 and d0462 0.0693 -- 128.4 G).  That number is
-    IDENTICAL in both halves (the far horizon is byte-identical), so it cannot
-    discriminate; and those services are cut in the same hour as storm-svc-1
-    itself, where a 300 G service outranks a 100 G one for the last pair
-    whichever way this decision goes.  Only the t2 claimants -- cut an hour
-    EARLIER -- actually compete for it.
+    Real numbers, this half: the t2 cone (250.0 km from storm-svc-1, width 60,
+    bearing 213.0 deg) sits deep on the real satna<->jabalpur corridor.
+      claimant-satna-jabalpur-fwd  100G  p_cut 0.9888761730373083 -> 98.888 G
+      claimant-satna-jabalpur-rev  100G  p_cut 0.9888761730373083 -> 98.888 G
+      the two claimants together (one lightpath restores both) -> 197.78 G
+    197.78 G > 147.535 G: the pair is more valuable held for the hour-earlier
+    claimant than spent on insurance for storm-svc-1. Correct: NARROW.
+    Margin: 50.240 G (34.1% of storm-svc-1's own ecar, 25.4% of the claim's
+    own ecar) -- both comfortably above `cone.py`'s own documented ~2.56e-4
+    Sobol sampling noise floor (~0.05 G at these 100-300 G demands).
 
     route_service(storm-svc-1, avoid={}, basis=physical, level=link) returns
     candidate_0 -- an ip_reroute reusing storm-svc-1's own EXISTING working
     lightpath (lp-cand-storm-svc-1-0, satna<->rewa<->allahabad) unchanged,
     restored_gbps=300, 0 spare pairs -- confirmed against the real server to
     validate cleanly (it stays disjoint from the static protection leg because
-    nothing physically moved).  It sits inside the t6 cone -- no insurance
+    nothing physically moved). It sits inside the t6 cone -- no insurance
     bought -- which is correct here because the pair is worth more to the
-    claimants.
+    claimant corridor.
 flip_variable: [claimant, spare, near, horizon]
 metadata:
-  # Same kanpur/agra cluster as T2a (identical member services; only their
-  # p_cut differs since the near cone's centre moved). Task 12,
-  # exposure-and-depot plan.
-  claimant_services: [d0004, d0028, d0123, d0188, d0189, d0301, d0349, d0350]
-  # "-- 330.5 G" (gold.rationale, verbatim: the eight named services' own
-  # p_cut x demand), NOT the 347.4 G "summed over every one of the 572
-  # non-SUT services" figure. Billed at the NEAR horizon (t2) -- see
-  # T2a.yaml's identical comment on why this is t2, not the SUT's own
-  # exposure_horizon_hours-derived t6. 2026-08-30 review fix (findings 1
-  # and 2).
-  claimed_competing_ecar_gbps: 330.5
+  # Same two real claimants as T2a (identical member services; only their
+  # p_cut differs since the near cone's centre moved). Task 14, 2026-08-30.
+  claimant_services: [claimant-satna-jabalpur-fwd, claimant-satna-jabalpur-rev]
+  # "the two claimants together (one lightpath restores both) -> 197.78 G"
+  # (gold.rationale, verbatim: the honest LARGEST RESTORABLE GROUP figure).
+  # 197.78, not derived.py's more precise 197.77523460746167 -- see
+  # T2a.yaml's identical comment on the observation-rounded vs.
+  # derived.py-unrounded distinction invariant 4 checks against. Billed at
+  # the NEAR horizon (t2) -- see T2a.yaml's identical comment on why this is
+  # t2, not the SUT's own exposure_horizon_hours-derived t6. Task 14,
+  # 2026-08-30.
+  claimed_competing_ecar_gbps: 197.78
   claimed_competing_ecar_at: t2
+  # For the record (Task 14): FlipScalars.largest_restorable_group_ecar_gbps
+  # at THIS half's own exposure horizon (t6, the FAR horizon) -- the
+  # UNROUNDED derived.py figure, 75.633 G, TIED with T2a (both read the
+  # byte-identical far-horizon group).
+  largest_restorable_group_ecar_gbps: 75.633
   label_rule: avoid_horizon_at_decision_hour
   wide_avoid_risk_group: rg_T2b_t1_t6   # matches the runner's rg_{scenario}_{issued}_{horizon} minting
   widest_avoid_feasible: true           # EQUAL to T2a -- see rehearsal doc Q1;
@@ -124,10 +119,8 @@ metadata:
   cone_motion_kmh: 300.0       # EQUAL to T2a -- the WITHIN-issuance motion
                                 # (t2 centre -> t6 centre, one hour-label index
                                 # step), the quantity derived.py measures
-  n_future_claimants: 8        # EQUAL to T2a -- d0004, d0028, d0123, d0188,
-                                # d0189, d0301, d0349, d0350 are the services
-                                # over p_cut 0.05 at the t2 horizon in BOTH
-                                # halves; only their p_cut differs
+  n_future_claimants: 2        # EQUAL to T2a -- claimant-satna-jabalpur-fwd
+                                # and -rev; only their p_cut differs
   exposure_horizon_hours: 2    # EQUAL to T2a (t1 -> t6 is two hour-label steps)
   spares_on_hand: 1            # EQUAL to T2a
   # W1.2's whole-suite check needs ONE global orientation, but the three pairs

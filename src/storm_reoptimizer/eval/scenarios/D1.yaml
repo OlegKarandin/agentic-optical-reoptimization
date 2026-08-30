@@ -37,15 +37,12 @@ forecast:
          width_km: 15, center: {lat: 24.58333, lon: 80.83333}}
          # centred on satna -- the node where BOTH of storm-svc-1's
          # corridors originate -- not on storm-svc-1's own representative
-         # point (24.855553333333333, 81.32777666666667). offset(storm-svc-1)
-         # = 58.4457km -> p_cut = 0.9761 (probe: cut_probability(58.4457,
-         # 15.0, 74.0)). Confirmed via map_geo_event_to_assets at this exact
-         # width/centre: exposed aerial edges are satna<->rewa (WORKING) and
-         # satna<->jhansi (PROTECTION) -- both corridors, same mechanic T2's
-         # rehearsal doc derives for the far horizon. Every other service's
-         # offset from THIS centre is >=91.7km (nearest: d0361, p_cut=0.0120)
-         # -- see "The real mechanics" below for why the centre moved off
-         # storm-svc-1's own point.
+         # point (24.855553333333333, 81.32777666666667). UNCHANGED by Task
+         # 14 -- confirmed via `tools/derive_episodes.py` that this geometry
+         # needs no retune (see the "GEOMETRY, RECONFIRMED" comment below for
+         # what DID change: the real numbers this cone implies under the
+         # corrected exposure model, and the real claimant identity now
+         # sharing this exact pivot node).
 realized:
   t1: [fiber_satna_rewa_0]     # storm-svc-1's own WORKING-path fiber --
                                 # confirmed against the real server:
@@ -83,16 +80,65 @@ gold:
     180 km cone at t+1, storm-svc-1 dead-centre -- the design doc's own
     framing; the PROBED geometry deviates from a literal 180km/storm-svc-1's-
     own-point cone for two reasons carried over from real testing (see "The
-    real mechanics" below), but the substance is unchanged: p_cut(storm-svc-1)
-    = 0.9761, no other service in any cone hour exceeds p_cut = 0.0120
-    (n_future_claimants = 0), 2 spare pairs free. Hours to exposure (1)
-    equals the optical_reroute lead time, so waiting past t0 forecloses
-    action entirely -- t0 is both the decision hour and the only hour before
-    the storm reaches its own currently-exposed corridor. Expected cost of
-    acting ~ 0 (no competing claimant for either spare pair, and 1 remains
-    on hand afterward regardless) against 0.9761 * 300G = 292.8 G of expected
-    loss if the network waits and the working-path fiber (fiber_satna_rewa_0)
-    goes down as realized at t1. Correct: act at t0.
+    real mechanics" below), but the substance is unchanged.
+
+    GEOMETRY, RECONFIRMED (Task 14, exposure-and-depot plan, 2026-08-30): this
+    cone's geometry is UNCHANGED -- confirmed live via `tools/derive_episodes.py`
+    that no retune is needed -- but two numbers it implies moved under the
+    corrected, real-span-based exposure model, and a third finding is new
+    under the real claimant identity:
+      * p_cut(storm-svc-1) = 1.000000 (was 0.9761 under the old
+        midpoint-based model) -> 1.0 * 300G = 300.0 G expected loss if the
+        network waits and the working-path fiber (fiber_satna_rewa_0) goes
+        down as realized at t1.
+      * offset_km(storm-svc-1) = 0.000000 (was 58.4457 km under the old
+        averaged-midpoint model) -- the corrected model reads the NEAREST
+        POINT of storm-svc-1's real storm-cuttable span, which sits exactly
+        at satna, this cone's own centre.
+      * The REAL satna-homed claimant, claimant-satna-jabalpur-fwd/-rev
+        (satna<->jabalpur, pinned Task 7), was NOT threaded through this
+        episode's own prose when it was first written (the span was buried
+        until Task 5's mount-type change) -- so the ORIGINAL claim below
+        ("no other service... exceeds p_cut = 0.0120", "n_future_claimants =
+        0") was true when written but is now FALSE under the real claimant
+        identity, and Task 14 corrects it here rather than leaving it stale.
+    Because BOTH of storm-svc-1's own corridors (satna<->rewa working,
+    satna<->jhansi protection) AND the real claimant corridor
+    (satna<->jabalpur) all originate at the exact node this cone is centred
+    on, the real claimant now ALSO reads p_cut = 1.000000 here -- the SAME
+    certainty as storm-svc-1's own exposure, not a distant, low-probability
+    nuisance:
+      storm-svc-1 (300G)                       p_cut 1.0000 -> 300.000 G
+      claimant-satna-jabalpur-fwd (100G)       p_cut 1.0000 -> 100.000 G
+      claimant-satna-jabalpur-rev (100G)       p_cut 1.0000 -> 100.000 G
+      the two claimants together (one lightpath restores both) -> 200.000 G
+    This IS a genuine, real competing claim on this depot's spare pool --
+    unlike every other claim in this suite, D1 declares TWO spare pairs on
+    hand (spare_inventory: {satna: 2}), not one. Confirmed live against the
+    real menu: storm-svc-1's own restoration candidates each need 1 spare
+    pair at satna (plus 1 at allahabad, a non-scarce site); the claimant
+    corridor's own hypothetical restoration (never actually invoked by this
+    harness -- no cross-service restoration exists) would likewise need only
+    1 spare pair at satna (plus 1 at jabalpur, also non-scarce). 1 (this
+    episode's own action) + 1 (the claimant's hypothetical need) = 2, exactly
+    matching the 2 pairs on hand -- so acting on storm-svc-1 now still leaves
+    the FULL 1 pair the claimant corridor would need, genuinely uncontested.
+    D1's "no excuse to wait" framing survives the real claimant identity
+    intact, but for a reason now made explicit rather than assumed: this
+    episode's OWN doubled depot stock, not an absence of competition.
+    (Nine OTHER background services also ride the physical satna<->jabalpur
+    span at this same cone and read p_cut 1.0 too -- network-wide sum
+    1100.0 G -- but none terminate at satna, so none are depot-eligible and
+    none belong in this comparison; see
+    docs/superpowers/plans/notes/2026-08-30-joint-tuning.md.)
+
+    Hours to exposure (1) equals the optical_reroute lead time, so waiting
+    past t0 forecloses action entirely -- t0 is both the decision hour and
+    the only hour before the storm reaches its own currently-exposed
+    corridor. Expected cost of acting ~ 0 (the claimant corridor's own
+    restoration need is fully covered by the 1 pair remaining afterward)
+    against 300.0 G of expected loss if the network waits. Correct: act at
+    t0.
 
     PRECONDITION: the menu contains no ip_reroute candidate.
     test_d1_menu_contains_no_ip_reroute_candidate asserts this for real
@@ -101,15 +147,31 @@ gold:
     this needed a non-trivial reference_avoid to hold.
 flip_variable: [uncontested, spare, lead]
 metadata:
-  # No non-SUT service is named by id anywhere in gold.rationale (p_cut <=
-  # 0.0120 everywhere else, n_future_claimants: 0) -- honestly empty (Task
-  # 12, exposure-and-depot plan).
-  claimant_services: []
+  # The two REAL named claimants (Task 14, exposure-and-depot plan,
+  # 2026-08-30). D1's own doubled spare stock (2 pairs, not 1) is what keeps
+  # gold.label='act' correct even though this claim is now real and
+  # certain (p_cut=1.0) -- see gold.rationale above for the real
+  # spares_needed arithmetic.
+  claimant_services: [claimant-satna-jabalpur-fwd, claimant-satna-jabalpur-rev]
+  # "the two claimants together (one lightpath restores both) -> 200.000 G"
+  # (gold.rationale, verbatim) -- the honest LARGEST RESTORABLE GROUP figure
+  # at this episode's only horizon (t1). Task 14, 2026-08-30.
+  claimed_competing_ecar_gbps: 200.0
+  claimed_competing_ecar_at: t1
+  # For the record (Task 14): FlipScalars.largest_restorable_group_ecar_gbps
+  # at this episode's own exposure horizon (t1) -- equal to
+  # claimed_competing_ecar_gbps above, D1 publishes only one horizon.
+  largest_restorable_group_ecar_gbps: 200.0
   label_rule: timing_at_decision_hour
   cone_width_km: 15             # NOT 180 -- see "The real mechanics" below
   cone_motion_kmh: 0.0           # single issuance, no revision to diff
                                   # against (D1 has only one forecast entry)
-  n_future_claimants: 0
+  # 2 (Task 14, 2026-08-30) -- claimant-satna-jabalpur-fwd/-rev, the two REAL
+  # services genuinely exposed (p_cut=1.0) at this cone. NOT 0: the original
+  # value was true only of the OLD placeholder claimants, which had no real
+  # aerial exposure at all (see gold.rationale above). D1's own doubled
+  # spare stock is what keeps this non-zero count from changing the label.
+  n_future_claimants: 2
   exposure_horizon_hours: 1
   spares_on_hand: 2
   widest_avoid_feasible: true

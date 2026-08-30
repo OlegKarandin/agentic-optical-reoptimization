@@ -468,11 +468,18 @@ def test_a_free_escape_that_would_flip_a_chosen_lever_label_still_raises():
 # claimant_service_ids: the shared parsing note (invariants 2-4).
 def test_claimant_service_ids_returns_the_declared_list():
     scenario = load_scenario(SCENARIOS_DIR / "T1a.yaml")
-    assert claimant_service_ids(scenario) == ("d0029", "d0348")
+    # The REAL satna-homed claimant pair (Task 14, exposure-and-depot plan,
+    # 2026-08-30) -- NOT the pre-Task-14 placeholder ids (d0029, d0348),
+    # which had no real aerial exposure at all.
+    assert claimant_service_ids(scenario) == (
+        "claimant-satna-jabalpur-fwd", "claimant-satna-jabalpur-rev")
 
 
-def test_claimant_service_ids_is_empty_when_none_are_declared():
-    scenario = load_scenario(SCENARIOS_DIR / "D1.yaml")
+def test_claimant_service_ids_is_empty_when_none_are_declared(tmp_path):
+    # D1.yaml is no longer the suite's "no claimants" example (Task 14: it
+    # now honestly declares the real satna-homed pair -- see D1.yaml's own
+    # gold.rationale for why). Use the synthetic fixture instead.
+    scenario = _scenario_claiming(tmp_path, 0.0, at="t6", claimants=())
     assert claimant_service_ids(scenario) == ()
 
 
@@ -486,19 +493,21 @@ def test_claimant_service_ids_rejects_an_id_not_in_the_rationale():
 
 
 # Invariant 1 (`assert_realized_cuts_pass_the_event_filter`). T1a's own
-# shipped `realized` block injects fiber_allahabad_fatehpur_0/_1 and
-# fiber_fatehpur_allahabad_0 -- confirmed BURIED in the toy topology (Task
-# 14, not this task, fixes the episode data). T1b's realized cut
-# (fiber_satna_rewa_0) is aerial and correct.
-def test_a_realized_cut_on_buried_fibre_fails_the_build():
-    scenario = load_scenario(SCENARIOS_DIR / "T1a.yaml")
+# shipped `realized` block used to inject fiber_allahabad_fatehpur_0/_1 and
+# fiber_fatehpur_allahabad_0 -- confirmed BURIED in the toy topology -- which
+# is exactly the defect this invariant exists to catch; Task 14 fixed T1a's
+# own episode data (it now realizes a cut on the real, aerial
+# satna<->jabalpur claimant span instead), so this test uses the TWIN
+# fixture's own synthetic `realized: {{t3: [fiber_004]}}` against a
+# hand-built BURIED oms_by_id instead of depending on a real episode's
+# (now-fixed) content. T1b's realized cut (fiber_satna_rewa_0, checked
+# below) is aerial and correct.
+def test_a_realized_cut_on_buried_fibre_fails_the_build(tmp_path):
+    scenario = _half(tmp_path, "Pa", label="wait")   # realized: {t3: [fiber_004]}
     oms_by_id = {
         "oms_fatehpur_allahabad": {
             "id": "oms_fatehpur_allahabad", "src_node_id": "fatehpur",
-            "dst_node_id": "allahabad",
-            "elements": ["fiber_allahabad_fatehpur_0",
-                        "fiber_allahabad_fatehpur_1",
-                        "fiber_fatehpur_allahabad_0"]},
+            "dst_node_id": "allahabad", "elements": ["fiber_004"]},
     }
     with pytest.raises(PairInvalid, match="buried"):
         assert_realized_cuts_pass_the_event_filter(
@@ -525,17 +534,22 @@ def test_a_realized_cut_naming_no_known_fiber_is_rejected():
 
 # Invariants 2 and 3 (`assert_claimants_have_filterable_exposure`,
 # `assert_claimants_depot_eligible`). The async wrappers no-op for an empty
-# claimant list WITHOUT ever awaiting the client, so D1 (claimant_services:
-# []) exercises that path for real with no server at all; the discriminating
-# logic itself lives in the pure helpers, unit-tested directly.
-def test_claimants_have_filterable_exposure_is_a_noop_with_no_claimants():
-    scenario = load_scenario(SCENARIOS_DIR / "D1.yaml")
+# claimant list WITHOUT ever awaiting the client, so a scenario declaring
+# claimant_services: [] exercises that path for real with no server at all
+# (`None` is passed as the client -- a real one would error if awaited); the
+# discriminating logic itself lives in the pure helpers, unit-tested
+# directly. D1.yaml is no longer this suite's "no claimants" example (Task
+# 14: it now honestly declares the real satna-homed pair), so this uses the
+# synthetic `_scenario_claiming` fixture with an empty claimant list instead.
+def test_claimants_have_filterable_exposure_is_a_noop_with_no_claimants(
+        tmp_path):
+    scenario = _scenario_claiming(tmp_path, 0.0, at="t6", claimants=())
     asyncio.run(assert_claimants_have_filterable_exposure(
         None, scenario, topology_path=TOPOLOGY_PATH))
 
 
-def test_claimants_depot_eligible_is_a_noop_with_no_claimants():
-    scenario = load_scenario(SCENARIOS_DIR / "D1.yaml")
+def test_claimants_depot_eligible_is_a_noop_with_no_claimants(tmp_path):
+    scenario = _scenario_claiming(tmp_path, 0.0, at="t6", claimants=())
     asyncio.run(assert_claimants_depot_eligible(
         None, scenario, topology_path=TOPOLOGY_PATH))
 
@@ -715,27 +729,35 @@ def test_a_claim_within_its_own_group_passes_despite_a_larger_unrelated_one(
         groups)
 
 
-def test_claim_is_one_lightpath_is_a_noop_when_no_claimants_are_declared():
-    """D1 declares metadata.claimant_services: [] and, consistently, no
-    claimed_competing_ecar_gbps -- there is no claim to check. (Every OTHER
-    shipped episode now declares a real, current value -- see the "second
-    red window" table in the Task 12 report for what checking it against
-    live data finds.)"""
-    scenario = load_scenario(SCENARIOS_DIR / "D1.yaml")
+def test_claim_is_one_lightpath_is_a_noop_when_no_claimants_are_declared(
+        tmp_path):
+    """A scenario declaring metadata.claimant_services: [] and,
+    consistently, no claimed_competing_ecar_gbps has no claim to check.
+    (D1.yaml no longer serves as this suite's own empty-claimant example --
+    Task 14 gave it the real satna-homed pair, since both storm-svc-1's own
+    corridor and the real claimant corridor originate at the same node D1's
+    cone is centred on. Every shipped episode now declares a real, current
+    claim -- see the "second red window" table in the Task 12 report, and
+    D1.yaml's own gold.rationale, for what checking it against live data
+    finds.) Uses the synthetic `_scenario_claiming` fixture with an empty
+    claimant list instead."""
+    scenario = _scenario_claiming(tmp_path, 0.0, at="t6", claimants=())
     assert_claim_is_one_lightpath(scenario, {})   # must not raise
 
 
-def test_claim_is_one_lightpath_is_a_noop_even_with_a_stray_declared_value():
+def test_claim_is_one_lightpath_is_a_noop_even_with_a_stray_declared_value(
+        tmp_path):
     """2026-08-30 review fix, round 2, small fix: the no-op decision is
     gated on `claimant_service_ids(scenario)` (the PARSED, cross-checked
     list), not on the raw `claimed_competing_ecar_gbps` metadata key.
     scenario_file.py only makes the two claim keys required TOGETHER when
     claimant_services is non-empty -- it does not forbid a stray
     claimed_competing_ecar_gbps on an episode whose claimant list is EMPTY,
-    so D1 with such a stray value (and no claimed_competing_ecar_at at all)
-    must still no-op cleanly rather than raise a bare KeyError reading the
-    missing horizon key."""
-    scenario = load_scenario(SCENARIOS_DIR / "D1.yaml")
+    so an empty-claimant scenario with such a stray value must still no-op
+    cleanly rather than raise a bare KeyError reading the missing horizon
+    key. Uses the synthetic fixture (D1.yaml is no longer empty-claimant,
+    see the test above)."""
+    scenario = _scenario_claiming(tmp_path, 0.0, at="t6", claimants=())
     scenario.metadata["claimed_competing_ecar_gbps"] = 999.0
     assert_claim_is_one_lightpath(scenario, {})   # must not raise
 
