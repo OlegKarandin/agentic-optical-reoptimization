@@ -567,16 +567,22 @@ def test_a_claimant_terminating_at_the_depot_is_not_a_violation():
 
 
 # Invariant 4 (`assert_claim_is_one_lightpath`). `_CLAIM_SCENARIO` is a
-# minimal, otherwise-inert scenario whose only job is to make
-# `derived.exposure_horizon_hour` resolve to "t6" -- the arithmetic under
-# test is entirely in `groups` and `metadata.claimed_competing_ecar_gbps`.
+# minimal, otherwise-inert scenario that declares a non-empty
+# `claimant_services` (making `claimed_competing_ecar_gbps`/`_at`
+# CONDITIONALLY required, scenario_file.py) and its own claim horizon
+# EXPLICITLY via `claimed_competing_ecar_at` -- 2026-08-30 review fix,
+# finding 1: the claim's horizon is declared, never inferred from the SUT's
+# own `exposure_horizon_hours` (which is a different hour for T2/T3-shaped
+# episodes; see `assert_claim_is_one_lightpath`'s own docstring). The
+# arithmetic under test is entirely in `groups` and the two declared
+# metadata values.
 _CLAIM_SCENARIO = textwrap.dedent("""
     id: CLAIM
     seed: 17
     state_file: eval/states/loaded-s17.json
     service_under_test: storm-svc-1
     track: hudhud
-    hours: [t0, t1, t6]
+    hours: [t0, t1, t2, t6]
     decision_hour: t1
     lead_time_hours: 1
     spares_on_hand: 1
@@ -595,23 +601,25 @@ _CLAIM_SCENARIO = textwrap.dedent("""
       max_spares_wasted: 0
       decision_at_t0: wait
       label: wait
-      rationale: fixture
+      rationale: fixture naming claim-fixture-service in its arithmetic
     flip_variable: [claimant]
     metadata:
       label_rule: timing_at_decision_hour
       cone_width_km: 90
       cone_motion_kmh: 20
       n_future_claimants: 1
-      exposure_horizon_hours: 1
+      exposure_horizon_hours: 2
       spares_on_hand: 1
-      claimant_services: []
+      claimant_services: [claim-fixture-service]
       claimed_competing_ecar_gbps: {claimed}
+      claimed_competing_ecar_at: {at}
 """)
 
 
-def _scenario_claiming(tmp_path, claimed):
+def _scenario_claiming(tmp_path, claimed, at="t6"):
     path = tmp_path / "CLAIM.yaml"
-    path.write_text(_CLAIM_SCENARIO.format(claimed=claimed), encoding="utf-8")
+    path.write_text(_CLAIM_SCENARIO.format(claimed=claimed, at=at),
+                    encoding="utf-8")
     return load_scenario(path)
 
 
@@ -628,20 +636,45 @@ def test_a_claimant_aggregate_above_the_largest_group_fails_the_build(
                      {"endpoints": ("delhi", "kanpur"), "members": ("y", "z"),
                       "ecar_gbps": 55.3})}
     with pytest.raises(PairInvalid, match="55.3"):
-        assert_claim_is_one_lightpath(_scenario_claiming(tmp_path, 108.8),
-                                      groups)
+        assert_claim_is_one_lightpath(
+            _scenario_claiming(tmp_path, 108.8, at="t6"), groups)
 
 
 def test_a_claimant_aggregate_at_or_below_the_largest_group_passes(tmp_path):
     groups = {"t6": ({"endpoints": ("delhi", "kanpur"), "members": ("y", "z"),
                       "ecar_gbps": 55.3},)}
-    assert_claim_is_one_lightpath(_scenario_claiming(tmp_path, 55.3), groups)
+    assert_claim_is_one_lightpath(
+        _scenario_claiming(tmp_path, 55.3, at="t6"), groups)
 
 
-def test_claim_is_one_lightpath_is_a_noop_when_undeclared():
-    """None of the seven shipped episodes declare
-    metadata.claimed_competing_ecar_gbps today -- Task 14 populates it."""
-    scenario = load_scenario(SCENARIOS_DIR / "T2a.yaml")
+def test_the_claim_is_checked_against_its_OWN_declared_horizon(tmp_path):
+    """2026-08-30 review fix, finding 1: T2a/T3a-shaped defect. This
+    scenario's SUT exposure horizon (`exposure_horizon_hours: 2` from
+    decision_hour `t1`) resolves to `t6`, but the claim is declared at `t2`
+    -- exactly the T2/T3 shape, where the competing claim is billed at the
+    NEAR horizon while the SUT's own exposure is graded at the FAR one. If
+    the check used the SUT's horizon instead of the declared one, it would
+    compare 60.0 against t6's 999.0 group and WRONGLY pass; using the
+    declared `t2` horizon, it correctly compares against t2's 55.3 and
+    fails."""
+    groups = {
+        "t2": ({"endpoints": ("delhi", "kanpur"), "members": ("y", "z"),
+               "ecar_gbps": 55.3},),
+        "t6": ({"endpoints": ("agra", "gwalior"), "members": ("w",),
+               "ecar_gbps": 999.0},),
+    }
+    with pytest.raises(PairInvalid, match="55.3"):
+        assert_claim_is_one_lightpath(
+            _scenario_claiming(tmp_path, 60.0, at="t2"), groups)
+
+
+def test_claim_is_one_lightpath_is_a_noop_when_no_claimants_are_declared():
+    """D1 declares metadata.claimant_services: [] and, consistently, no
+    claimed_competing_ecar_gbps -- there is no claim to check. (Every OTHER
+    shipped episode now declares a real, current value -- see the "second
+    red window" table in the Task 12 report for what checking it against
+    live data finds.)"""
+    scenario = load_scenario(SCENARIOS_DIR / "D1.yaml")
     assert_claim_is_one_lightpath(scenario, {})   # must not raise
 
 

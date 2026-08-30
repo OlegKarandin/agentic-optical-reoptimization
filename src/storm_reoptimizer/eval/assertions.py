@@ -40,7 +40,7 @@ from .baseline import BASELINE_VARIANTS, ForecastBlindBaseline, ScriptedDecider
 from .decisions import ConstraintDecision, ObjectiveDecision, TimingDecision
 from .derived import (
     DERIVED_TOLERANCE, FLIP_VARS, DerivedGeometry, FlipScalars,
-    derived_geometry, exposure_horizon_hour,
+    derived_geometry,
 )
 from .runner import EVENT_TYPE, run_episode, service_geometry
 from .scenario_file import ScenarioFile
@@ -1041,37 +1041,50 @@ def assert_claim_is_one_lightpath(
 ) -> None:
     """The gold rationale's claimed aggregate ECAR
     (`metadata.claimed_competing_ecar_gbps`, when declared) must not exceed
-    the LARGEST co-terminating group's ECAR at the claim's horizon
-    (`derived.exposure_horizon_hour`) -- one spare buys ONE lightpath, so the
-    honest competing figure across co-terminating groups is a MAXIMUM, never
-    a sum (`observation._restorable_groups`'s own docstring). This is the
-    check that would have caught D2: 108.8 G billed across three
-    co-terminating groups where the honest figure was the largest single
-    group, 55.3 G.
+    the LARGEST co-terminating group's ECAR at the claim's OWN declared
+    horizon (`metadata.claimed_competing_ecar_at`) -- one spare buys ONE
+    lightpath, so the honest competing figure across co-terminating groups
+    is a MAXIMUM, never a sum (`observation._restorable_groups`'s own
+    docstring). This is the check that would have caught D2: 108.8 G billed
+    across three co-terminating groups where the honest figure was the
+    largest single group, 55.3 G.
+
+    **The claim's horizon is NOT `derived.exposure_horizon_hour`,
+    fixed 2026-08-30 whole-branch re-review.** That function returns the
+    SERVICE UNDER TEST'S OWN exposure horizon, which only happens to be the
+    claim's horizon for T1 -- `assert_flip_dominates`'s own docstring
+    states the general rule: "T1's is at the exposure horizon, T2's and
+    T3's are before it" (T2a/T3a bill their competing claim at the NEAR
+    horizon, e.g. `t2`, while the SUT's own exposure is graded at the FAR
+    one, e.g. `t6`). Using the SUT's horizon for T2/T3 would silently
+    compare the claim against the wrong horizon's groups -- once real
+    numbers exist, that could pass a real over-claim or reject an honest
+    one. So the claim declares its OWN horizon explicitly
+    (`metadata.claimed_competing_ecar_at`) rather than borrowing the SUT's.
 
     `groups` is `observation._restorable_groups`'s own output shape,
     `dict[horizon, tuple[group_dict, ...]]`, so the check and the
     observation the agent reads can never disagree about what the largest
     group is.
 
-    No-op when `metadata.claimed_competing_ecar_gbps` is undeclared -- it is
-    NOT a strict schema key (unlike `claimant_services`): Task 14, not this
-    task, populates it with the real, frozen per-episode numbers once the
-    geometry is re-derived, and none of the seven shipped episodes declare
-    it today."""
+    No-op when `metadata.claimed_competing_ecar_gbps` is undeclared --
+    `scenario_file.py` makes it (and its horizon) required together
+    whenever `metadata.claimant_services` is non-empty, so `None` here
+    means there is no claim to check (an empty claimant list, e.g. D1)."""
     claimed = scenario.metadata.get("claimed_competing_ecar_gbps")
     if claimed is None:
         return
-    horizon = exposure_horizon_hour(scenario)
+    horizon = scenario.metadata["claimed_competing_ecar_at"]
     largest = max((g["ecar_gbps"] for g in groups.get(horizon, ())),
                  default=0.0)
     if claimed > largest + DERIVED_TOLERANCE:
         raise PairInvalid(
             f"{scenario.id}: metadata.claimed_competing_ecar_gbps="
             f"{claimed:.1f} exceeds the largest co-terminating group's ECAR "
-            f"at horizon {horizon!r}, {largest:.1f} -- one spare buys ONE "
-            f"lightpath, so the honest competing claim is the largest "
-            f"single group, not a sum across groups")
+            f"at its own declared horizon "
+            f"(metadata.claimed_competing_ecar_at={horizon!r}), {largest:.1f}"
+            f" -- one spare buys ONE lightpath, so the honest competing "
+            f"claim is the largest single group, not a sum across groups")
 
 
 # Invariant 5.

@@ -255,6 +255,27 @@ async def _run_dimensional_coherence_invariants(
         assert_realized_cuts_pass_the_event_filter(
             scenario, topology_path=topology_path, oms_by_id=oms_by_id)
 
+        # The batching below (one connection for invariants 2/3/6/7 plus the
+        # groups read) is justified ONLY because no shipped episode realizes
+        # a cut strictly before its own decision hour: `assert_depot_is_the_
+        # binding_site`'s `menu_at_decision_hour` conditionally calls
+        # `inject_failure` for exactly that case, which would mutate the
+        # connection's network state midway through the batch and make
+        # `assert_escape_route_survives` (called after it, on the SAME
+        # connection) silently see a POST-cut network while the checks
+        # before it saw the PRE-cut one. Asserted here, not merely assumed,
+        # for the identical reason `assert_wait_gold_has_no_free_escape`
+        # asserts its own version of this same hazard: "so a future
+        # violation fails loudly instead of silently misreading" (2026-08-30
+        # review fix, finding 3).
+        d = scenario.hours.index(scenario.decision_hour)
+        assert not any(scenario.realized.get(hour) for hour in scenario.hours[:d]), (
+            f"{scenario.id}: realizes a cut strictly before its own decision "
+            f"hour {scenario.decision_hour!r}; batching invariants 2/3/6/7 "
+            f"onto one connection assumes this never happens -- split this "
+            f"scenario's checks across separate connections (one per side of "
+            f"the replay) instead of relying on that assumption")
+
         async with connect() as client:
             await assert_claimants_have_filterable_exposure(
                 client, scenario, topology_path=topology_path)

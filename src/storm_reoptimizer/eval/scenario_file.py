@@ -185,6 +185,37 @@ def load_scenario(path: str | Path) -> ScenarioFile:
             f"list of service id strings (may be empty, []) -- got "
             f"{claimant_services!r}")
 
+    # CONDITIONALLY strict (2026-08-30 review fix): required together
+    # whenever claimant_services is non-empty, exempt when it is empty (D1).
+    # `assertions.assert_claim_is_one_lightpath` is invariant 4 -- the check
+    # written specifically to catch D2 (a claimant aggregate billed across
+    # THREE co-terminating groups where the honest figure was the largest
+    # single one) -- and making its input optional unconditionally would
+    # leave that guard permanently dead: every episode with a real claimant
+    # list already has a real claimed figure sitting in its OWN
+    # gold.rationale prose today, the same prose claimant_services was just
+    # read from, so there is no reason to wait for Task 14 to populate this.
+    # `claimed_competing_ecar_at` is required alongside the value because
+    # the claim's horizon is NOT always the SUT's own exposure horizon (T2/
+    # T3 bill their claim at the NEAR horizon while the SUT's own exposure
+    # horizon is the FAR one) -- see assert_claim_is_one_lightpath's own
+    # docstring for the full statement of why that can't be inferred.
+    if claimant_services:
+        claimed = raw["metadata"].get("claimed_competing_ecar_gbps")
+        claimed_at = raw["metadata"].get("claimed_competing_ecar_at")
+        if not isinstance(claimed, (int, float)) or isinstance(claimed, bool):
+            raise ScenarioFileError(
+                f"{path}: metadata.claimant_services is non-empty "
+                f"({claimant_services!r}), so metadata."
+                f"claimed_competing_ecar_gbps is required and must be a "
+                f"number -- got {claimed!r}")
+        if not isinstance(claimed_at, str) or claimed_at not in hours:
+            raise ScenarioFileError(
+                f"{path}: metadata.claimant_services is non-empty, so "
+                f"metadata.claimed_competing_ecar_at is required and must "
+                f"name one of this episode's hours {hours} -- got "
+                f"{claimed_at!r}")
+
     return ScenarioFile(
         id=raw["id"], pair=raw.get("pair"), seed=int(raw["seed"]),
         state_file=raw["state_file"],

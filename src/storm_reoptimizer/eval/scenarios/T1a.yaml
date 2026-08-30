@@ -146,6 +146,13 @@ metadata:
   # (d0029, d0348 -- "the two named claimants together"). Task 12,
   # exposure-and-depot plan.
   claimant_services: [d0029, d0348]
+  # "the two named claimants together -> 94.3 G" (gold.rationale, verbatim),
+  # NOT the 107.6 G "total expected capacity at risk elsewhere" figure --
+  # that sum also includes the "every other service" 13.3 G that is not a
+  # co-terminating claim on THIS depot's spare at all. Billed at the only
+  # horizon this issuance publishes. 2026-08-30 review fix (finding 2).
+  claimed_competing_ecar_gbps: 94.3
+  claimed_competing_ecar_at: t3
   label_rule: timing_at_decision_hour
   cone_width_km: 90          # EQUAL in T1b -- and EVERY horizon of the
                               # decision-hour issuance is 90 in both halves,

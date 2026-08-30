@@ -92,6 +92,16 @@ metadata:
   # Same three claimants as T3a (same near-cone member services; only their
   # p_cut differs). Task 12, exposure-and-depot plan.
   claimant_services: [d0462, d0212, d0363]
+  # 88.3 + 88.3 + 5.5 = 182.1 G, summing exactly the three named claimants'
+  # own printed per-service figures (gold.rationale: "d0462 ... -> 88.3 G",
+  # "d0212 ... -> 88.3 G", "d0363 ... -> 5.5 G"). NOT the rationale's own
+  # "total expected capacity at risk later -> 182.8 G", which also folds in
+  # the unrelated "everything else, summed -> 0.6 G". Billed at the NEAR
+  # horizon (t2) -- see T3a.yaml's identical comment on why this is t2, not
+  # the SUT's own exposure_horizon_hours-derived t6. 2026-08-30 review fix
+  # (findings 1 and 2).
+  claimed_competing_ecar_gbps: 182.1
+  claimed_competing_ecar_at: t2
   label_rule: chosen_lever_at_decision_hour
   label_by_lever: {optical_reroute: A, hybrid: A, ip_reroute: B}
   coherence: {term: transponders, higher_priority_in: T3b}

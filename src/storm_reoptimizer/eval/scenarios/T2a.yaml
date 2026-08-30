@@ -157,6 +157,14 @@ metadata:
   # rationale says "cannot discriminate" and is NOT the competing claim --
   # excluded here for the same reason. Task 12, exposure-and-depot plan.
   claimant_services: [d0004, d0028, d0123, d0188, d0189, d0301, d0349, d0350]
+  # "-- 108.8 G" (gold.rationale, verbatim: the eight named services' own
+  # p_cut x demand), NOT the 114.6 G "summed over every one of the 572
+  # non-SUT services" figure the rationale explicitly distinguishes from it.
+  # Billed at the NEAR horizon (t2) -- NOT the SUT's own exposure_horizon_
+  # hours-derived t6 (assert_claim_is_one_lightpath's docstring on why those
+  # differ for T2/T3). 2026-08-30 review fix (findings 1 and 2).
+  claimed_competing_ecar_gbps: 108.8
+  claimed_competing_ecar_at: t2
   label_rule: avoid_horizon_at_decision_hour
   wide_avoid_risk_group: rg_T2a_t1_t6   # matches the runner's rg_{scenario}_{issued}_{horizon} minting
   widest_avoid_feasible: true           # EQUAL in T2b -- see rehearsal doc Q1

@@ -110,6 +110,12 @@ metadata:
   # other service, summed", not part of the comparison). Task 12,
   # exposure-and-depot plan.
   claimant_services: [d0029, d0348]
+  # "the two named claimants together -> 19.1 G" (gold.rationale, verbatim),
+  # NOT the 21.5 G "total expected capacity at risk elsewhere" figure, which
+  # also folds in d0361's unrelated 2.4 G. Billed at the only horizon this
+  # issuance publishes. 2026-08-30 review fix (finding 2).
+  claimed_competing_ecar_gbps: 19.1
+  claimed_competing_ecar_at: t3
   label_rule: timing_at_decision_hour
   cone_width_km: 90          # EQUAL to T1a -- every horizon, both halves
   cone_motion_kmh: 95.0      # EQUAL to T1a -- offset(t0 centre, t1's t+3

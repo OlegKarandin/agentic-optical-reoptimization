@@ -86,3 +86,65 @@ def test_the_declared_scalar_matches_the_depot_sites_inventory(
                                         "spare_inventory: {satna: 3}")
     with pytest.raises(ScenarioFileError, match="spares_on_hand"):
         load_scenario(write_scenario(bad))
+
+
+# Task 12 (exposure-and-depot plan): metadata.claimant_services, a strict
+# required key (Task 9's own depot_site/spare_inventory treatment above),
+# and metadata.claimed_competing_ecar_gbps/_at -- required TOGETHER
+# whenever claimant_services is non-empty (2026-08-30 review fix, finding
+# 2: an unconditionally-optional claim value left invariant 4 permanently
+# dead, since every episode with real claimants already has a real claimed
+# figure sitting in its own gold.rationale prose today).
+def test_claimant_services_is_required(write_scenario, example_scenario_yaml):
+    without = example_scenario_yaml.replace("  claimant_services: []\n", "")
+    with pytest.raises(ScenarioFileError, match="claimant_services"):
+        load_scenario(write_scenario(without))
+
+
+def test_an_empty_claimant_list_needs_no_claim_value(
+        write_scenario, example_scenario_yaml):
+    # example_scenario_yaml already declares claimant_services: [] and no
+    # claimed_competing_ecar_gbps/_at -- test_loads_every_field above
+    # already proves this loads; this test pins the SPECIFIC behaviour
+    # (empty list -> no claim keys required) as its own regression.
+    s = load_scenario(write_scenario(example_scenario_yaml))
+    assert s.metadata["claimant_services"] == []
+    assert "claimed_competing_ecar_gbps" not in s.metadata
+
+
+def test_claimed_competing_ecar_gbps_is_required_once_claimants_are_named(
+        write_scenario, example_scenario_yaml):
+    bad = example_scenario_yaml.replace(
+        "claimant_services: []", "claimant_services: [d0001]")
+    with pytest.raises(ScenarioFileError, match="claimed_competing_ecar_gbps"):
+        load_scenario(write_scenario(bad))
+
+
+def test_claimed_competing_ecar_at_is_required_once_claimants_are_named(
+        write_scenario, example_scenario_yaml):
+    bad = example_scenario_yaml.replace(
+        "claimant_services: []",
+        "claimant_services: [d0001]\n  claimed_competing_ecar_gbps: 10.0")
+    with pytest.raises(ScenarioFileError, match="claimed_competing_ecar_at"):
+        load_scenario(write_scenario(bad))
+
+
+def test_claimed_competing_ecar_at_must_name_a_real_hour(
+        write_scenario, example_scenario_yaml):
+    bad = example_scenario_yaml.replace(
+        "claimant_services: []",
+        "claimant_services: [d0001]\n  claimed_competing_ecar_gbps: 10.0"
+        "\n  claimed_competing_ecar_at: t9")
+    with pytest.raises(ScenarioFileError, match="claimed_competing_ecar_at"):
+        load_scenario(write_scenario(bad))
+
+
+def test_a_valid_non_empty_claimant_list_with_both_claim_keys_loads(
+        write_scenario, example_scenario_yaml):
+    ok = example_scenario_yaml.replace(
+        "claimant_services: []",
+        "claimant_services: [d0001]\n  claimed_competing_ecar_gbps: 10.0"
+        "\n  claimed_competing_ecar_at: t3")
+    s = load_scenario(write_scenario(ok))
+    assert s.metadata["claimed_competing_ecar_gbps"] == 10.0
+    assert s.metadata["claimed_competing_ecar_at"] == "t3"

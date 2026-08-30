@@ -162,6 +162,15 @@ metadata:
   # sums (d0462/d0212/d0363 -- "the only non-SUT services above p_cut 0.005
   # at the near horizon in either half"). Task 12, exposure-and-depot plan.
   claimant_services: [d0462, d0212, d0363]
+  # 12.1 + 12.1 + 26.4 = 50.6 G, summing exactly the three named claimants'
+  # own printed per-service figures (gold.rationale: "d0462 ... -> 12.1 G",
+  # "d0212 ... -> 12.1 G", "d0363 ... -> 26.4 G"). NOT the rationale's own
+  # "total expected capacity at risk later -> 51.0 G", which also folds in
+  # the unrelated "everything else, summed -> 0.5 G". Billed at the NEAR
+  # horizon (t2) -- NOT the SUT's own exposure_horizon_hours-derived t6.
+  # 2026-08-30 review fix (findings 1 and 2).
+  claimed_competing_ecar_gbps: 50.6
+  claimed_competing_ecar_at: t2
   label_rule: chosen_lever_at_decision_hour
   label_by_lever: {optical_reroute: A, hybrid: A, ip_reroute: B}
   coherence: {term: transponders, higher_priority_in: T3b}
