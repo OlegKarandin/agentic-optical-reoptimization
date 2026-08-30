@@ -62,17 +62,61 @@ def latest_issuance(scenario: ScenarioFile, hour: str) -> Issuance:
         f"episode must publish one at its first hour")
 
 
-def _horizon_totals(exposure: dict, service_under_test: str
-                    ) -> dict[str, dict[str, float]]:
-    """Per horizon, the two operands every gold rationale in the suite
-    compares: the service under test's own expected capacity at risk, and the
-    SUMMED expected capacity at risk of everyone else competing for the same
-    spare pair (remediation spec, W3.2).
+def _restorable_groups(exposure: dict, endpoint_sites: dict, *,
+                       depot_site: str | None, service_under_test: str
+                       ) -> dict[str, tuple[dict, ...]]:
+    """Per horizon, the depot-eligible services grouped by what one new
+    lightpath could restore.
 
-    Summed over EVERY service with a representative point, not merely the
-    ones a projection later chooses to list -- the aggregate is a fact about
-    the network, and a total that silently covered only the visible rows
-    would be worse than no total at all.
+    ONE spare transponder buys ONE lightpath. A set of services is jointly
+    restored by it only if they CO-TERMINATE -- share both endpoints, so a
+    single bidirectional lightpath serves all of them. Otherwise they COMPETE
+    for the spare and only one is restored, which makes summing across groups
+    an overstatement: the honest figure across groups is the MAXIMUM.
+
+    Depot-eligible means terminating at `depot_site`. A service that does not
+    may be badly exposed, but restoring it draws on ITS OWN sites' depots --
+    a satna line card cannot restore kolkata <-> mumbai -- so it is no part
+    of this contest. The service under test is excluded: it is the claim
+    being weighed, not a claim against itself."""
+    groups: dict[str, dict[tuple[str, str], dict]] = {}
+    for svc_id, per_horizon in exposure.items():
+        if svc_id == service_under_test:
+            continue
+        sites = endpoint_sites.get(svc_id)
+        if sites is None or depot_site not in sites:
+            continue
+        key = tuple(sorted(sites))
+        for horizon, entry in per_horizon.items():
+            slot = groups.setdefault(horizon, {}).setdefault(
+                key, {"endpoints": key, "members": [], "ecar_gbps": 0.0})
+            slot["members"].append(svc_id)
+            slot["ecar_gbps"] += entry["expected_capacity_at_risk_gbps"]
+    return {horizon: tuple(
+                sorted(({**g, "members": tuple(sorted(g["members"])),
+                         "ecar_gbps": round(g["ecar_gbps"], 3)}
+                        for g in by_key.values()),
+                       key=lambda g: (-g["ecar_gbps"], g["endpoints"])))
+            for horizon, by_key in groups.items()}
+
+
+def _horizon_totals(exposure: dict, endpoint_sites: dict, *,
+                    depot_site: str | None, service_under_test: str,
+                    groups: dict[str, tuple[dict, ...]]
+                    ) -> dict[str, dict[str, float]]:
+    """Per horizon, the three operands every gold rationale in the suite now
+    compares: the service under test's own expected capacity at risk, the
+    LARGEST restorable group's expected capacity at risk (the honest
+    competing claim -- one spare buys one lightpath, so the figure across
+    co-terminating groups is a MAXIMUM, not a network-wide sum), and the
+    summed expected capacity at risk of the depot-INELIGIBLE services -- ones
+    that cannot compete for this depot's spare regardless of their own
+    exposure, tracked separately so they are neither silently dropped nor
+    wrongly counted as a competing claim.
+
+    `groups` is `_restorable_groups`'s own output over the SAME exposure,
+    endpoint_sites and depot_site -- passed in rather than recomputed so the
+    two can never disagree about which services are depot-eligible.
 
     Deliberately NOT shared with derived._ecar_at_cone, which computes the
     same shape from the UNROUNDED cut probability. That one feeds FLIP_VARS
@@ -82,13 +126,21 @@ def _horizon_totals(exposure: dict, service_under_test: str
     quantity -- keep them apart."""
     totals: dict[str, dict[str, float]] = {}
     for svc_id, per_horizon in exposure.items():
-        key = ("sut_ecar_gbps" if svc_id == service_under_test
-               else "non_sut_total_ecar_gbps")
+        is_sut = svc_id == service_under_test
+        sites = None if is_sut else endpoint_sites.get(svc_id)
+        eligible = (not is_sut) and sites is not None and depot_site in sites
         for horizon, entry in per_horizon.items():
             slot = totals.setdefault(
                 horizon, {"sut_ecar_gbps": 0.0,
-                          "non_sut_total_ecar_gbps": 0.0})
-            slot[key] += entry["expected_capacity_at_risk_gbps"]
+                          "non_sut_ineligible_ecar_gbps": 0.0})
+            ecar = entry["expected_capacity_at_risk_gbps"]
+            if is_sut:
+                slot["sut_ecar_gbps"] += ecar
+            elif not eligible:
+                slot["non_sut_ineligible_ecar_gbps"] += ecar
+    for horizon, slot in totals.items():
+        slot["largest_restorable_group_ecar_gbps"] = max(
+            (g["ecar_gbps"] for g in groups.get(horizon, ())), default=0.0)
     return {horizon: {k: round(v, 3) for k, v in slot.items()}
             for horizon, slot in totals.items()}
 
@@ -129,13 +181,24 @@ class Observation:
     # to be JSON-serializable for the trace and the prompt.
     actions_taken: tuple[dict, ...] = ()
     spares_spent: int = 0            # cumulative transponder PAIRS debited
-    # horizon hour -> {"sut_ecar_gbps", "non_sut_total_ecar_gbps"}: the two
-    # operands of the comparison every gold rationale makes. Present on every
+    # horizon hour -> {"sut_ecar_gbps", "largest_restorable_group_ecar_gbps",
+    # "non_sut_ineligible_ecar_gbps"}: the three operands of the comparison
+    # every gold rationale makes. One spare buys one lightpath, so the
+    # competing claim across co-terminating groups is a MAXIMUM, not a
+    # network-wide sum (Task 10) -- `largest_restorable_group_ecar_gbps` is
+    # that maximum, and `non_sut_ineligible_ecar_gbps` separately tracks
+    # services that cannot compete for THIS depot at all. Present on every
     # Observation and in the trace; whether the AGENT is shown it is
     # project_observation's decision, gated per arm (remediation spec, W3.2).
     # Defaulted so the hand-built Observations in tests/eval/test_agent.py and
     # tests/eval/test_baseline.py keep constructing.
     horizon_totals: dict[str, dict[str, float]] = field(default_factory=dict)
+    # horizon hour -> tuple of {"endpoints", "members", "ecar_gbps"}: the
+    # co-terminating groups `largest_restorable_group_ecar_gbps` maxes over,
+    # enumerated rather than only totalled so a reader (or the viewer) can see
+    # WHICH services would share the restoring lightpath. Defaulted for the
+    # same hand-built-Observation reason as `horizon_totals` above.
+    restorable_groups: dict[str, tuple[dict, ...]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-serializable form, for the trace and for step 6's prompt."""
@@ -168,6 +231,7 @@ class Observation:
             "actions_taken": [dict(a) for a in self.actions_taken],
             "spares_spent": self.spares_spent,
             "horizon_totals": self.horizon_totals,
+            "restorable_groups": self.restorable_groups,
         }
 
 
@@ -181,13 +245,24 @@ def build_observation(
     last_rejection: dict | None = None,
     actions_taken: tuple[dict, ...] = (),
     spares_spent: int = 0,
+    endpoint_sites: dict[str, tuple[str, str]] | None = None,
+    depot_site: str | None = None,
 ) -> Observation:
     """The observation for one hour. `service_spans` maps a service id to the
     spans of its working path that the event's own filter admits -- the
     runner derives these from the server's view of the path plus the local
     topology's coordinates and mount types; keeping them an argument is what
     lets this module stay pure and testable without a server, exactly as
-    `service_points` did."""
+    `service_points` did.
+
+    `endpoint_sites` (service id -> (src_site, dst_site)) and `depot_site`
+    drive `_restorable_groups`/`_horizon_totals`'s depot-eligibility check.
+    Both default to None/empty so every existing caller that has no depot
+    context to offer keeps constructing -- with no eligible service, every
+    non-SUT service falls into `non_sut_ineligible_ecar_gbps` and
+    `restorable_groups`/`largest_restorable_group_ecar_gbps` come back
+    empty/zero, which is the honest answer when the caller cannot say what
+    terminates where."""
     issuance = latest_issuance(scenario, hour)
     hour_index = scenario.hours.index(hour)
 
@@ -234,6 +309,10 @@ def build_observation(
             }
         exposure[svc["id"]] = per_horizon
 
+    groups = _restorable_groups(
+        exposure, endpoint_sites or {}, depot_site=depot_site,
+        service_under_test=scenario.service_under_test)
+
     return Observation(
         scenario_id=scenario.id,
         service_under_test=scenario.service_under_test,
@@ -250,5 +329,8 @@ def build_observation(
         last_rejection=last_rejection,
         actions_taken=tuple(actions_taken),
         spares_spent=spares_spent,
-        horizon_totals=_horizon_totals(exposure, scenario.service_under_test),
+        horizon_totals=_horizon_totals(
+            exposure, endpoint_sites or {}, depot_site=depot_site,
+            service_under_test=scenario.service_under_test, groups=groups),
+        restorable_groups=groups,
     )

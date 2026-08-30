@@ -187,9 +187,12 @@ def observation_record(obs, geometry: ServiceGeometry) -> dict:
     with only the projection cannot show the gap, and one with only the truth
     cannot show what the agent read (run-viewer design, "Principle").
 
-    `horizon_totals` is kept WHOLE while the rows are trimmed: it is already
-    summed over the full roster, and a total silently covering only the
-    visible rows "would be worse than no total at all" (observation.py:70)."""
+    `horizon_totals` and `restorable_groups` are kept WHOLE while the rows are
+    trimmed: both are already computed over the full roster, and a total (or
+    a group list) silently covering only the visible rows "would be worse
+    than no total at all" (observation.py:70). Neither key is touched below
+    -- `payload = obs.to_dict()` already carries both, and trimming only
+    reaches `exposure`/`services`."""
     visible = _visible_services(obs)
     payload = obs.to_dict()
     payload["exposure"] = {s: payload["exposure"][s] for s in visible}
@@ -497,7 +500,9 @@ async def run_episode(
                           spares_on_hand=ledger.on_hand,
                           actions_taken=action_payloads(
                               actions, hours=scenario.hours),
-                          spares_spent=ledger.spent)
+                          spares_spent=ledger.spent,
+                          endpoint_sites=geometry.endpoint_sites,
+                          depot_site=scenario.depot_site)
 
         issuance = latest_issuance(scenario, hour)
         rg_ids = await _define_horizon_risk_groups(
