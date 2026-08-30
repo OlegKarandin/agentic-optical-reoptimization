@@ -101,6 +101,10 @@ gold:
     this needed a non-trivial reference_avoid to hold.
 flip_variable: [uncontested, spare, lead]
 metadata:
+  # No non-SUT service is named by id anywhere in gold.rationale (p_cut <=
+  # 0.0120 everywhere else, n_future_claimants: 0) -- honestly empty (Task
+  # 12, exposure-and-depot plan).
+  claimant_services: []
   label_rule: timing_at_decision_hour
   cone_width_km: 15             # NOT 180 -- see "The real mechanics" below
   cone_motion_kmh: 0.0           # single issuance, no revision to diff

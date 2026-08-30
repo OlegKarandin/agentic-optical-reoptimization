@@ -43,6 +43,7 @@ EXAMPLE_SCENARIO_YAML = textwrap.dedent("""
       n_future_claimants: 1
       exposure_horizon_hours: 2
       spares_on_hand: 1
+      claimant_services: []
 """)
 
 

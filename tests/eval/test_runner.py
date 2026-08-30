@@ -199,6 +199,7 @@ SMOKE = textwrap.dedent("""
       n_future_claimants: 0
       exposure_horizon_hours: 1
       spares_on_hand: 2
+      claimant_services: []
 """)
 
 # Originally the t0 cone was T2a.yaml's t1:t6 (far) cone, copied verbatim --
@@ -282,6 +283,7 @@ EXPOSURE_SMOKE = textwrap.dedent("""
       n_future_claimants: 0
       exposure_horizon_hours: 1
       spares_on_hand: 2
+      claimant_services: []
 """)
 
 

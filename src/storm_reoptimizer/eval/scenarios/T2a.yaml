@@ -151,6 +151,12 @@ gold:
     basis=physical does not.  Confirmed against the real server.
 flip_variable: [claimant, spare, near, horizon]
 metadata:
+  # The eight kanpur/agra-cluster services gold.rationale's near-horizon
+  # competing claim actually sums (108.8 G). d0361/d0029/d0348/d0212/d0462
+  # are named too, but only as the byte-identical far-horizon group the
+  # rationale says "cannot discriminate" and is NOT the competing claim --
+  # excluded here for the same reason. Task 12, exposure-and-depot plan.
+  claimant_services: [d0004, d0028, d0123, d0188, d0189, d0301, d0349, d0350]
   label_rule: avoid_horizon_at_decision_hour
   wide_avoid_risk_group: rg_T2a_t1_t6   # matches the runner's rg_{scenario}_{issued}_{horizon} minting
   widest_avoid_feasible: true           # EQUAL in T2b -- see rehearsal doc Q1

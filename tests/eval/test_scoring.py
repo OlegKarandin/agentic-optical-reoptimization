@@ -46,6 +46,7 @@ BASE = textwrap.dedent("""
       exposure_horizon_hours: 2
       spares_on_hand: 1
       widest_avoid_feasible: true
+      claimant_services: []
 """)
 
 

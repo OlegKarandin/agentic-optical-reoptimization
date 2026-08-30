@@ -105,6 +105,11 @@ gold:
     signal available at t1 is this expected-value comparison.
 flip_variable: [svc-b, cone, centre, spare]
 metadata:
+  # The two named claimants gold.rationale's arithmetic actually weighs
+  # (d0029, d0348 -- "the two named claimants together"; d0361 is "every
+  # other service, summed", not part of the comparison). Task 12,
+  # exposure-and-depot plan.
+  claimant_services: [d0029, d0348]
   label_rule: timing_at_decision_hour
   cone_width_km: 90          # EQUAL to T1a -- every horizon, both halves
   cone_motion_kmh: 95.0      # EQUAL to T1a -- offset(t0 centre, t1's t+3

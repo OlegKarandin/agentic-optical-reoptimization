@@ -168,6 +168,23 @@ def load_scenario(path: str | Path) -> ScenarioFile:
             f"it, and a disagreement means they are enumerating a number the "
             f"harness does not use")
 
+    # Strict, same treatment as depot_site/spare_inventory above (Task 12,
+    # exposure-and-depot plan): the services a gold rationale's claimant
+    # arithmetic names, so `assertions.claimant_service_ids` can turn "did
+    # the author's arithmetic name a real, eligible, exposed service" into a
+    # checkable question without regexing English prose. Required (may be an
+    # empty list []) rather than defaulted -- a misspelled or omitted key
+    # here would silently exempt an episode from every claimant-side
+    # dimensional-coherence invariant, exactly the class of defect this
+    # plan's Task 12 exists to catch.
+    claimant_services = raw["metadata"].get("claimant_services")
+    if not isinstance(claimant_services, list) or not all(
+            isinstance(s, str) for s in claimant_services):
+        raise ScenarioFileError(
+            f"{path}: metadata.claimant_services is required and must be a "
+            f"list of service id strings (may be empty, []) -- got "
+            f"{claimant_services!r}")
+
     return ScenarioFile(
         id=raw["id"], pair=raw.get("pair"), seed=int(raw["seed"]),
         state_file=raw["state_file"],

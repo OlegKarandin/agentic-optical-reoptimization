@@ -32,6 +32,7 @@ gold:
   rationale: "discarded draft: kept as a known-bad fixture for the one-variable check. Flips on n_future_claimants (a threshold), and aligns with low cone_width."
 flip_variable: [cone]
 metadata:
+  claimant_services: []
   label_rule: timing_at_decision_hour
   cone_width_km: 90
   cone_motion_kmh: 20

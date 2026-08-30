@@ -89,6 +89,9 @@ gold:
     the actual flip) does.
 flip_variable: [claimant, expected, rate, probability]
 metadata:
+  # Same three claimants as T3a (same near-cone member services; only their
+  # p_cut differs). Task 12, exposure-and-depot plan.
+  claimant_services: [d0462, d0212, d0363]
   label_rule: chosen_lever_at_decision_hour
   label_by_lever: {optical_reroute: A, hybrid: A, ip_reroute: B}
   coherence: {term: transponders, higher_priority_in: T3b}

@@ -66,6 +66,7 @@ EPISODE = textwrap.dedent("""
       n_future_claimants: 1
       exposure_horizon_hours: {horizon}
       spares_on_hand: 1
+      claimant_services: []
 """)
 
 # Somewhere on the toy topology, far enough off the t3 cone axis in one

@@ -158,6 +158,10 @@ gold:
     the actual flip) does.
 flip_variable: [claimant, expected, rate, probability]
 metadata:
+  # The three claimants gold.rationale's near-horizon arithmetic actually
+  # sums (d0462/d0212/d0363 -- "the only non-SUT services above p_cut 0.005
+  # at the near horizon in either half"). Task 12, exposure-and-depot plan.
+  claimant_services: [d0462, d0212, d0363]
   label_rule: chosen_lever_at_decision_hour
   label_by_lever: {optical_reroute: A, hybrid: A, ip_reroute: B}
   coherence: {term: transponders, higher_priority_in: T3b}

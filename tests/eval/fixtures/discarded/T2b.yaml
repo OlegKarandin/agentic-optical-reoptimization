@@ -32,6 +32,7 @@ gold:
   rationale: "discarded draft: kept as a known-bad fixture for the one-variable check. Flips on cone_motion_kmh (a threshold), though beaten by greedy:widest_feasible_avoid."
 flip_variable: [cone]
 metadata:
+  claimant_services: []
   label_rule: timing_at_decision_hour
   cone_width_km: 90
   cone_motion_kmh: 0

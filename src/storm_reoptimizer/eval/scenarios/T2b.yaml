@@ -100,6 +100,10 @@ gold:
     claimants.
 flip_variable: [claimant, spare, near, horizon]
 metadata:
+  # Same kanpur/agra cluster as T2a (identical member services; only their
+  # p_cut differs since the near cone's centre moved). Task 12,
+  # exposure-and-depot plan.
+  claimant_services: [d0004, d0028, d0123, d0188, d0189, d0301, d0349, d0350]
   label_rule: avoid_horizon_at_decision_hour
   wide_avoid_risk_group: rg_T2b_t1_t6   # matches the runner's rg_{scenario}_{issued}_{horizon} minting
   widest_avoid_feasible: true           # EQUAL to T2a -- see rehearsal doc Q1;

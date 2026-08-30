@@ -21,10 +21,17 @@ import statistics
 from pathlib import Path
 
 from .agent import ClaudeDecider, DEFAULT_MODEL
-from .assertions import (assert_no_global_policy_solves_the_suite,
-                         assert_no_single_variable_rule_solves)
+from .assertions import (assert_claim_is_one_lightpath,
+                         assert_claimants_depot_eligible,
+                         assert_claimants_have_filterable_exposure,
+                         assert_depot_is_the_binding_site,
+                         assert_escape_route_survives,
+                         assert_group_fits_one_lightpath,
+                         assert_no_global_policy_solves_the_suite,
+                         assert_no_single_variable_rule_solves,
+                         assert_realized_cuts_pass_the_event_filter)
 from .baseline import ForecastBlindBaseline
-from .runner import run_episode
+from .runner import run_episode, service_geometry
 from .scenario_file import ScenarioFile, load_all_scenarios
 from .scoring import cross_twin_metrics, episode_metrics
 
@@ -195,6 +202,74 @@ def build_deciders(args: argparse.Namespace) -> list:
     return deciders
 
 
+async def _groups_for(client, scenario: ScenarioFile, *,
+                      topology_path: Path) -> dict[str, tuple[dict, ...]]:
+    """`observation._restorable_groups`'s own output for `scenario`, at its
+    decision hour, computed fresh against the live server -- what
+    invariants 4/5 (Task 12, exposure-and-depot plan) check against.
+
+    Built through `observation.build_observation` -- the SAME function the
+    real rollout calls -- rather than reimplementing the grouping, so this
+    check and the payload the agent is actually shown can never disagree
+    (the same discipline `assert_pair_derived_geometry_is_equal` states for
+    derived geometry)."""
+    from ..mcp_client import call_tool_json
+    from .observation import build_observation
+
+    geometry = await service_geometry(client, topology_path)
+    services = (await call_tool_json(client, "get_services"))["services"]
+    obs = build_observation(
+        scenario, scenario.decision_hour, service_spans=geometry.cuttable_spans,
+        services=services, spares_on_hand=scenario.spares_on_hand,
+        endpoint_sites=geometry.endpoint_sites, depot_site=scenario.depot_site)
+    return obs.restorable_groups
+
+
+async def _run_dimensional_coherence_invariants(
+    connect, episodes: dict[str, ScenarioFile], *, topology_path: Path,
+) -> None:
+    """Task 12 (exposure-and-depot plan, §6 invariants 1-8): the
+    dimensional-coherence class, checked over the FULL episode set before
+    any rollout runs -- a build-time gate, exactly like the two checks
+    above it in `main()`. `connect` is the same zero-arg async context
+    manager factory `run_suite` takes; each scenario gets its own fresh
+    connection (the same contract every client-taking check in
+    assertions.py already has), except the one topology read shared across
+    all seven episodes, since they share one state file.
+
+    Invariant 8 (`assert_sampling_error_within_margin`) is NOT called here:
+    it needs the real, frozen per-episode flip values Task 14 produces, and
+    is exercised only against constructed values until then (see its own
+    docstring)."""
+    async with connect() as client:
+        from ..mcp_client import call_tool_json
+        oms_by_id = {
+            o["id"]: o
+            for o in (await call_tool_json(
+                client, "get_topology", {"layer": "optical"}))["oms"]}
+
+    for scenario in episodes.values():
+        # Sync, no client -- checked first and separately so a violation
+        # here (T1a's buried realized cut, today) is reported without
+        # needing a second connection.
+        assert_realized_cuts_pass_the_event_filter(
+            scenario, topology_path=topology_path, oms_by_id=oms_by_id)
+
+        async with connect() as client:
+            await assert_claimants_have_filterable_exposure(
+                client, scenario, topology_path=topology_path)
+            await assert_claimants_depot_eligible(
+                client, scenario, topology_path=topology_path)
+            groups = await _groups_for(
+                client, scenario, topology_path=topology_path)
+            await assert_depot_is_the_binding_site(
+                client, scenario, topology_path=topology_path)
+            await assert_escape_route_survives(client, scenario)
+
+        assert_claim_is_one_lightpath(scenario, groups)
+        assert_group_fits_one_lightpath(scenario, groups)
+
+
 def main(argv: list[str] | None = None) -> None:
     import os
     from contextlib import asynccontextmanager
@@ -259,6 +334,12 @@ def main(argv: list[str] | None = None) -> None:
     assert_no_global_policy_solves_the_suite(
         list(episodes.values()),
         {sid: f.values() for sid, f in asyncio.run(_flip_scalars()).items()})
+
+    # Task 12 (exposure-and-depot plan): the eight dimensional-coherence
+    # invariants, over the full episode set. Same build-time-gate contract
+    # as the two checks above -- they fire before tokens are spent.
+    asyncio.run(_run_dimensional_coherence_invariants(
+        _connect, episodes, topology_path=topology))
 
     results = asyncio.run(run_suite(
         _connect, topology_path=topology, deciders=build_deciders(args)))

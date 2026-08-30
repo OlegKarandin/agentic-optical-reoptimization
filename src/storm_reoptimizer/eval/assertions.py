@@ -33,16 +33,27 @@ from pathlib import Path
 
 from mcp.client import Client
 
+from ..events.filters import get_filter
+from ..geo_mapper import load_edges
 from ..mcp_client import call_tool_json
 from .baseline import BASELINE_VARIANTS, ForecastBlindBaseline, ScriptedDecider
 from .decisions import ConstraintDecision, ObjectiveDecision, TimingDecision
 from .derived import (
     DERIVED_TOLERANCE, FLIP_VARS, DerivedGeometry, FlipScalars,
-    derived_geometry,
+    derived_geometry, exposure_horizon_hour,
 )
-from .runner import run_episode
+from .runner import EVENT_TYPE, run_episode, service_geometry
 from .scenario_file import ScenarioFile
 from .scoring import decision_label, episode_metrics
+
+# multilayer_optical_network.model.modes.default_modes()'s largest
+# transceiver mode's bitrate -- the most a single lightpath can carry in the
+# best available mode. A plain constant, not an import of the sibling
+# library from src/ (CLAUDE.md's hard seam): confirmed against the real
+# server by tools/probe_claimants.py ("max lightpath capacity: 800.0 Gbps"),
+# also recorded in docs/superpowers/plans/notes/2026-08-30-claimant-
+# family.md.
+MAX_LIGHTPATH_CAPACITY_GBPS: float = 800.0
 
 # The scalars a one-line rule could key on. Held EQUAL across the halves, so
 # no surface correlation is left to key on.
@@ -859,3 +870,387 @@ def assert_no_single_variable_rule_solves(
                     f"one-liner), not a comparison -- rebuild the pair so every "
                     f"enumerated scalar is EQUAL across its halves and the flip lives "
                     f"in the relation between two of them.")
+
+
+# --------------------------------------------------------------------------
+# Task 12 (exposure-and-depot plan, §6 invariants 1-8): the dimensional-
+# coherence class. Every defect this plan fixed was a physically-typed
+# quantity (a site, a lightpath, a mount type, a span) collapsed into an
+# untyped scalar, and every one survived review because the suite checked
+# equality and derivation but never asked whether the units made sense.
+# These eight invariants check exactly that class, so a future episode
+# author cannot reintroduce it. All raise `PairInvalid`, same as every check
+# above; wired into `suite.main()`'s pre-flight, after the two existing
+# checks.
+# --------------------------------------------------------------------------
+
+
+def claimant_service_ids(scenario: ScenarioFile) -> tuple[str, ...]:
+    """The services `metadata.claimant_services` names, cross-checked against
+    `gold.rationale` so a declared list cannot silently drift from the prose
+    it is supposed to summarize -- every listed id must appear literally in
+    the rationale text. Turns "did the author's arithmetic name a real,
+    eligible, exposed service" into a checkable question without parsing
+    English (invariants 2-4's shared parsing note).
+
+    `metadata.claimant_services` is a strict, required scenario-file key
+    (scenario_file.py, same treatment as `depot_site`/`spare_inventory`) --
+    always present, possibly empty. An empty list is honest for an episode
+    whose rationale names no claimant by id (e.g. D1), not an error."""
+    ids = tuple(scenario.metadata.get("claimant_services") or ())
+    missing = [sid for sid in ids if sid not in scenario.gold.rationale]
+    if missing:
+        raise PairInvalid(
+            f"{scenario.id}: metadata.claimant_services names {missing!r}, "
+            f"which do not appear literally in gold.rationale -- the "
+            f"declared claimant list and the rationale prose must agree")
+    return ids
+
+
+# Invariant 1.
+def assert_realized_cuts_pass_the_event_filter(
+    scenario: ScenarioFile, *, topology_path: str | Path,
+    oms_by_id: dict[str, dict],
+) -> None:
+    """Every fiber named in a `realized` block belongs to an edge the
+    episode's own event filter admits (aerial, for a storm) -- a storm does
+    not physically cut buried conduit, so a `realized` block that says
+    otherwise is asserting a physically impossible cut, no matter how
+    internally consistent the rest of the episode is.
+
+    `oms_by_id` is `{oms_id: {"src_node_id", "dst_node_id", "elements"}}`,
+    the same shape `get_topology(layer="optical")`'s `oms` list gives (see
+    `runner._define_horizon_risk_groups`) -- passed in rather than fetched
+    here so the caller (suite.main()'s pre-flight) can read it ONCE and
+    reuse it across every episode sharing the same state file, instead of
+    this function opening its own connection.
+
+    T1a fails this TODAY: its `realized` block injects
+    fiber_allahabad_fatehpur_0/_1 and fiber_fatehpur_allahabad_0, and that
+    link is BURIED (Task 14, not this task, fixes the episode data)."""
+    filter_fn = get_filter(EVENT_TYPE)
+    edge_mount: dict[tuple[str, str], object] = {}
+    for edge in load_edges(topology_path):
+        edge_mount[(edge.src, edge.dst)] = edge
+        edge_mount[(edge.dst, edge.src)] = edge
+
+    fiber_to_oms: dict[str, dict] = {}
+    for oms in oms_by_id.values():
+        for element_id in oms.get("elements") or ():
+            if element_id.startswith("fiber_"):
+                fiber_to_oms[element_id] = oms
+
+    for hour, asset_ids in scenario.realized.items():
+        for asset_id in asset_ids:
+            oms = fiber_to_oms.get(asset_id)
+            if oms is None:
+                raise PairInvalid(
+                    f"{scenario.id}: realized cut {asset_id!r} at hour "
+                    f"{hour!r} names no fiber in any OMS's `elements` -- "
+                    f"cannot check it against the event filter")
+            edge = edge_mount.get((oms["src_node_id"], oms["dst_node_id"]))
+            if edge is None:
+                raise PairInvalid(
+                    f"{scenario.id}: realized cut {asset_id!r} at hour "
+                    f"{hour!r} resolves to OMS {oms.get('id')!r} "
+                    f"({oms['src_node_id']}<->{oms['dst_node_id']}), which "
+                    f"names no edge in the local topology")
+            if not filter_fn(edge):
+                raise PairInvalid(
+                    f"{scenario.id}: realized cut {asset_id!r} at hour "
+                    f"{hour!r} is on edge {edge.src}<->{edge.dst}, "
+                    f"mount_type={edge.mount_type!r} -- the event's own "
+                    f"vulnerability filter does not admit it, so this event "
+                    f"cannot physically have cut it. The `realized` block "
+                    f"asserts a physically impossible cut.")
+
+
+# Invariant 2.
+def _claimant_exposure_violations(
+    claimant_ids: tuple[str, ...], cuttable_spans: dict[str, tuple],
+) -> list[str]:
+    """Claimant ids with no storm-cuttable span on their working path -- a
+    service the event's own filter can never touch is not exposed by THIS
+    event at all, so naming it in the arithmetic argues about a threat that
+    cannot physically materialize (would have caught D4)."""
+    return [sid for sid in claimant_ids if not cuttable_spans.get(sid)]
+
+
+async def assert_claimants_have_filterable_exposure(
+    client: Client, scenario: ScenarioFile, *, topology_path: str | Path,
+) -> None:
+    """Every service `metadata.claimant_services` names has at least one
+    span the event's own filter admits, read the same way `runner.
+    service_geometry` derives it for the real rollout -- so the check and
+    the episode's own exposure computation can never disagree.
+
+    No-op for an empty claimant list (see `claimant_service_ids`)."""
+    ids = claimant_service_ids(scenario)
+    if not ids:
+        return
+    geometry = await service_geometry(client, topology_path)
+    violations = _claimant_exposure_violations(ids, geometry.cuttable_spans)
+    if violations:
+        raise PairInvalid(
+            f"{scenario.id}: metadata.claimant_services names "
+            f"{violations!r}, which have NO storm-cuttable span on their "
+            f"working path -- a service the event's own filter can never "
+            f"touch cannot honestly compete for the depot's spare")
+
+
+# Invariant 3.
+def _claimant_depot_violations(
+    claimant_ids: tuple[str, ...],
+    endpoint_sites: dict[str, tuple[str, str]], depot_site: str,
+) -> list[str]:
+    """Claimant ids that do not terminate at `depot_site` -- restoring them
+    would draw on THEIR OWN sites' depots, not this one, so they are no part
+    of the contest `observation._restorable_groups` builds (its own
+    eligibility rule, mirrored here)."""
+    return [sid for sid in claimant_ids
+            if depot_site not in (endpoint_sites.get(sid) or ())]
+
+
+async def assert_claimants_depot_eligible(
+    client: Client, scenario: ScenarioFile, *, topology_path: str | Path,
+) -> None:
+    """Every service `metadata.claimant_services` names terminates at
+    `scenario.depot_site` -- a satna line card cannot restore
+    kolkata<->mumbai, so a claimant that does not terminate at the depot
+    cannot honestly compete for it.
+
+    No-op for an empty claimant list (see `claimant_service_ids`)."""
+    ids = claimant_service_ids(scenario)
+    if not ids:
+        return
+    geometry = await service_geometry(client, topology_path)
+    violations = _claimant_depot_violations(
+        ids, geometry.endpoint_sites, scenario.depot_site)
+    if violations:
+        raise PairInvalid(
+            f"{scenario.id}: metadata.claimant_services names "
+            f"{violations!r}, which do not terminate at depot_site "
+            f"{scenario.depot_site!r} -- restoring them would draw on "
+            f"THEIR OWN sites' depots, not this one, so they cannot "
+            f"compete for this episode's spare")
+
+
+# Invariant 4.
+def assert_claim_is_one_lightpath(
+    scenario: ScenarioFile, groups: dict[str, tuple[dict, ...]],
+) -> None:
+    """The gold rationale's claimed aggregate ECAR
+    (`metadata.claimed_competing_ecar_gbps`, when declared) must not exceed
+    the LARGEST co-terminating group's ECAR at the claim's horizon
+    (`derived.exposure_horizon_hour`) -- one spare buys ONE lightpath, so the
+    honest competing figure across co-terminating groups is a MAXIMUM, never
+    a sum (`observation._restorable_groups`'s own docstring). This is the
+    check that would have caught D2: 108.8 G billed across three
+    co-terminating groups where the honest figure was the largest single
+    group, 55.3 G.
+
+    `groups` is `observation._restorable_groups`'s own output shape,
+    `dict[horizon, tuple[group_dict, ...]]`, so the check and the
+    observation the agent reads can never disagree about what the largest
+    group is.
+
+    No-op when `metadata.claimed_competing_ecar_gbps` is undeclared -- it is
+    NOT a strict schema key (unlike `claimant_services`): Task 14, not this
+    task, populates it with the real, frozen per-episode numbers once the
+    geometry is re-derived, and none of the seven shipped episodes declare
+    it today."""
+    claimed = scenario.metadata.get("claimed_competing_ecar_gbps")
+    if claimed is None:
+        return
+    horizon = exposure_horizon_hour(scenario)
+    largest = max((g["ecar_gbps"] for g in groups.get(horizon, ())),
+                 default=0.0)
+    if claimed > largest + DERIVED_TOLERANCE:
+        raise PairInvalid(
+            f"{scenario.id}: metadata.claimed_competing_ecar_gbps="
+            f"{claimed:.1f} exceeds the largest co-terminating group's ECAR "
+            f"at horizon {horizon!r}, {largest:.1f} -- one spare buys ONE "
+            f"lightpath, so the honest competing claim is the largest "
+            f"single group, not a sum across groups")
+
+
+# Invariant 5.
+def assert_group_fits_one_lightpath(
+    scenario: ScenarioFile, groups: dict[str, tuple[dict, ...]],
+) -> None:
+    """Every co-terminating group's own ECAR, at every horizon, must not
+    exceed `MAX_LIGHTPATH_CAPACITY_GBPS` -- a group's total claim cannot
+    physically need more than one lightpath's capacity in the best available
+    mode, since one spare buys exactly one lightpath."""
+    for horizon, entries in groups.items():
+        for g in entries:
+            if g["ecar_gbps"] > MAX_LIGHTPATH_CAPACITY_GBPS:
+                raise PairInvalid(
+                    f"{scenario.id}: co-terminating group "
+                    f"{g['endpoints']!r} (members {g['members']!r}) has "
+                    f"ECAR {g['ecar_gbps']:.1f} G at horizon {horizon!r}, "
+                    f"exceeding one lightpath's "
+                    f"{MAX_LIGHTPATH_CAPACITY_GBPS:.0f} G capacity -- a "
+                    f"group's total claim cannot physically need more than "
+                    f"one lightpath")
+
+
+# Invariant 6.
+def _binding_site_violations(
+    candidates, oms_nodes: dict, *, depot_site: str,
+    spare_inventory: dict[str, int], default_spares_per_site: int,
+) -> list[tuple[int, str, int, int]]:
+    """`(candidate_index, site, needed, available)` for every
+    candidate/site pair where a site OTHER than `depot_site` cannot cover
+    its own charge -- i.e. a site other than the declared depot is ALSO
+    scarce, so the depot would not be the only site a real candidate can
+    bind on."""
+    from .ledger import spares_needed
+
+    violations: list[tuple[int, str, int, int]] = []
+    for index, candidate in enumerate(candidates):
+        needed = spares_needed(candidate, oms_nodes)
+        for site, count in needed.items():
+            if site == depot_site:
+                continue
+            available = spare_inventory.get(site, default_spares_per_site)
+            if count > available:
+                violations.append((index, site, count, available))
+    return violations
+
+
+async def assert_depot_is_the_binding_site(
+    client: Client, scenario: ScenarioFile, *, topology_path: str | Path,
+) -> None:
+    """No candidate in the real menu under `reference_avoid` is limited by a
+    site OTHER than `scenario.depot_site`, given `scenario.spare_inventory`
+    plus the ledger's own default stock elsewhere
+    (`ledger.SpareLedger.default_spares_per_site`) -- the episode is built to
+    make the depot THE scarce resource; a candidate that also runs into
+    scarcity somewhere else would make the harness silently reject that
+    candidate for a reason the episode never intended to test."""
+    from .ledger import SpareLedger
+
+    menu = await menu_at_decision_hour(client, scenario)
+    oms_nodes = await _oms_nodes(client)
+    violations = _binding_site_violations(
+        menu.get("candidates") or (), oms_nodes,
+        depot_site=scenario.depot_site,
+        spare_inventory=scenario.spare_inventory,
+        default_spares_per_site=SpareLedger.default_spares_per_site)
+    if violations:
+        index, site, count, available = violations[0]
+        raise PairInvalid(
+            f"{scenario.id}: candidate_{index} needs {count} spare "
+            f"transponder(s) at {site!r} ({available} on hand there, per "
+            f"scenario.spare_inventory/the ledger's default), but {site!r} "
+            f"is not depot_site ({scenario.depot_site!r}) -- only the "
+            f"depot site may be the scarce, binding constraint")
+
+
+# Invariant 7.
+# The escape direction the exposure-and-depot design added a third aerial
+# edge at (satna<->jabalpur, CLAUDE.md's 2026-08-30 topology note) -- the
+# corridor T2's and T3's gold `optical_reroute` candidates escape along.
+_ESCAPE_ROUTE_NODE = "jabalpur"
+
+
+def _jabalpur_optical_reroute_candidate(
+    candidates, oms_nodes: dict[str, list[str]],
+) -> tuple[int | None, dict | None]:
+    """The first `optical_reroute` candidate whose new lightpath's OMS route
+    touches `_ESCAPE_ROUTE_NODE`, or `(None, None)` if none exists."""
+    for index, candidate in enumerate(candidates):
+        if candidate.get("lever") != "optical_reroute":
+            continue
+        touched: set[str] = set()
+        for lightpath in candidate.get("new_lightpaths") or ():
+            for oms_id in lightpath.get("oms_sequence") or ():
+                touched.update(oms_nodes.get(oms_id, ()))
+        if _ESCAPE_ROUTE_NODE in touched:
+            return index, candidate
+    return None, None
+
+
+async def assert_escape_route_survives(
+    client: Client, scenario: ScenarioFile,
+) -> None:
+    """The `_ESCAPE_ROUTE_NODE` `optical_reroute` candidate T2's and T3's
+    gold decisions rely on still exists in the real menu under
+    `basis=risk_group`/`level=risk_group` (the basis those gold decisions
+    actually validate under -- see `_T2_NON_FLIP_GOLD_DECISIONS`/
+    `_T3_NON_FLIP_GOLD_DECISIONS` in test_episodes.py), and still validates.
+    Guards the Phase 2 pins' spectrum consumption: the satna-west (SW) pins
+    consume spectrum on exactly this corridor, and a future pin change could
+    silently consume the last of it."""
+    menu = await call_tool_json(client, "route_service", {
+        "service_id": scenario.service_under_test, "protected": False,
+        "basis": "risk_group", "level": "risk_group", "best_effort": False,
+        "avoid": scenario.reference_avoid})
+    oms_nodes = await _oms_nodes(client)
+    index, candidate = _jabalpur_optical_reroute_candidate(
+        menu.get("candidates") or (), oms_nodes)
+    if candidate is None:
+        raise PairInvalid(
+            f"{scenario.id}: no optical_reroute candidate via "
+            f"{_ESCAPE_ROUTE_NODE} exists in the real menu under "
+            f"basis=risk_group/level=risk_group, avoid="
+            f"{scenario.reference_avoid!r} -- the escape route T2's and "
+            f"T3's gold optical_reroute candidates rely on may have been "
+            f"lost to the Phase 2 spectrum pins")
+
+    from .plans import build_topology_index, plan_from_candidate
+
+    topo_index = await build_topology_index(client)
+    plan = plan_from_candidate(
+        topo_index, candidate, scenario.service_under_test,
+        prefix=f"assert-escape-{scenario.id}")
+    report = await call_tool_json(client, "validate_plan", {
+        "plan": plan, "basis": "risk_group", "level": "risk_group"})
+    if not report["ok"]:
+        raise PairInvalid(
+            f"{scenario.id}: the {_ESCAPE_ROUTE_NODE} optical_reroute "
+            f"candidate_{index} exists but does not validate under "
+            f"basis=risk_group/level=risk_group: {report['violations']!r}")
+
+
+# Invariant 8.
+def assert_sampling_error_within_margin(
+    flip_values: dict[str, dict[str, float]], *, measured_error: float,
+) -> None:
+    """The suite's smallest flip margin -- the smallest gap between any two
+    DISTINCT values (`rules._distinct_within_tolerance`, so numerically-
+    solved near-duplicates don't count as a margin) any `derived.FLIP_VARS`
+    scalar takes across the shipped episodes -- must be at least one order
+    of magnitude (10x) larger than `measured_error`, the pipeline's own
+    measured sampling error at its configured `m` (e.g. Task 2's 2.56e-4 at
+    SOBOL_M=16). If the sampler's own noise floor sits within an order of
+    magnitude of the smallest real gap the suite relies on to discriminate,
+    the sampler could flip a gold label on noise alone.
+
+    `flip_values` is `{scenario_id: {var: value}}`, exactly the shape
+    `derived.FlipScalars.values()` produces and
+    `assert_no_global_policy_solves_the_suite` already consumes.
+
+    Written now; Task 14 (not this task) wires it against the real, frozen
+    per-episode numbers once they exist -- for now it is tested only
+    against constructed values."""
+    from .rules import _distinct_within_tolerance
+
+    margins: list[float] = []
+    for var in FLIP_VARS:
+        values = [v[var] for v in flip_values.values()
+                 if v.get(var) is not None]
+        distinct = _distinct_within_tolerance(values)
+        margins.extend(hi - lo for lo, hi in zip(distinct, distinct[1:]))
+    if not margins:
+        return
+
+    smallest = min(margins)
+    if smallest < measured_error * 10:
+        raise PairInvalid(
+            f"the smallest flip margin across the suite, {smallest:.6g}, "
+            f"clears the measured sampling error {measured_error:.6g} by "
+            f"only {smallest / max(measured_error, 1e-300):.2f}x -- an "
+            f"order of magnitude (10x) margin is required, or the "
+            f"sampler's own noise floor could flip a gold label")
