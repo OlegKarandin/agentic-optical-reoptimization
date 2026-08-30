@@ -58,3 +58,31 @@ def test_horizon_at_or_before_its_own_issue_hour_is_rejected(
         "  t1:\n    t3:", "  t1:\n    t0:")
     with pytest.raises(ScenarioFileError, match="horizon"):
         load_scenario(write_scenario(bad))
+
+
+def test_the_depot_keys_are_required(write_scenario, example_scenario_yaml):
+    # scenario_file.py's docstring is explicit: a misspelled key is a silently
+    # different episode. `spare_inventory_` typed for `spare_inventory` would
+    # run green and quietly restore a global depot.
+    without = example_scenario_yaml.replace("depot_site: satna\n", "")
+    with pytest.raises(ScenarioFileError, match="depot_site"):
+        load_scenario(write_scenario(without))
+
+
+def test_the_depot_site_must_appear_in_the_inventory(write_scenario,
+                                                     example_scenario_yaml):
+    bad = example_scenario_yaml.replace("depot_site: satna", "depot_site: rewa")
+    with pytest.raises(ScenarioFileError, match="depot_site 'rewa'"):
+        load_scenario(write_scenario(bad))
+
+
+def test_the_declared_scalar_matches_the_depot_sites_inventory(
+        write_scenario, example_scenario_yaml):
+    # metadata.spares_on_hand survives as the declared scalar FOR THE DEPOT
+    # SITE, which is what lets rules.OBSERVABLE_VARS and
+    # assertions.SHARED_SCALARS stay unchanged. If the two ever disagree, the
+    # one-variable check is enumerating a number the harness does not use.
+    bad = example_scenario_yaml.replace("spare_inventory: {satna: 1}",
+                                        "spare_inventory: {satna: 3}")
+    with pytest.raises(ScenarioFileError, match="spares_on_hand"):
+        load_scenario(write_scenario(bad))

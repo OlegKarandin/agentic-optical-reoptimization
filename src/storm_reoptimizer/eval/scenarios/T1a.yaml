@@ -8,6 +8,12 @@ hours: [t0, t1, t2, t3]
 decision_hour: t1
 lead_time_hours: 1
 spares_on_hand: 1            # transponder PAIRS: one new lightpath each
+depot_site: satna            # the site whose depot is scarce in this episode
+# Spare transponders held PER SITE. Only depot_site binds; every other site is
+# stocked well enough that a candidate is never limited by it, which
+# assert_depot_is_the_binding_site checks. Lighting a new lightpath consumes
+# one transponder at EACH of its two endpoint sites.
+spare_inventory: {satna: 1}
 damage_radius_km: 74
 reference_avoid: {}          # neutral third value: current exposure only
 # GEOMETRY REBUILT 2026-08-23 (whole-branch review, finding C2). The ORIGINAL

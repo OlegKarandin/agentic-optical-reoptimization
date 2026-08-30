@@ -29,6 +29,7 @@ SCENARIOS_DIR = Path(__file__).parent / "scenarios"
 _TOP_LEVEL_KEYS = {
     "id", "pair", "seed", "state_file", "service_under_test", "track",
     "hours", "decision_hour", "lead_time_hours", "spares_on_hand",
+    "depot_site", "spare_inventory",
     "damage_radius_km", "reference_avoid", "forecast", "realized", "gold",
     "flip_variable", "metadata",
 }
@@ -76,6 +77,8 @@ class ScenarioFile:
     decision_hour: str
     lead_time_hours: int          # the optical_reroute value; see lead_time()
     spares_on_hand: int           # transponder PAIRS
+    depot_site: str               # the site whose depot is scarce this episode
+    spare_inventory: dict[str, int]  # per-site spare transponder counts
     damage_radius_km: float
     reference_avoid: dict
     forecast: dict[str, Issuance]        # issue hour -> Issuance
@@ -148,6 +151,23 @@ def load_scenario(path: str | Path) -> ScenarioFile:
             f"{path}: gold.decision_at_t0 must be 'act' or 'wait', "
             f"got {gold.decision_at_t0!r}")
 
+    depot_site = raw["depot_site"]
+    spare_inventory = {str(k): int(v) for k, v in raw["spare_inventory"].items()}
+    if depot_site not in spare_inventory:
+        raise ScenarioFileError(
+            f"{path}: depot_site {depot_site!r} has no entry in "
+            f"spare_inventory {sorted(spare_inventory)}; the site whose depot "
+            f"is scarce must declare how scarce it is")
+    declared = int(raw["metadata"]["spares_on_hand"])
+    if spare_inventory[depot_site] != declared:
+        raise ScenarioFileError(
+            f"{path}: metadata.spares_on_hand={declared} but "
+            f"spare_inventory[{depot_site!r}]={spare_inventory[depot_site]}. "
+            f"The declared scalar IS the depot site's inventory -- "
+            f"rules.OBSERVABLE_VARS and assertions.SHARED_SCALARS enumerate "
+            f"it, and a disagreement means they are enumerating a number the "
+            f"harness does not use")
+
     return ScenarioFile(
         id=raw["id"], pair=raw.get("pair"), seed=int(raw["seed"]),
         state_file=raw["state_file"],
@@ -155,6 +175,7 @@ def load_scenario(path: str | Path) -> ScenarioFile:
         hours=hours, decision_hour=raw["decision_hour"],
         lead_time_hours=int(raw["lead_time_hours"]),
         spares_on_hand=int(raw["spares_on_hand"]),
+        depot_site=depot_site, spare_inventory=spare_inventory,
         damage_radius_km=float(raw["damage_radius_km"]),
         reference_avoid=raw["reference_avoid"], forecast=forecast,
         realized=realized, gold=gold,

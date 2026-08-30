@@ -177,6 +177,8 @@ SMOKE = textwrap.dedent("""
     decision_hour: t0
     lead_time_hours: 1
     spares_on_hand: 2
+    depot_site: satna
+    spare_inventory: {satna: 2}
     damage_radius_km: 74
     reference_avoid: {}
     forecast:
@@ -258,6 +260,8 @@ EXPOSURE_SMOKE = textwrap.dedent("""
     decision_hour: t0
     lead_time_hours: 1
     spares_on_hand: 2
+    depot_site: satna
+    spare_inventory: {satna: 2}
     damage_radius_km: 74
     reference_avoid: {}
     forecast:

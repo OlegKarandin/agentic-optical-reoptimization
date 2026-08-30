@@ -16,6 +16,8 @@ EXAMPLE_SCENARIO_YAML = textwrap.dedent("""
     decision_hour: t1
     lead_time_hours: 1
     spares_on_hand: 1
+    depot_site: satna
+    spare_inventory: {satna: 1}
     damage_radius_km: 74
     reference_avoid:
       risk_groups: [rg_ref]

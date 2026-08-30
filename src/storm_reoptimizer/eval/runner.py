@@ -59,15 +59,6 @@ MAX_ITERATIONS = 5
 # spans score exposure can never disagree.
 EVENT_TYPE = "storm"
 
-# The depot site for the one scenario family this harness runs today.
-# scenario.spares_on_hand has always meant "spares at satna" (storm-svc-1's
-# own home site -- see CLAUDE.md's "seeded demo service" note); Task 9 of the
-# exposure-and-depot plan moves this onto ScenarioFile as `depot_site`/
-# `spare_inventory`. Until then this constant IS the real value, not a
-# fallback masking a missing one -- every scenario file this harness loads
-# scores storm-svc-1's exposure against satna's depot.
-DEPOT_SITE = "satna"
-
 
 @dataclass(frozen=True)
 class Action:
@@ -473,8 +464,8 @@ async def run_episode(
     # static optical adjacency, unchanged across the episode) -- constructing
     # it here would cost an extra, uncounted-or-miscounted server call before
     # the per-hour loop even starts.
-    ledger = SpareLedger(inventory={DEPOT_SITE: scenario.spares_on_hand},
-                         depot_site=DEPOT_SITE, oms_nodes={})
+    ledger = SpareLedger(inventory=dict(scenario.spare_inventory),
+                         depot_site=scenario.depot_site, oms_nodes={})
     defined_rgs: set[str] = set()
 
     hours: list[dict] = []

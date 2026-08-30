@@ -15,6 +15,12 @@ spares_on_hand: 2            # transponder PAIRS: two on hand, so acting is
                               # never a scarcity trade -- the whole point of
                               # this episode is that "hold the spare" has no
                               # excuse here (design doc's "Why D1 exists")
+depot_site: satna            # the site whose depot is scarce in this episode
+# Spare transponders held PER SITE. Only depot_site binds; every other site is
+# stocked well enough that a candidate is never limited by it, which
+# assert_depot_is_the_binding_site checks. Lighting a new lightpath consumes
+# one transponder at EACH of its two endpoint sites.
+spare_inventory: {satna: 2}  # D1 declares {satna: 2}
 damage_radius_km: 74
 reference_avoid:             # NOT {} -- see "The real mechanics" below. This
                               # is also the ACTUAL avoid the gold act uses.
