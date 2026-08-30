@@ -343,8 +343,8 @@ async def assert_pair_derived_geometry_is_equal(
             f"{a.id}/{b.id}: the halves' DERIVED forecast geometry differs, so "
             f"a one-line threshold on a number nobody declared separates them:"
             + "".join(f"\n  - {p}" for p in problems)
-            + f"\n(SUT representative points: {a.id} {derived_a.sut_point}, "
-              f"{b.id} {derived_b.sut_point}; exposure horizons "
+            + f"\n(SUT storm-cuttable spans: {a.id} {derived_a.sut_spans}, "
+              f"{b.id} {derived_b.sut_spans}; exposure horizons "
               f"{derived_a.exposure_horizon!r}/{derived_b.exposure_horizon!r}.) "
               f"Rebuild the pair so every derived scalar is EQUAL across its "
               f"halves and the flip lives in the relation between two "

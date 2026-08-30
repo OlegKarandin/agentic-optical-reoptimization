@@ -252,7 +252,7 @@ def _flip(scenario_id, *, at, sut_by_horizon, before=0.0, exposure="t3"):
     # `before` at its 0.0 default, and `assert_flip_dominates` takes a max()
     # over FLIP_VARS, so a spurious 0.0 in one variable could never lower the
     # flip magnitude those tests assert on. It is here so this helper builds a
-    # FlipScalars that means what `flip_scalars_from_points` would mean --
+    # FlipScalars that means what `flip_scalars_from_spans` would mean --
     # a future test that reads min/peak off it gets a truthful object rather
     # than one that happens not to matter yet.
     return FlipScalars(

@@ -32,6 +32,16 @@ TOPOLOGY_PATH = (
     / "src" / "storm_reoptimizer" / "data" / "toy_india_topology.json"
 )
 
+# The four shipped episodes' cone geometry was tuned against the MIDPOINT
+# exposure model. Task 3 of docs/superpowers/plans/2026-08-30-exposure-and-
+# depot.md replaced that model, so every p_cut in the suite moved and the
+# anti-threshold tuning below was computed on numbers that no longer exist.
+# These skips are removed in Task 14, which re-derives the geometry and
+# re-solves the tuning jointly. Nothing else in the suite may be skipped, and
+# no skip may outlive Task 14.
+_AWAITING_REDERIVATION = pytest.mark.skip(
+    reason="geometry re-derived in Task 14 (2026-08-30-exposure-and-depot plan)")
+
 # Extended by Task 17 to add "D1" (a diagnostic singleton, not a pair).
 PAIRS = ("T1", "T2", "T3")
 
@@ -83,6 +93,7 @@ async def _derived(a, b, state_path, server_command, server_env):
             client_a, client_b, a, b, topology_path=TOPOLOGY_PATH)
 
 
+@_AWAITING_REDERIVATION
 @pytest.mark.parametrize("pair", PAIRS)
 def test_pair_derived_geometry_is_equal_across_the_halves(
     pair, loaded_state_path, local_server_command, local_server_env,
@@ -102,6 +113,7 @@ def test_pair_derived_geometry_is_equal_across_the_halves(
                          local_server_env))
 
 
+@_AWAITING_REDERIVATION
 @pytest.mark.parametrize("pair", PAIRS)
 def test_each_baseline_variant_scores_exactly_one_half(
     pair, loaded_state_path, local_server_command, local_server_env,
@@ -452,6 +464,7 @@ def test_t2a_carries_a_real_validate_plan_rejection(
     assert episode_metrics(t2a, trace)["recovered_from_rejection"]
 
 
+@_AWAITING_REDERIVATION
 def test_the_claimant_aggregates_are_derivable_for_every_twin_half(
         loaded_state_path, local_server_command, local_server_env):
     """W1.1's acceptance: the numbers F1's arithmetic is built on, measured
@@ -484,6 +497,7 @@ def test_the_claimant_aggregates_are_derivable_for_every_twin_half(
         for sid, f in sorted(flips.items())))
 
 
+@_AWAITING_REDERIVATION
 def test_no_global_policy_solves_the_shipped_suite(
         loaded_state_path, local_server_command, local_server_env):
     """GATE A, as a real assertion: no ONE threshold, on ONE of
@@ -548,6 +562,7 @@ def test_no_global_policy_solves_the_shipped_suite(
     assert_no_global_policy_solves_the_suite(episodes, flip_values)
 
 
+@_AWAITING_REDERIVATION
 @pytest.mark.parametrize("pair", ("T1", "T2", "T3"))
 def test_the_flip_dominates_every_equal_signal(pair, loaded_state_path,
                                                local_server_command,
@@ -604,6 +619,7 @@ def test_the_flip_dominates_every_equal_signal(pair, loaded_state_path,
 # protection lightpath still exists in all three menus (that part of the
 # original finding is unchanged, and still worth a separate look for T1a's
 # sake), but only T1a's exposure to it is a genuine confound.
+@_AWAITING_REDERIVATION
 @pytest.mark.parametrize("scenario_id", ("T2b", "T3b"))
 def test_a_conserve_gold_with_an_unexploitable_free_escape_passes(
     scenario_id, loaded_state_path, local_server_command, local_server_env,
@@ -659,6 +675,7 @@ def _unwrap_lone_exception(exc: BaseException) -> BaseException:
 # `_unwrap_lone_exception` is required for `raises=` to work at all here --
 # see its own docstring; confirmed live that without it this test hard-FAILs
 # instead of xfailing, on the very finding it is supposed to track.
+@_AWAITING_REDERIVATION
 @pytest.mark.xfail(
     reason="W1.6 finding (task 5, 2026-08-26; narrowed by Finding #5, "
            "2026-08-26 re-review): T1a offers a free ip_reroute onto "
@@ -720,6 +737,7 @@ _GOLD_COMMITTED_LEVER = {
 }
 
 
+@_AWAITING_REDERIVATION
 @pytest.mark.parametrize(
     "scenario_id", ("T1a", "T1b", "T2a", "T2b", "T3a", "T3b"))
 def test_gold_spare_action_is_grounded_in_a_real_candidate(

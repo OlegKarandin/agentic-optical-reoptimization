@@ -18,7 +18,13 @@ SERVICES = (
     {"id": "svc-b", "src_router": "router_rewa", "dst_router": "router_jhansi",
      "demand_gbps": 100.0, "working_path": ["ipl-c"], "protection_path": []},
 )
-POINTS = {"storm-svc-1": (25.0, 81.0), "svc-b": (25.6, 81.0)}
+# ((lat, lon), (lat, lon)) per span, already filtered to the storm-cuttable
+# ones by the caller -- observation.py stays free of event vocabulary and of
+# the server.
+SPANS = {
+    "storm-svc-1": (((25.0, 81.0), (25.2, 81.0)),),
+    "svc-b": (((25.6, 81.0), (25.8, 81.0)),),
+}
 
 
 @pytest.fixture
@@ -45,7 +51,7 @@ def test_latest_issuance_at_t2_is_still_the_t1_issuance(scenario):
 
 
 def test_observation_at_t0_leaks_no_later_issuance(scenario):
-    obs = build_observation(scenario, "t0", service_points=POINTS,
+    obs = build_observation(scenario, "t0", service_spans=SPANS,
                             services=SERVICES, spares_on_hand=1)
     payload = json.dumps(obs.to_dict())
     # The t1 issuance revises the cone centre to lat 25.2. If that number
@@ -55,7 +61,7 @@ def test_observation_at_t0_leaks_no_later_issuance(scenario):
 
 
 def test_observation_never_leaks_the_realized_cuts(scenario):
-    obs = build_observation(scenario, "t0", service_points=POINTS,
+    obs = build_observation(scenario, "t0", service_spans=SPANS,
                             services=SERVICES, spares_on_hand=1)
     assert "fiber_004" not in json.dumps(obs.to_dict())
 
@@ -63,7 +69,7 @@ def test_observation_never_leaks_the_realized_cuts(scenario):
 def test_exposure_is_reported_per_service_per_horizon_with_a_cut_probability(
     scenario,
 ):
-    obs = build_observation(scenario, "t0", service_points=POINTS,
+    obs = build_observation(scenario, "t0", service_spans=SPANS,
                             services=SERVICES, spares_on_hand=1)
     at_t3 = obs.exposure["storm-svc-1"]["t3"]
     assert at_t3["hours_ahead"] == 3
@@ -78,7 +84,7 @@ def test_each_exposure_row_carries_its_own_expected_capacity_at_risk(scenario):
     # quantity every gold.rationale is arithmetic over (cone.py:73); asking
     # the model to multiply it across 8 services x 2 horizons in its head is
     # asking a deterministic step of a judgement engine.
-    obs = build_observation(scenario, "t1", service_points=POINTS,
+    obs = build_observation(scenario, "t1", service_spans=SPANS,
                             services=SERVICES, spares_on_hand=1)
     entry = obs.exposure["storm-svc-1"]["t3"]
     assert set(entry) == {"hours_ahead", "offset_km", "width_km", "p_cut",
@@ -90,7 +96,7 @@ def test_each_exposure_row_carries_its_own_expected_capacity_at_risk(scenario):
 
 
 def test_the_derived_field_appears_for_every_service_and_every_horizon(scenario):
-    obs = build_observation(scenario, "t1", service_points=POINTS,
+    obs = build_observation(scenario, "t1", service_spans=SPANS,
                             services=SERVICES, spares_on_hand=1)
     for svc, per_horizon in obs.exposure.items():
         for horizon, entry in per_horizon.items():
@@ -103,7 +109,7 @@ def test_horizon_totals_split_the_sut_from_everyone_else(scenario):
     # compares the SUT's own expected capacity at risk against the AGGREGATE
     # of everyone else competing for the same spare pair. These are the two
     # operands of that comparison, and nothing else.
-    obs = build_observation(scenario, "t1", service_points=POINTS,
+    obs = build_observation(scenario, "t1", service_spans=SPANS,
                             services=SERVICES, spares_on_hand=1)
     totals = obs.horizon_totals["t3"]
     assert set(totals) == {"sut_ecar_gbps", "non_sut_total_ecar_gbps"}
@@ -117,7 +123,7 @@ def test_horizon_totals_split_the_sut_from_everyone_else(scenario):
 
 
 def test_horizon_totals_cover_exactly_the_issuances_horizons(scenario):
-    obs = build_observation(scenario, "t1", service_points=POINTS,
+    obs = build_observation(scenario, "t1", service_spans=SPANS,
                             services=SERVICES, spares_on_hand=1)
     assert sorted(obs.horizon_totals) == sorted(obs.issuance.horizons)
 
@@ -125,7 +131,7 @@ def test_horizon_totals_cover_exactly_the_issuances_horizons(scenario):
 def test_risk_group_ids_are_carried_through_for_the_constraint_decision(
     scenario,
 ):
-    obs = build_observation(scenario, "t0", service_points=POINTS,
+    obs = build_observation(scenario, "t0", service_spans=SPANS,
                             services=SERVICES, spares_on_hand=1,
                             risk_group_ids={"t3": "rg_EXAMPLE_A_t0_t3"})
     assert obs.risk_group_ids["t3"] == "rg_EXAMPLE_A_t0_t3"
@@ -133,10 +139,10 @@ def test_risk_group_ids_are_carried_through_for_the_constraint_decision(
 
 
 def test_hours_remaining_counts_down(scenario):
-    assert build_observation(scenario, "t0", service_points=POINTS,
+    assert build_observation(scenario, "t0", service_spans=SPANS,
                              services=SERVICES,
                              spares_on_hand=1).hours_remaining == 3
-    assert build_observation(scenario, "t3", service_points=POINTS,
+    assert build_observation(scenario, "t3", service_spans=SPANS,
                              services=SERVICES,
                              spares_on_hand=1).hours_remaining == 0
 
@@ -147,7 +153,7 @@ ACTIONS = ({"hour": "t1", "lever": "optical_reroute", "pairs": 1,
 
 
 def test_the_observation_reports_the_actions_already_committed(scenario):
-    obs = build_observation(scenario, "t2", service_points=POINTS,
+    obs = build_observation(scenario, "t2", service_spans=SPANS,
                             services=SERVICES, spares_on_hand=0,
                             actions_taken=ACTIONS, spares_spent=1)
     assert obs.actions_taken == ACTIONS
@@ -158,7 +164,7 @@ def test_the_observation_reports_the_actions_already_committed(scenario):
 
 
 def test_an_episode_with_no_commits_yet_reports_an_empty_action_list(scenario):
-    obs = build_observation(scenario, "t0", service_points=POINTS,
+    obs = build_observation(scenario, "t0", service_spans=SPANS,
                             services=SERVICES, spares_on_hand=1)
     assert obs.actions_taken == ()
     assert obs.to_dict()["actions_taken"] == []
@@ -171,14 +177,14 @@ def test_the_wire_names_the_actionable_service_not_the_one_under_test(
     # operational world; being named it reads as "this is the important one",
     # which is exactly the framing the control run's root cause #5 accuses
     # (eval-fairness design, §5.3).
-    payload = build_observation(scenario, "t0", service_points=POINTS,
+    payload = build_observation(scenario, "t0", service_spans=SPANS,
                                 services=SERVICES, spares_on_hand=1).to_dict()
     assert payload["actionable_service"] == "storm-svc-1"
     assert "service_under_test" not in payload
 
 
 def test_the_roster_marks_which_row_the_tools_can_act_on(scenario):
-    rows = build_observation(scenario, "t0", service_points=POINTS,
+    rows = build_observation(scenario, "t0", service_spans=SPANS,
                              services=SERVICES,
                              spares_on_hand=1).to_dict()["services"]
     actionable = [r for r in rows if r.get("actionable")]
@@ -186,6 +192,39 @@ def test_the_roster_marks_which_row_the_tools_can_act_on(scenario):
 
 
 def test_the_python_attribute_keeps_the_harness_name(scenario):
-    obs = build_observation(scenario, "t0", service_points=POINTS,
+    obs = build_observation(scenario, "t0", service_spans=SPANS,
                             services=SERVICES, spares_on_hand=1)
     assert obs.service_under_test == "storm-svc-1"
+
+
+def test_a_service_with_no_cuttable_span_gets_no_exposure_row(scenario):
+    # p_cut is exactly 0 and offset_km would have to be None or inf. A service
+    # with no representative point has always been omitted the same way; this
+    # is that rule, applied to the filtered span list.
+    obs = build_observation(scenario, "t0",
+                            service_spans={**SPANS, "svc-b": ()},
+                            services=SERVICES, spares_on_hand=1)
+    assert "svc-b" not in obs.exposure
+    assert "storm-svc-1" in obs.exposure
+
+
+def test_offset_km_is_the_distance_to_the_nearest_cuttable_span(scenario):
+    # NOT to a representative midpoint. The t3 cone of the t1 issuance is
+    # centred at (25.2, 81.0), which is one END of storm-svc-1's only span --
+    # so the offset is zero and the containment test the forecast-blind
+    # baseline runs reads "inside".
+    obs = build_observation(scenario, "t1", service_spans=SPANS,
+                            services=SERVICES, spares_on_hand=1)
+    assert obs.exposure["storm-svc-1"]["t3"]["offset_km"] == pytest.approx(0.0)
+    # Measured 0.9618 at width_km=90/damage_radius_km=74 -- comfortably
+    # "near-certain" without pinning a brittle exact float.
+    assert obs.exposure["storm-svc-1"]["t3"]["p_cut"] > 0.95
+
+
+def test_p_cut_is_the_region_probability_not_a_point_one(scenario):
+    from storm_reoptimizer.eval.cone import p_cut_region
+    obs = build_observation(scenario, "t1", service_spans=SPANS,
+                            services=SERVICES, spares_on_hand=1)
+    expected = p_cut_region(SPANS["svc-b"], 25.2, 81.0, 90.0, 74.0)
+    assert obs.exposure["svc-b"]["t3"]["p_cut"] == pytest.approx(
+        round(expected, 4), abs=1e-9)

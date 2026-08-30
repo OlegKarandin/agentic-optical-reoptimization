@@ -22,6 +22,7 @@ from storm_reoptimizer.eval.runner import (
     Action,
     action_payloads,
     run_episode,
+    service_geometry,
     unconstrained_menu_projection,
 )
 from storm_reoptimizer.eval.scenario_file import ConeAtHorizon, Issuance, load_scenario
@@ -59,6 +60,7 @@ GEOMETRY_REPLIES = {
         {"id": "lp_sj", "oms_sequence": ["oms_sj", "oms_gap"]}],
     ("get_services", None): {"services": [
         {"id": "storm-svc-1", "demand_gbps": 300.0,
+         "src_router": "router_satna", "dst_router": "router_allahabad",
          "working_path": ["l_sr", "l_ra"], "protection_path": ["l_sj"]}]},
 }
 
@@ -128,12 +130,30 @@ def test_a_menu_with_no_solution_projects_to_an_empty_candidate_list():
 
 # A minimal, deliberately non-discriminating episode: two hours, one issuance,
 # one realized cut. Its job is to exercise the loop, not to score anyone.
-# The cone sits near allahabad and never intersects storm-svc-1's own
-# aerial corridor (satna<->rewa / satna<->jhansi) -- deliberately, so a
-# plain ForecastBlindBaseline commits at t0 without ever hitting a real
-# disjointness_collapse against protection. Tests that need a REAL exposure
-# use EXPOSURE_SMOKE below instead of mutating this one out from under
-# every other test in this file.
+#
+# `center`/`width_km` (what build_observation's p_cut arithmetic reads) sit
+# ON storm-svc-1's real working aerial span (satna<->rewa), so its exposure
+# is genuinely nonzero under the region model -- Task 3 of the exposure-and-
+# depot plan scores exposure off the real span, not an averaged midpoint, so
+# a cone that no longer touches the real corridor at all (the old, pre-Task-3
+# geometry below) reads zero exposure and the baseline never acts.
+#
+# `cone` (the GeoJSON polygon `_define_horizon_risk_groups` intersects
+# against the LOCAL topology's edges to build the avoid set) is DELIBERATELY
+# a different, disjoint box, near allahabad, that intersects no aerial edge
+# at all -- confirmed live. Avoiding satna-rewa for real is not a free
+# no-op: it is a shared backbone trunk carrying hundreds of other services,
+# and route_service's cheapest alternative for storm-svc-1 then runs
+# straight through protection's own corridor (satna<->jhansi<->allahabad),
+# which is exactly the disjointness_collapse `_WidensOnDisjointnessRejection`
+# exists to recover from -- not something a plain ForecastBlindBaseline
+# ever will. `ConeAtHorizon` never cross-checks its `cone` polygon against
+# its `center`/`width_km` (scenario_file.py), so this split is legal, and it
+# is exactly the trick the pre-Task-3 fixture already relied on (its own
+# polygon intersected nothing aerial either, while its center/width_km sat
+# near storm-svc-1's OLD averaged-midpoint reading). Tests that need a
+# genuine disjointness collapse and widen-and-retry use EXPOSURE_SMOKE below
+# instead of mutating this one out from under every other test in this file.
 SMOKE = textwrap.dedent("""
     id: SMOKE
     seed: 17
@@ -148,7 +168,7 @@ SMOKE = textwrap.dedent("""
     reference_avoid: {}
     forecast:
       t0:
-        t1: {cone: {type: Polygon, coordinates: [[[81.3, 24.8], [82.3, 24.8], [82.3, 25.4], [81.3, 25.4], [81.3, 24.8]]]}, width_km: 120, center: {lat: 25.1, lon: 81.8}}
+        t1: {cone: {type: Polygon, coordinates: [[[81.3, 24.8], [82.3, 24.8], [82.3, 25.4], [81.3, 25.4], [81.3, 24.8]]]}, width_km: 90, center: {lat: 24.55, lon: 81.15}}
     realized:
       t1: []
     gold:
@@ -159,7 +179,7 @@ SMOKE = textwrap.dedent("""
       rationale: smoke episode; not scored
     flip_variable: [smoke]
     metadata:
-      cone_width_km: 120
+      cone_width_km: 90
       cone_motion_kmh: 20
       n_future_claimants: 0
       exposure_horizon_hours: 1
@@ -602,6 +622,46 @@ def test_lead_time_marks_an_optical_reroute_at_the_cut_hour_as_late(
         assert action.effective_at_index >= action.hour_index
 
 
+async def _geometry(state_path, server_command, server_env):
+    async with connect_server(
+        TOPOLOGY_PATH, server_command=server_command, env=server_env,
+        extra_args=["--state", str(state_path)],
+    ) as client:
+        return await service_geometry(client, TOPOLOGY_PATH)
+
+
+def test_service_geometry_keeps_only_the_storm_cuttable_spans(
+        loaded_state_path, local_server_command, local_server_env):
+    geometry = asyncio.run(_geometry(
+        loaded_state_path, local_server_command, local_server_env))
+
+    # storm-svc-1's working path is oms_satna_rewa (AERIAL) then
+    # oms_rewa_allahabad (buried). Exactly one span survives the storm filter,
+    # and it is the one that starts at satna.
+    spans = geometry.cuttable_spans["storm-svc-1"]
+    assert len(spans) == 1
+    satna = (24.58333, 80.83333)
+    assert spans[0][0] == pytest.approx(satna, abs=1e-5)
+
+    # The full working path is still two legs -- the filter trims exposure,
+    # not geometry.
+    assert len(geometry.paths["storm-svc-1"]["working"]) == 3
+
+    # And the endpoint SITES are what the per-site ledger will charge.
+    assert geometry.endpoint_sites["storm-svc-1"] == ("satna", "allahabad")
+
+
+def test_a_service_on_wholly_buried_fibre_has_no_cuttable_span(
+        loaded_state_path, local_server_command, local_server_env):
+    # d0029 routes allahabad -> fatehpur -> kanpur; both spans are buried, so
+    # its true storm exposure is ZERO. The shipped midpoint model scored it
+    # 0.4715 and that number is what made T1a's gold label `wait`
+    # (exposure-and-depot design, D4).
+    geometry = asyncio.run(_geometry(
+        loaded_state_path, local_server_command, local_server_env))
+    assert geometry.cuttable_spans["d0029"] == ()
+
+
 def test_service_geometry_keeps_the_polyline_the_midpoint_came_from(tmp_path):
     calls = []
     geo = asyncio.run(runner.service_geometry(
@@ -632,6 +692,26 @@ def test_service_geometry_maps_every_oms_to_its_two_endpoints(tmp_path):
         call=_geometry_call([])))
     assert geo.oms_nodes["oms_sr"] == ["satna", "rewa"]
     assert len(geo.oms_nodes) == 4
+
+
+def test_service_geometry_strips_the_router_prefix_for_endpoint_sites(tmp_path):
+    # endpoint_sites names the SITE a new lightpath would charge a
+    # transponder to, not the router id get_services reports.
+    geo = asyncio.run(runner.service_geometry(
+        None, _write_geometry_topology(tmp_path),
+        call=_geometry_call([])))
+    assert geo.endpoint_sites["storm-svc-1"] == ("satna", "allahabad")
+
+
+def test_service_geometry_reports_no_cuttable_spans_without_local_edges(
+        tmp_path):
+    # GEOMETRY_TOPOLOGY declares no edges at all, so no mount_type is known
+    # for any leg -- cuttable_spans must come back empty rather than raise,
+    # and every service still gets a (possibly empty) entry.
+    geo = asyncio.run(runner.service_geometry(
+        None, _write_geometry_topology(tmp_path),
+        call=_geometry_call([])))
+    assert geo.cuttable_spans["storm-svc-1"] == ()
 
 
 def test_service_points_is_unchanged_and_still_costs_four_calls(tmp_path):
@@ -769,13 +849,19 @@ def test_the_hour_record_keeps_the_totals_whole_while_trimming_the_rows():
         points={"storm-svc-1": (24.6, 80.8)},
         paths={"storm-svc-1": {"working": ["satna", "rewa"],
                                "protection": ["satna", "jhansi"]}},
-        oms_nodes={}, unmapped_nodes={})
+        oms_nodes={}, unmapped_nodes={},
+        cuttable_spans={"storm-svc-1": (((24.6, 80.8), (24.5, 81.3)),)},
+        endpoint_sites={"storm-svc-1": ("satna", "allahabad")})
     rec = runner.observation_record(obs, geo)
     assert sorted(rec["observation"]["exposure"]) == ["storm-svc-1"]
     assert rec["observation"]["horizon_totals"] == obs.horizon_totals
     assert rec["service_points"]["storm-svc-1"] == [24.6, 80.8]
     assert rec["service_paths"]["storm-svc-1"]["protection"] == [
         "satna", "jhansi"]
+    # The viewer must be able to draw exactly what was scored, not just where
+    # the deprecated midpoint sat.
+    assert rec["cuttable_spans"]["storm-svc-1"] == [
+        [[24.6, 80.8], [24.5, 81.3]]]
 
 
 def test_the_trace_records_the_projection_the_decider_reported(

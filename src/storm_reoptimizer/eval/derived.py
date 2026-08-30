@@ -194,14 +194,17 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..mcp_client import call_tool_json
-from .cone import expected_capacity_at_risk_gbps, p_cut_point, radial_offset_km
+from .cone import (
+    Segment, expected_capacity_at_risk_gbps, nearest_span_offset_km,
+    p_cut_region, radial_offset_km,
+)
 from .observation import latest_issuance
 from .scenario_file import Issuance, ScenarioFile
 
 if TYPE_CHECKING:                    # pragma: no cover
     from mcp.client import Client
 
-# NOTE: `runner.service_points` is imported lazily inside `derived_geometry`,
+# NOTE: `runner.service_geometry` is imported lazily inside `derived_geometry`,
 # not at module scope. rules.py imports this module for DERIVED_VARS, and
 # rules.py's whole selling point is that it is static -- "no server, no
 # rollout, no agent". Importing the runner at module scope would drag the MCP
@@ -230,7 +233,7 @@ class DerivedGeometry:
     """Everything this module computes for one episode, in one object so a
     failure message can name the inputs as well as the mismatched output."""
     scenario_id: str
-    sut_point: tuple[float, float]
+    sut_spans: tuple[Segment, ...]
     decision_hour: str
     exposure_horizon: str
     sut_offset_km: float
@@ -325,39 +328,44 @@ def horizon_widths_km(scenario: ScenarioFile) -> dict[str, float]:
 
 
 def sut_p_cut_at_exposure_horizon(
-    scenario: ScenarioFile, sut_point: tuple[float, float]
+    scenario: ScenarioFile, sut_spans: tuple[Segment, ...]
 ) -> tuple[float, float]:
     """`(offset_km, p_cut)` for the service under test against the
     decision-hour issuance's cone at the exposure horizon.
 
     Exactly the arithmetic `build_observation` already puts in front of the
-    decider (`radial_offset_km` -> `p_cut_point`), on exactly the same
-    representative point (`runner.service_points`) -- which is the point: this
-    is a number the agent can read, so it is a number a one-line rule can key
-    on. Unrounded, unlike the observation's 4-decimal display copy, so the
-    equality check across halves is not papering over a real difference."""
+    decider (`nearest_span_offset_km` -> `p_cut_region`), on exactly the same
+    storm-cuttable spans (`runner.service_geometry(...).cuttable_spans`) --
+    which is the point: this is a number the agent can read, so it is a
+    number a one-line rule can key on. Unrounded, unlike the observation's
+    4-decimal display copy, so the equality check across halves is not
+    papering over a real difference."""
     horizon = exposure_horizon_hour(scenario)
     cone = decision_issuance(scenario).horizons[horizon]
-    offset = radial_offset_km(cone.center["lat"], cone.center["lon"], *sut_point)
-    return offset, p_cut_point(offset, cone.width_km,
+    offset = nearest_span_offset_km(sut_spans, cone.center["lat"],
+                                    cone.center["lon"])
+    return offset, p_cut_region(sut_spans, cone.center["lat"],
+                               cone.center["lon"], cone.width_km,
                                scenario.damage_radius_km)
 
 
 def sut_exposure_by_horizon(
-    scenario: ScenarioFile, sut_point: tuple[float, float]
+    scenario: ScenarioFile, sut_spans: tuple[Segment, ...]
 ) -> dict[str, tuple[float, float]]:
     """`(offset_km, p_cut)` for the service under test at EVERY horizon the
     decision-hour issuance publishes -- not just the one `exposure_horizon_
-    hours` names. Same `radial_offset_km` -> `p_cut_point` chain as
+    hours` names. Same `nearest_span_offset_km` -> `p_cut_region` chain as
     `sut_p_cut_at_exposure_horizon`, run once per horizon, so a pair whose
     flip lives in a horizon OTHER than the declared exposure one still has
     the SUT's own exposure there held to account."""
     issuance = decision_issuance(scenario)
     out: dict[str, tuple[float, float]] = {}
     for horizon, cone in issuance.horizons.items():
-        offset = radial_offset_km(cone.center["lat"], cone.center["lon"], *sut_point)
-        out[horizon] = (offset, p_cut_point(offset, cone.width_km,
-                                            scenario.damage_radius_km))
+        offset = nearest_span_offset_km(sut_spans, cone.center["lat"],
+                                        cone.center["lon"])
+        out[horizon] = (offset, p_cut_region(sut_spans, cone.center["lat"],
+                                             cone.center["lon"], cone.width_km,
+                                             scenario.damage_radius_km))
     return out
 
 
@@ -422,33 +430,34 @@ class FlipScalars:
         return {name: getattr(self, name) for name in FLIP_VARS}
 
 
-def _ecar_at_cone(scenario: ScenarioFile, cone, points, demands_gbps, *,
+def _ecar_at_cone(scenario: ScenarioFile, cone, spans, demands_gbps, *,
                   exclude: str | None) -> float:
-    """Summed `p_cut x demand_gbps` over every service with a known point and
-    a known demand, optionally excluding one (the SUT)."""
+    """Summed `p_cut x demand_gbps` over every service with known spans and
+    a known demand, optionally excluding one (the SUT). A service with no
+    storm-cuttable span contributes 0.0 -- `p_cut_region` of an empty span
+    tuple is exactly 0.0 -- which is what it physically is."""
     total = 0.0
-    for service_id, point in points.items():
+    for service_id, service_spans in spans.items():
         if service_id == exclude:
             continue
         demand = demands_gbps.get(service_id)
         if demand is None:
             continue
-        offset = radial_offset_km(cone.center["lat"], cone.center["lon"],
-                                  *point)
-        total += expected_capacity_at_risk_gbps(
-            p_cut_point(offset, cone.width_km, scenario.damage_radius_km),
-            float(demand))
+        p_cut = p_cut_region(service_spans, cone.center["lat"],
+                             cone.center["lon"], cone.width_km,
+                             scenario.damage_radius_km)
+        total += expected_capacity_at_risk_gbps(p_cut, float(demand))
     return total
 
 
-def flip_scalars_from_points(
+def flip_scalars_from_spans(
     scenario: ScenarioFile, *,
-    points: dict[str, tuple[float, float]],
+    spans: dict[str, tuple[Segment, ...]],
     demands_gbps: dict[str, float],
 ) -> FlipScalars:
     """The pure half of W1.1: the claimant aggregates, given every service's
-    representative point and demand. Split out from `flip_scalars_for` for the
-    same reason `derived_geometry_from_point` is -- so the arithmetic is
+    storm-cuttable spans and demand. Split out from `flip_scalars_for` for the
+    same reason `derived_geometry_from_spans` is -- so the arithmetic is
     unit-testable without a server."""
     issuance = decision_issuance(scenario)
     exposure_horizon = exposure_horizon_hour(scenario)
@@ -461,17 +470,19 @@ def flip_scalars_from_points(
         key=scenario.hours.index))
 
     per_horizon = {
-        horizon: _ecar_at_cone(scenario, cone, points, demands_gbps,
+        horizon: _ecar_at_cone(scenario, cone, spans, demands_gbps,
                                exclude=sut)
         for horizon, cone in issuance.horizons.items()}
 
     # Fail loud, exactly like `derived_geometry` does for the identical gap:
-    # a missing SUT point must not silently zero `sut_ecar_by_horizon`, which
+    # a missing SUT entry must not silently zero `sut_ecar_by_horizon`, which
     # is precisely the side of the comparison W1.5's `assert_flip_dominates`
     # reads -- a silent zero there could make that check draw a wrong
-    # conclusion with no error signal at all.
-    sut_point = points.get(sut)
-    if sut_point is None:
+    # conclusion with no error signal at all. A service the roster DOES carry
+    # but with zero cuttable spans is not this case -- `spans.get` returns
+    # `()`, not `None`, and `()` is a legitimate all-buried answer.
+    sut_spans = spans.get(sut)
+    if sut_spans is None:
         raise DerivedGeometryError(
             f"{scenario.id}: the server reports no working-path coordinates "
             f"for service_under_test {sut!r}; its own expected capacity at "
@@ -480,11 +491,10 @@ def flip_scalars_from_points(
     sut_demand = float(demands_gbps.get(sut, 0.0))
     sut_ecar = {}
     for horizon, cone in issuance.horizons.items():
-        offset = radial_offset_km(cone.center["lat"], cone.center["lon"],
-                                  *sut_point)
-        sut_ecar[horizon] = expected_capacity_at_risk_gbps(
-            p_cut_point(offset, cone.width_km, scenario.damage_radius_km),
-            sut_demand)
+        p_cut = p_cut_region(sut_spans, cone.center["lat"],
+                             cone.center["lon"], cone.width_km,
+                             scenario.damage_radius_km)
+        sut_ecar[horizon] = expected_capacity_at_risk_gbps(p_cut, sut_demand)
 
     return FlipScalars(
         scenario_id=scenario.id,
@@ -506,7 +516,7 @@ async def flip_scalars_for(client: "Client", scenarios: list[ScenarioFile],
     """`{scenario_id: FlipScalars}` for a whole suite off ONE server
     connection, the same shape and the same one-state-file contract
     `derived_scalars_for` has."""
-    from .runner import service_points          # lazy: see the module note
+    from .runner import service_geometry          # lazy: see the module note
 
     state_files = {s.state_file for s in scenarios}
     if len(state_files) > 1:
@@ -514,55 +524,55 @@ async def flip_scalars_for(client: "Client", scenarios: list[ScenarioFile],
             f"flip_scalars_for got episodes across {len(state_files)} "
             f"different state files ({sorted(state_files)}) but only one "
             f"server connection; call it once per state file")
-    points = await service_points(client, topology_path)
+    geometry = await service_geometry(client, topology_path)
     services = await call_tool_json(client, "get_services")
     demands = {s["id"]: float(s["demand_gbps"]) for s in services["services"]}
-    return {s.id: flip_scalars_from_points(s, points=points,
-                                           demands_gbps=demands)
+    return {s.id: flip_scalars_from_spans(s, spans=geometry.cuttable_spans,
+                                          demands_gbps=demands)
             for s in scenarios}
 
 
-def derived_geometry_from_point(
-    scenario: ScenarioFile, sut_point: tuple[float, float]
+def derived_geometry_from_spans(
+    scenario: ScenarioFile, sut_spans: tuple[Segment, ...]
 ) -> DerivedGeometry:
     """The pure half: everything above, given the service under test's
-    representative point. Split out from `derived_geometry` so the geometry
+    storm-cuttable spans. Split out from `derived_geometry` so the geometry
     is unit-testable without a server."""
-    offset, p_cut = sut_p_cut_at_exposure_horizon(scenario, sut_point)
+    offset, p_cut = sut_p_cut_at_exposure_horizon(scenario, sut_spans)
     return DerivedGeometry(
         scenario_id=scenario.id,
-        sut_point=sut_point,
+        sut_spans=sut_spans,
         decision_hour=scenario.decision_hour,
         exposure_horizon=exposure_horizon_hour(scenario),
         sut_offset_km=offset,
         sut_p_cut_at_exposure_horizon=p_cut,
         within_issuance_cone_motion_kmh=within_issuance_cone_motion_kmh(scenario),
         horizon_widths_km=horizon_widths_km(scenario),
-        sut_exposure_by_horizon=sut_exposure_by_horizon(scenario, sut_point))
+        sut_exposure_by_horizon=sut_exposure_by_horizon(scenario, sut_spans))
 
 
 async def derived_geometry(client: "Client", scenario: ScenarioFile, *,
                            topology_path: str | Path) -> DerivedGeometry:
-    """MCP-backed: read the service under test's REAL representative point off
+    """MCP-backed: read the service under test's REAL storm-cuttable spans off
     a live server loaded with this half's own state file, then derive.
 
     This is deliberately not computed from the state JSON directly. The
-    representative point is the midpoint of the service's WORKING PATH node
-    coordinates, and reconstructing a working path from the persisted model
-    would reimplement what the server owns (CLAUDE.md's hard seam). It is also
-    why this function is async and takes a client, the same shape
-    `assert_menus_identical` and `assert_each_baseline_variant_ties` already
-    have."""
-    from .runner import service_points          # lazy: see the module note
+    spans come from the service's WORKING PATH node coordinates filtered by
+    the event's own vulnerability filter, and reconstructing a working path
+    from the persisted model would reimplement what the server owns
+    (CLAUDE.md's hard seam). It is also why this function is async and takes
+    a client, the same shape `assert_menus_identical` and
+    `assert_each_baseline_variant_ties` already have."""
+    from .runner import service_geometry          # lazy: see the module note
 
-    points = await service_points(client, topology_path)
-    point = points.get(scenario.service_under_test)
-    if point is None:
+    geometry = await service_geometry(client, topology_path)
+    spans = geometry.cuttable_spans.get(scenario.service_under_test)
+    if spans is None:
         raise DerivedGeometryError(
             f"{scenario.id}: the server reports no working-path coordinates "
             f"for service_under_test {scenario.service_under_test!r}; its "
             f"exposure geometry cannot be derived")
-    return derived_geometry_from_point(scenario, point)
+    return derived_geometry_from_spans(scenario, spans)
 
 
 async def derived_scalars_for(client: "Client", scenarios: list[ScenarioFile],
@@ -573,12 +583,12 @@ async def derived_scalars_for(client: "Client", scenarios: list[ScenarioFile],
     `assertions.assert_no_single_variable_rule_solves` consume.
 
     Every shipped episode names the same `state_file`, so the service under
-    test's representative point is the same in all of them and reading it once
-    is not a shortcut, it is the same number seven times. That is asserted
-    rather than assumed: a future episode on a different state file would
-    silently get the wrong coordinates, which is precisely the class of
+    test's storm-cuttable spans are the same in all of them and reading them
+    once is not a shortcut, it is the same spans seven times. That is
+    asserted rather than assumed: a future episode on a different state file
+    would silently get the wrong geometry, which is precisely the class of
     error this module exists to make impossible."""
-    from .runner import service_points          # lazy: see the module note
+    from .runner import service_geometry          # lazy: see the module note
 
     state_files = {s.state_file for s in scenarios}
     if len(state_files) > 1:
@@ -586,14 +596,14 @@ async def derived_scalars_for(client: "Client", scenarios: list[ScenarioFile],
             f"derived_scalars_for got episodes across {len(state_files)} "
             f"different state files ({sorted(state_files)}) but only one "
             f"server connection; call it once per state file")
-    points = await service_points(client, topology_path)
+    geometry = await service_geometry(client, topology_path)
     out: dict[str, dict[str, float]] = {}
     for scenario in scenarios:
-        point = points.get(scenario.service_under_test)
-        if point is None:
+        spans = geometry.cuttable_spans.get(scenario.service_under_test)
+        if spans is None:
             raise DerivedGeometryError(
                 f"{scenario.id}: the server reports no working-path "
                 f"coordinates for service_under_test "
                 f"{scenario.service_under_test!r}")
-        out[scenario.id] = derived_geometry_from_point(scenario, point).scalars()
+        out[scenario.id] = derived_geometry_from_spans(scenario, spans).scalars()
     return out

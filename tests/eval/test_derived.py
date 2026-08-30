@@ -12,10 +12,12 @@ import textwrap
 
 import pytest
 
-from storm_reoptimizer.eval.cone import p_cut_point, radial_offset_km
+from storm_reoptimizer.eval.cone import (
+    nearest_span_offset_km, p_cut_region, radial_offset_km,
+)
 from storm_reoptimizer.eval.derived import (
-    DERIVED_VARS, FLIP_VARS, DerivedGeometryError, derived_geometry_from_point,
-    exposure_horizon_hour, flip_scalars_from_points, horizon_widths_km,
+    DERIVED_VARS, FLIP_VARS, DerivedGeometryError, derived_geometry_from_spans,
+    exposure_horizon_hour, flip_scalars_from_spans, horizon_widths_km,
     sut_p_cut_at_exposure_horizon, within_issuance_cone_motion_kmh,
 )
 from storm_reoptimizer.eval.rules import (
@@ -63,7 +65,16 @@ EPISODE = textwrap.dedent("""
 
 # Somewhere on the toy topology, far enough off the t3 cone axis in one
 # fixture and dead-centre in the other that p_cut genuinely separates.
-SUT_POINT = (25.0, 81.0)
+def _span(lat, lon):
+    """A degenerate (zero-length) span at one point. p_cut_region's own
+    correctness argument (test_exposure_model.py) is that the region model
+    degenerates EXACTLY to the closed-form point model as a span shrinks to
+    zero length -- so this stands in for the old representative-point tests
+    without changing what any of them assert."""
+    return (lat, lon), (lat, lon)
+
+
+SUT_SPANS = (_span(25.0, 81.0),)
 
 
 def _episode(tmp_path, sid, *, label="wait", t3_lat=25.0, t3_width=90,
@@ -95,14 +106,15 @@ def test_an_exposure_horizon_off_the_end_of_the_timeline_is_an_error(tmp_path):
 
 def test_p_cut_is_the_same_arithmetic_the_observation_shows_the_decider(tmp_path):
     """Not an independent reimplementation -- deliberately the same
-    radial_offset_km -> p_cut_point chain build_observation puts in front
-    of the decider, because the point is that this is a number the agent can
-    read and therefore a number a one-line rule can key on."""
+    nearest_span_offset_km -> p_cut_region chain build_observation puts in
+    front of the decider, because the point is that this is a number the
+    agent can read and therefore a number a one-line rule can key on."""
     scenario = _episode(tmp_path, "A", t3_lat=25.9)
-    offset, p_cut = sut_p_cut_at_exposure_horizon(scenario, SUT_POINT)
-    expected_offset = radial_offset_km(25.9, 81.0, *SUT_POINT)
+    offset, p_cut = sut_p_cut_at_exposure_horizon(scenario, SUT_SPANS)
+    expected_offset = nearest_span_offset_km(SUT_SPANS, 25.9, 81.0)
     assert offset == pytest.approx(expected_offset)
-    assert p_cut == pytest.approx(p_cut_point(expected_offset, 90.0, 74.0))
+    assert p_cut == pytest.approx(
+        p_cut_region(SUT_SPANS, 25.9, 81.0, 90.0, 74.0))
     # Unrounded, unlike the observation's 4-decimal display copy: the
     # equality check across halves must not paper over a real difference.
     assert p_cut != round(p_cut, 4) or p_cut in (0.0, 1.0)
@@ -110,9 +122,9 @@ def test_p_cut_is_the_same_arithmetic_the_observation_shows_the_decider(tmp_path
 
 def test_p_cut_is_near_one_on_the_cone_axis_and_falls_off_it(tmp_path):
     on_axis = sut_p_cut_at_exposure_horizon(
-        _episode(tmp_path, "A", t3_lat=25.0), SUT_POINT)[1]
+        _episode(tmp_path, "A", t3_lat=25.0), SUT_SPANS)[1]
     off_axis = sut_p_cut_at_exposure_horizon(
-        _episode(tmp_path, "B", t3_lat=26.0), SUT_POINT)[1]
+        _episode(tmp_path, "B", t3_lat=26.0), SUT_SPANS)[1]
     assert on_axis > off_axis
     assert 0.0 < off_axis < on_axis < 1.0
 
@@ -143,10 +155,10 @@ def test_horizon_widths_cover_every_cone_the_issuance_publishes(tmp_path):
 
 
 def test_derived_geometry_reports_the_inputs_alongside_the_numbers(tmp_path):
-    derived = derived_geometry_from_point(
-        _episode(tmp_path, "A", t3_lat=25.9), SUT_POINT)
+    derived = derived_geometry_from_spans(
+        _episode(tmp_path, "A", t3_lat=25.9), SUT_SPANS)
     assert derived.scenario_id == "A"
-    assert derived.sut_point == SUT_POINT
+    assert derived.sut_spans == SUT_SPANS
     assert derived.decision_hour == "t1"
     assert derived.exposure_horizon == "t3"
     assert set(derived.scalars()) == {
@@ -165,7 +177,7 @@ def test_the_rule_enumeration_widens_when_derived_values_are_supplied(tmp_path):
     # chance: only the constant greedy rules can reach 0.5-per-half parity.
     assert best_rule(pair)[1] < 1.0
 
-    derived = {e.id: derived_geometry_from_point(e, SUT_POINT).scalars()
+    derived = {e.id: derived_geometry_from_spans(e, SUT_SPANS).scalars()
                for e in pair}
     rule, score = best_rule(pair, derived)
     assert score == pytest.approx(1.0)
@@ -227,11 +239,11 @@ def _two_horizon_scenario(example_scenario_yaml, write_scenario):
 def test_the_claimant_aggregate_excludes_the_service_under_test(
         example_scenario_yaml, write_scenario):
     scenario = _two_horizon_scenario(example_scenario_yaml, write_scenario)
-    points = {"storm-svc-1": (25.2, 81.0), "svc-b": (25.2, 81.0)}
+    spans = {"storm-svc-1": (_span(25.2, 81.0),), "svc-b": (_span(25.2, 81.0),)}
     demands = {"storm-svc-1": 300.0, "svc-b": 100.0}
 
-    flip = flip_scalars_from_points(scenario, points=points,
-                                    demands_gbps=demands)
+    flip = flip_scalars_from_spans(scenario, spans=spans,
+                                   demands_gbps=demands)
 
     # Both services sit on the SAME point, so the SUT's own exposure and the
     # claimant's are the same p_cut. If the SUT leaked into the claimant sum
@@ -243,11 +255,11 @@ def test_the_claimant_aggregate_excludes_the_service_under_test(
 def test_the_before_aggregate_sums_only_strictly_earlier_horizons(
         example_scenario_yaml, write_scenario):
     scenario = _two_horizon_scenario(example_scenario_yaml, write_scenario)
-    points = {"storm-svc-1": (25.2, 81.0), "svc-b": (25.0, 81.0)}
+    spans = {"storm-svc-1": (_span(25.2, 81.0),), "svc-b": (_span(25.0, 81.0),)}
     demands = {"storm-svc-1": 300.0, "svc-b": 100.0}
 
-    flip = flip_scalars_from_points(scenario, points=points,
-                                    demands_gbps=demands)
+    flip = flip_scalars_from_spans(scenario, spans=spans,
+                                   demands_gbps=demands)
 
     assert flip.exposure_horizon == "t3"
     assert flip.earlier_horizons == ("t2",)
@@ -269,11 +281,11 @@ def test_the_min_aggregate_picks_the_other_horizon_than_the_peak(
     is -- which is how it solved the shipped suite 6/6 when the other three
     variants could not."""
     scenario = _two_horizon_scenario(example_scenario_yaml, write_scenario)
-    points = {"storm-svc-1": (25.2, 81.0), "svc-b": (25.0, 81.0)}
+    spans = {"storm-svc-1": (_span(25.2, 81.0),), "svc-b": (_span(25.0, 81.0),)}
     demands = {"storm-svc-1": 300.0, "svc-b": 100.0}
 
-    flip = flip_scalars_from_points(scenario, points=points,
-                                    demands_gbps=demands)
+    flip = flip_scalars_from_spans(scenario, spans=spans,
+                                   demands_gbps=demands)
 
     assert (flip.claimant_ecar_min_over_horizons
             < flip.claimant_ecar_peak_over_horizons)
@@ -302,11 +314,11 @@ def test_the_min_aggregate_reads_the_EARLIER_horizon_when_that_is_smaller(
     # svc-b now sits on the t3 (exposure) centre rather than the t2 one, so
     # the EXPOSURE horizon is its high-water mark and the earlier horizon is
     # the small one.
-    points = {"storm-svc-1": (25.0, 81.0), "svc-b": (25.2, 81.0)}
+    spans = {"storm-svc-1": (_span(25.0, 81.0),), "svc-b": (_span(25.2, 81.0),)}
     demands = {"storm-svc-1": 300.0, "svc-b": 100.0}
 
-    flip = flip_scalars_from_points(scenario, points=points,
-                                    demands_gbps=demands)
+    flip = flip_scalars_from_spans(scenario, spans=spans,
+                                   demands_gbps=demands)
 
     assert flip.earlier_horizons == ("t2",)
     assert (flip.claimant_ecar_before_exposure_horizon
@@ -325,8 +337,9 @@ def test_the_min_and_peak_aggregates_coincide_on_a_single_horizon(
     the exposure horizon's, since the issuance publishes nothing else. (This
     is T1's shape after Task 4 deleted its dominating `t2` nowcast.)"""
     scenario = load_scenario(write_scenario(example_scenario_yaml))
-    flip = flip_scalars_from_points(
-        scenario, points={"storm-svc-1": (25.2, 81.0), "svc-b": (25.0, 81.0)},
+    flip = flip_scalars_from_spans(
+        scenario, spans={"storm-svc-1": (_span(25.2, 81.0),),
+                         "svc-b": (_span(25.0, 81.0),)},
         demands_gbps={"storm-svc-1": 300.0, "svc-b": 100.0})
 
     assert flip.earlier_horizons == ()
@@ -343,8 +356,9 @@ def test_the_min_and_peak_aggregates_coincide_on_a_single_horizon(
 def test_a_single_horizon_issuance_has_no_before_aggregate(
         example_scenario_yaml, write_scenario):
     scenario = load_scenario(write_scenario(example_scenario_yaml))
-    flip = flip_scalars_from_points(
-        scenario, points={"storm-svc-1": (25.2, 81.0), "svc-b": (25.0, 81.0)},
+    flip = flip_scalars_from_spans(
+        scenario, spans={"storm-svc-1": (_span(25.2, 81.0),),
+                         "svc-b": (_span(25.0, 81.0),)},
         demands_gbps={"storm-svc-1": 300.0, "svc-b": 100.0})
 
     assert flip.earlier_horizons == ()
@@ -354,8 +368,8 @@ def test_a_single_horizon_issuance_has_no_before_aggregate(
 def test_the_flip_values_view_carries_exactly_the_swept_scalars(
         example_scenario_yaml, write_scenario):
     scenario = load_scenario(write_scenario(example_scenario_yaml))
-    flip = flip_scalars_from_points(
-        scenario, points={"storm-svc-1": (25.2, 81.0)},
+    flip = flip_scalars_from_spans(
+        scenario, spans={"storm-svc-1": (_span(25.2, 81.0),)},
         demands_gbps={"storm-svc-1": 300.0})
 
     assert set(flip.values()) == set(FLIP_VARS)
@@ -373,12 +387,12 @@ def test_a_missing_sut_point_raises_rather_than_silently_zeroing(
         example_scenario_yaml, write_scenario):
     """Mirrors `derived_geometry`'s existing behaviour for the identical
     failure (no working-path coordinates for service_under_test): a missing
-    SUT point must raise, not silently zero `sut_ecar_by_horizon` -- exactly
+    SUT entry must raise, not silently zero `sut_ecar_by_horizon` -- exactly
     the field W1.5's `assert_flip_dominates` reads as the SUT's own side of
     the comparison. A silent zero there would let that check draw a wrong
     conclusion with no error signal at all."""
     scenario = load_scenario(write_scenario(example_scenario_yaml))
     with pytest.raises(DerivedGeometryError, match="storm-svc-1"):
-        flip_scalars_from_points(
-            scenario, points={"svc-b": (25.0, 81.0)},
+        flip_scalars_from_spans(
+            scenario, spans={"svc-b": (_span(25.0, 81.0),)},
             demands_gbps={"storm-svc-1": 300.0, "svc-b": 100.0})

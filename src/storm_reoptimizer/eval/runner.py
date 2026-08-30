@@ -41,6 +41,7 @@ from mcp.client import Client
 from ..events.filters import get_filter
 from ..geo_mapper import Edge, load_edges, map_geo_event_to_assets
 from ..mcp_client import call_tool_json
+from .cone import Segment
 from .decisions import ConstraintDecision, Decider, candidate_index
 from .ledger import SpareLedger, pairs_needed
 from .observation import build_observation, latest_issuance, lead_time_hours_for
@@ -48,6 +49,15 @@ from .plans import PlanTranslationError, build_topology_index, plan_from_candida
 from .scenario_file import ScenarioFile
 
 MAX_ITERATIONS = 5
+
+# The one event type this harness runs. It is deliberately NOT a scenario-file
+# key: the schema is strict and every episode is a storm, so a key nobody ever
+# varies would be one more thing to typo. Both the risk-group builder and the
+# exposure span filter read it, and assertions.py imports it for the
+# realized-cuts and claimant-exposure invariants -- one name, so the filter
+# that decides which fibres a storm can cut and the filter that decides which
+# spans score exposure can never disagree.
+EVENT_TYPE = "storm"
 
 
 @dataclass(frozen=True)
@@ -179,6 +189,13 @@ def observation_record(obs, geometry: ServiceGeometry) -> dict:
                           if s in geometry.paths},
         "unmapped_nodes": {s: geometry.unmapped_nodes[s] for s in visible
                            if s in geometry.unmapped_nodes},
+        # What build_observation actually scored exposure over -- the storm-
+        # cuttable subset of the working path, not the whole polyline. The
+        # viewer draws this to show exactly which fibre put a service at
+        # risk, alongside `service_paths`' full route.
+        "cuttable_spans": {s: [[list(point) for point in span]
+                               for span in geometry.cuttable_spans[s]]
+                          for s in visible if s in geometry.cuttable_spans},
     }
 
 
@@ -225,13 +242,21 @@ class _CountingClient:
 class ServiceGeometry:
     """One hour's read of where every service physically rides.
 
-    `points` is what build_observation consumes -- the averaged midpoint the
-    exposure arithmetic reduces each service to. `paths` is the polyline that
-    midpoint came from, and the two disagree in ways that matter: D1's SUT
-    sits 58.4 km off a 7.5 km half-width cone -- outside the polygon -- at
-    p_cut 0.976. A viewer drawing only paths would make D1 look like a harness
-    bug; one drawing only dots would hide why it isn't (run-viewer design,
-    "Draw the path, mark the point").
+    `cuttable_spans` is what build_observation now consumes -- the event
+    filter's admitted subset of the working path's real spans, as against
+    `points`, the averaged midpoint the exposure arithmetic used to reduce
+    each service to (Task 3 of the exposure-and-depot plan). `paths` is the
+    full polyline either was derived from, and it can disagree with both in
+    ways that matter: D1's SUT sits 58.4 km off a 7.5 km half-width cone --
+    outside the polygon -- at a midpoint-model p_cut of 0.976. A viewer
+    drawing only paths would make D1 look like a harness bug; one drawing
+    only the scored spans would hide why it isn't (run-viewer design, "Draw
+    the path, mark the point").
+
+    `points` is kept for the viewer's own trace (`observation_record`'s
+    `service_points`) and for `service_points()`'s existing callers
+    (derived.py no longer among them; tools/probe_episode.py still is) -- it
+    is no longer the exposure input.
 
     `unmapped_nodes` exists because runner.py's coordinate lookup drops any
     node the LOCAL topology lacks. All 180 edges resolve today, so it is
@@ -243,17 +268,35 @@ class ServiceGeometry:
     # oms_id -> [src_node_id, dst_node_id]
     oms_nodes: dict[str, list[str]]
     unmapped_nodes: dict[str, list[str]]
+    # service_id -> the WORKING path's spans that this event's filter admits,
+    # as ((lat, lon), (lat, lon)) pairs. This is what build_observation scores
+    # exposure over. Working path only, matching what `points` has always
+    # averaged: storm-svc-1 reads 1 aerial span of 2 here, and 2 of 4 if the
+    # protection path were included.
+    cuttable_spans: dict[str, tuple[Segment, ...]]
+    # service_id -> (src_site, dst_site). The two sites a new lightpath for
+    # this service would charge a transponder to, and the key the
+    # co-terminating grouping in observation.py buckets on.
+    endpoint_sites: dict[str, tuple[str, str]]
 
 
 async def service_geometry(client: Client, topology_path: str | Path, *,
-                           call=None) -> ServiceGeometry:
+                           call=None,
+                           edges: list[Edge] | None = None) -> ServiceGeometry:
     """Everything the four per-hour reads already know about where services
     ride. `service_points` is this function's `points` field and nothing more;
     the rest was computed and discarded before (run-viewer design, §5.1).
 
     No new server calls: the same four, in the same order, so a trace's
     `tool_calls` figure stays comparable with every run recorded before this
-    change."""
+    change.
+
+    `edges` is an optional pre-loaded `load_edges(topology_path)` result --
+    run_episode already loads it once per episode to define risk groups, and
+    this function is called once per HOUR, so accepting it here avoids
+    re-parsing the topology JSON and rebuilding every Shapely LineString on
+    every single hour for no reason. Callers with no edges handy (every
+    existing one) leave it None and it is loaded exactly as before."""
     invoke = call if call is not None else partial(call_tool_json, client)
     raw = json.loads(Path(topology_path).read_text(encoding="utf-8-sig"))
     coords = {n["id"]: (n["lat"], n["lon"]) for n in raw["graph"]["nodes"]}
@@ -269,6 +312,19 @@ async def service_geometry(client: Client, topology_path: str | Path, *,
     oms_nodes = {o["id"]: [o["src_node_id"], o["dst_node_id"]]
                  for o in optical["oms"]}
 
+    # The storm's own vulnerability filter, keyed on the LOCAL topology's
+    # edges (mount_type lives there, not on the server's OMS records) -- the
+    # same table _define_horizon_risk_groups uses, so a fibre this module
+    # scores exposure over and a fibre the risk group would name can never
+    # disagree.
+    filter_fn = get_filter(EVENT_TYPE)
+    if edges is None:
+        edges = load_edges(topology_path)
+    edge_mount: dict[tuple[str, str], Edge] = {}
+    for edge in edges:
+        edge_mount[(edge.src, edge.dst)] = edge
+        edge_mount[(edge.dst, edge.src)] = edge
+
     def walk(link_ids) -> list[str]:
         # Dedupe before returning: a node shared between two adjacent OMS legs
         # (any interior junction on a multi-hop path) would otherwise be
@@ -282,9 +338,24 @@ async def service_geometry(client: Client, topology_path: str | Path, *,
                 nodes.extend([oms["src_node_id"], oms["dst_node_id"]])
         return list(dict.fromkeys(nodes))
 
+    def walk_legs(link_ids) -> list[tuple[str, str]]:
+        """The ordered OMS legs a path rides, as (src_node, dst_node). The
+        node walker above DEDUPES, which is right for a representative point
+        and destroys the span structure -- so this is a second pass over the
+        same data rather than a projection of the first."""
+        legs: list[tuple[str, str]] = []
+        for link_id in link_ids or ():
+            lp_id = lp_by_link.get(link_id)
+            for oms_id in oms_seq_by_lp.get(lp_id, []):
+                oms = oms_by_id[oms_id]
+                legs.append((oms["src_node_id"], oms["dst_node_id"]))
+        return legs
+
     points: dict[str, tuple[float, float]] = {}
     paths: dict[str, dict[str, list[str]]] = {}
     unmapped: dict[str, list[str]] = {}
+    cuttable: dict[str, tuple[Segment, ...]] = {}
+    endpoints: dict[str, tuple[str, str]] = {}
     for svc in services["services"]:
         working = walk(svc["working_path"])
         protection = walk(svc.get("protection_path"))
@@ -294,12 +365,22 @@ async def service_geometry(client: Client, topology_path: str | Path, *,
         if missing:
             unmapped[svc["id"]] = missing
         known = [coords[n] for n in working if n in coords]
-        if not known:
-            continue
-        points[svc["id"]] = (sum(p[0] for p in known) / len(known),
-                             sum(p[1] for p in known) / len(known))
+        if known:
+            points[svc["id"]] = (sum(p[0] for p in known) / len(known),
+                                 sum(p[1] for p in known) / len(known))
+
+        legs = walk_legs(svc["working_path"])
+        spans = tuple(
+            (coords[a], coords[b]) for a, b in legs
+            if a in coords and b in coords
+            and (edge := edge_mount.get((a, b))) is not None
+            and filter_fn(edge))
+        cuttable[svc["id"]] = spans
+        endpoints[svc["id"]] = (svc["src_router"].removeprefix("router_"),
+                                svc["dst_router"].removeprefix("router_"))
     return ServiceGeometry(points=points, paths=paths, oms_nodes=oms_nodes,
-                           unmapped_nodes=unmapped)
+                           unmapped_nodes=unmapped, cuttable_spans=cuttable,
+                           endpoint_sites=endpoints)
 
 
 async def service_points(client: Client, topology_path: str | Path, *,
@@ -333,7 +414,7 @@ async def _define_horizon_risk_groups(
 
     define_risk_group rejects a duplicate rg_id, so ids are minted per
     (scenario, issuance, horizon) and re-definition is skipped."""
-    filter_fn = get_filter("storm")
+    filter_fn = get_filter(EVENT_TYPE)
     topo = await counting.call("get_topology", {"layer": "optical"})
     rg_ids: dict[str, str] = {}
     for horizon, cone in issuance.horizons.items():
@@ -349,7 +430,7 @@ async def _define_horizon_risk_groups(
                      for a in oms["elements"] if a.startswith("fiber_")]
         await counting.call("define_risk_group", {
             "rg_id": rg_id, "asset_ids": fiber_ids,
-            "metadata": {"event_type": "storm", "scenario": scenario.id,
+            "metadata": {"event_type": EVENT_TYPE, "scenario": scenario.id,
                          "issued_at": issuance.issued_at, "horizon": horizon}})
         defined.add(rg_id)
     return rg_ids
@@ -383,13 +464,13 @@ async def run_episode(
         # to escape a cone, was still inside it (remediation spec, F4).
         # Costs four tool calls an hour, counted through `counting`.
         geometry = await service_geometry(client, topology_path,
-                                          call=counting.call)
-        points = geometry.points
+                                          call=counting.call, edges=edges)
         services = tuple((await counting.call("get_services"))["services"])
         # The roster scoring reads to know who could have survived -- the
         # final simulate_ip_routing reports links, not services.
         record["services"] = [s["id"] for s in services]
-        obs_kwargs = dict(service_points=points, services=services,
+        obs_kwargs = dict(service_spans=geometry.cuttable_spans,
+                          services=services,
                           spares_on_hand=ledger.on_hand,
                           actions_taken=action_payloads(
                               actions, hours=scenario.hours),

@@ -22,7 +22,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from .cone import expected_capacity_at_risk_gbps, p_cut_point, radial_offset_km
+from .cone import (
+    Segment, expected_capacity_at_risk_gbps, nearest_span_offset_km,
+    p_cut_region,
+)
 from .scenario_file import Issuance, ScenarioFile
 
 # The rule, stated as data so the trace can carry it. `zero` -> 0 hours;
@@ -102,6 +105,12 @@ class Observation:
     # service_id -> horizon hour -> {"hours_ahead", "offset_km", "p_cut",
     #                               "width_km", "demand_gbps",
     #                               "expected_capacity_at_risk_gbps"}
+    # `offset_km` is the distance from the cone centre to the NEAREST point
+    # of the service's storm-cuttable span union (0.0 if the centre lies on
+    # one), and `p_cut` is the probability that union is cut -- not a
+    # representative-midpoint reading of either. A service with no
+    # storm-cuttable span on its working path has no key here at all: see
+    # `build_observation`.
     exposure: dict[str, dict[str, dict[str, float]]]
     services: tuple[dict, ...]
     spares_on_hand: int              # transponder PAIRS
@@ -164,7 +173,7 @@ class Observation:
 
 def build_observation(
     scenario: ScenarioFile, hour: str, *,
-    service_points: dict[str, tuple[float, float]],
+    service_spans: dict[str, tuple[Segment, ...]],
     services: tuple[dict, ...],
     spares_on_hand: int,
     risk_group_ids: dict[str, str] | None = None,
@@ -173,27 +182,36 @@ def build_observation(
     actions_taken: tuple[dict, ...] = (),
     spares_spent: int = 0,
 ) -> Observation:
-    """The observation for one hour. `service_points` maps a service id to a
-    representative (lat, lon) for its footprint -- the runner derives these
-    from the topology; keeping them an argument is what lets this module stay
-    pure and testable without a server."""
+    """The observation for one hour. `service_spans` maps a service id to the
+    spans of its working path that the event's own filter admits -- the
+    runner derives these from the server's view of the path plus the local
+    topology's coordinates and mount types; keeping them an argument is what
+    lets this module stay pure and testable without a server, exactly as
+    `service_points` did."""
     issuance = latest_issuance(scenario, hour)
     hour_index = scenario.hours.index(hour)
 
     exposure: dict[str, dict[str, dict[str, float]]] = {}
     for svc in services:
-        point = service_points.get(svc["id"])
-        if point is None:
+        spans = service_spans.get(svc["id"])
+        if not spans:
+            # No storm-cuttable span: p_cut is exactly 0 at every horizon, and
+            # an all-zero row would only invite an undefined `offset_km`. The
+            # service is still counted in project_observation's
+            # `omitted_services["count"]`, which is over the full roster.
             continue
-        lat, lon = point
         per_horizon: dict[str, dict[str, float]] = {}
         for horizon, cone in issuance.horizons.items():
-            offset = radial_offset_km(cone.center["lat"], cone.center["lon"],
-                                      lat, lon)
-            p_cut = round(p_cut_point(
-                offset, cone.width_km, scenario.damage_radius_km), 4)
+            lat, lon = cone.center["lat"], cone.center["lon"]
+            offset = nearest_span_offset_km(spans, lat, lon)
+            p_cut = round(p_cut_region(spans, lat, lon, cone.width_km,
+                                       scenario.damage_radius_km), 4)
             per_horizon[horizon] = {
                 "hours_ahead": scenario.hours.index(horizon) - hour_index,
+                # Distance from the cone centre to the NEAREST CUTTABLE SPAN,
+                # not to a representative midpoint -- so
+                # `offset_km <= width_km / 2` reads "a span this storm can cut
+                # is inside the footprint".
                 "offset_km": round(offset, 1),
                 "width_km": cone.width_km,
                 "p_cut": p_cut,
