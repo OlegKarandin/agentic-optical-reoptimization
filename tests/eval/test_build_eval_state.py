@@ -3,11 +3,14 @@ target_mean_util, same service count and mean utilization within tolerance
 (eval design spec, "Testing"). This is a real two-stage build against the
 143-node toy topology under the sibling conda env -- slow, and cached on disk
 by the loaded_state_path fixture so the rest of the suite pays for it once."""
+import asyncio
 import json
 import subprocess
 from pathlib import Path
 
 from storm_reoptimizer.geo_mapper import load_edges
+from storm_reoptimizer.eval.runner import service_geometry
+from storm_reoptimizer.mcp_client import connect_server
 
 TOPOLOGY_PATH = (
     Path(__file__).parent.parent.parent
@@ -69,3 +72,56 @@ def test_satna_has_three_independent_aerial_directions():
     assert satna_aerial == {("rewa", "satna"), ("jhansi", "satna"),
                             ("jabalpur", "satna")}
     assert len(aerial) == 73
+
+
+# Exact working-path node lists, read off the CURRENT (pre-Task-7, pre-
+# claimant-pin) eval/states/loaded-s17.json via service_geometry before the
+# claimant pins were added -- a real before/after comparison, not a
+# restatement of whatever the rebuild happens to produce.
+_BACKGROUND_WORKING_PATHS = {
+    "d0029": ["allahabad", "fatehpur", "kanpur"],
+    "d0348": ["kanpur", "fatehpur", "allahabad"],
+    "d0462": [
+        "nagpur", "wardha", "chandrapur", "hyderabad", "raichur",
+        "torangallu", "bangalore", "kolar", "tirupati", "nellore", "ongole",
+        "visakhapatnam", "dhenkanal", "bhubaneshwar", "kharagpur", "kolkata",
+        "raipur", "jabalpur", "satna", "jhansi", "gwalior", "agra",
+        "mathura", "delhi",
+    ],
+    "d0212": [
+        "delhi", "jaipur", "bhilwara", "ratlam", "ujjain", "indore",
+        "jabalpur", "raipur", "bhandara", "nagpur",
+    ],
+    "d0363": [
+        "kolkata", "kharagpur", "bhubaneshwar", "dhenkanal", "raipur",
+        "jabalpur", "satna", "jhansi", "gwalior", "agra", "mathura", "delhi",
+        "jaipur", "bhilwara", "ratlam", "ujjain", "dhar", "khandwa",
+        "jalgaon", "dhulia", "nasik", "mumbai",
+    ],
+}
+
+
+def test_the_rebuild_preserves_every_background_service_geometry(
+        loaded_state_path, local_server_command, local_server_env):
+    """Stage 1 (gravity load) runs BEFORE the stage-2 pins and is not
+    re-routed by them, so adding claimant pins must not move any pre-existing
+    service. Verified empirically before the rebuild: storm-svc-1's
+    representative point came back as (24.855553333333333,
+    81.32777666666667) -- bit-identical to the value T3a.yaml documents.
+
+    These five background services are named because every gold rationale in
+    the suite is arithmetic over them."""
+    async def _geometry():
+        async with connect_server(
+                str(TOPOLOGY_PATH), server_command=local_server_command,
+                env=local_server_env,
+                extra_args=["--state", str(loaded_state_path)]) as client:
+            return await service_geometry(client, TOPOLOGY_PATH)
+
+    geometry = asyncio.run(_geometry())
+
+    assert geometry.points["storm-svc-1"] == (24.855553333333333,
+                                              81.32777666666667)
+    for svc, expected_working in _BACKGROUND_WORKING_PATHS.items():
+        assert svc in geometry.paths, svc
+        assert geometry.paths[svc]["working"] == expected_working, svc

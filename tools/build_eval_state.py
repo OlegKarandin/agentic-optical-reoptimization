@@ -61,11 +61,32 @@ SERVICE_UNDER_TEST = {
     "id": "storm-svc-1", "src": "satna", "dst": "allahabad",
     "demand_gbps": 300.0, "protected": True,
 }
-# Generous, and deliberately local to the pin's endpoints: scarcity in this
+# The satna-homed claimant family (exposure-and-depot design, §3.3). Both
+# DIRECTIONS of one satna <-> X corridor per group, so a single new lightpath
+# genuinely restores the whole group and the claimant aggregate the gold
+# rationales bill is honestly what one transponder buys. Before this, every
+# claimant the rationales named terminated somewhere else entirely -- a satna
+# line card cannot restore kolkata <-> mumbai -- and the contention the eval
+# scored was fictional.
+#
+# Destination and demand come from tools/probe_claimants.py's output; see
+# docs/superpowers/plans/notes/2026-08-30-claimant-family.md for the five
+# properties this corridor satisfies and the probe trail behind it (jabalpur
+# is satna's only aerial direction whose span, ('jabalpur', 'satna'), is
+# disjoint from storm-svc-1's own aerial legs, ('rewa', 'satna') and
+# ('jhansi', 'satna')).
+CLAIMANT_SERVICES = [
+    {"id": "claimant-satna-jabalpur-fwd", "src": "satna", "dst": "jabalpur",
+     "demand_gbps": 100.0, "protected": False},
+    {"id": "claimant-satna-jabalpur-rev", "src": "jabalpur", "dst": "satna",
+     "demand_gbps": 100.0, "protected": False},
+]
+# Generous, and deliberately local to the pins' endpoints: scarcity in this
 # eval is the HARNESS ledger's concern (eval design spec, "spare_inventory is
-# not in the model"), not the builder's. A build that failed to place the
-# service under test for want of inventory would be a setup artifact.
-PIN_SPARE_INVENTORY = {"satna": 4, "allahabad": 4}
+# not in the model"), not the builder's. A build that failed to place a
+# stage-2 pin for want of inventory would be a setup artifact. Widened to
+# cover jabalpur alongside satna/allahabad for the claimant pair above.
+PIN_SPARE_INVENTORY = {"satna": 4, "allahabad": 4, "jabalpur": 4}
 # NOT "srlg": the toy topology has zero static SRLGs (confirmed:
 # toy_india_topology.json's "srlgs" is 0), and generate_demands'/
 # solve_allocation_model's own docs say srlg-basis disjointness is a NO-OP
@@ -285,14 +306,15 @@ def build(topology_path: str, out_path: str, *, seed: int,
               f"subscribed; not treated as fatal (see build()'s docstring)",
               flush=True)
 
+    pins = [SERVICE_UNDER_TEST, *CLAIMANT_SERVICES]
     pin_qot = make_adapter_evaluator(loaded, store, cache=QoTCache())
     pin_result, work = solve_allocation_model(
-        loaded, pin_qot, [SERVICE_UNDER_TEST], PIN_SPARE_INVENTORY)
+        loaded, pin_qot, pins, PIN_SPARE_INVENTORY)
     if pin_result.status is not SolverStatus.SOLUTION or pin_result.unplaced:
         raise SystemExit(
-            f"build_eval_state: could not pin {SERVICE_UNDER_TEST['id']} onto "
-            f"the loaded network (status={pin_result.status}, "
-            f"unplaced={pin_result.unplaced})")
+            f"build_eval_state: could not pin all of "
+            f"{[p['id'] for p in pins]} onto the loaded network "
+            f"(status={pin_result.status}, unplaced={pin_result.unplaced})")
 
     raw = json.loads(Path(topology_path).read_text(encoding="utf-8-sig"))
     doc = dump_state(work, fingerprint=topology_fingerprint(raw), meta={
