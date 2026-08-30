@@ -404,7 +404,8 @@ class ClaudeDecider:
 
     def __init__(self, model: str = DEFAULT_MODEL, *, client=None,
                  p_cut_threshold: float = P_CUT_ENUMERATION_THRESHOLD,
-                 audit_path: str | Path | None = None) -> None:
+                 audit_path: str | Path | None = None,
+                 oms_nodes: dict[str, list[str]] | None = None) -> None:
         self.model = model
         # suite.run_suite keys its results dict AND the trace filename on
         # `name`.
@@ -415,6 +416,14 @@ class ClaudeDecider:
         self._system_prompt = SYSTEM_PROMPT
         # Write-only telemetry; see the class docstring.
         self.last_projection: dict | None = None
+        # oms_id -> [src_node_id, dst_node_id], the static optical adjacency
+        # menu_for_prompt needs to resolve a candidate's new_lightpaths to
+        # endpoint SITES (ledger.spares_needed). Unchanged across an episode
+        # (it is the topology's own OMS graph, not scenario state), so
+        # settable once rather than threaded through `objective`'s signature
+        # -- decisions.py's `Decider` protocol is shared by every decider,
+        # including baselines that never touch spares_needed at all.
+        self.oms_nodes: dict[str, list[str]] = oms_nodes or {}
 
     @property
     def _api(self):
@@ -433,7 +442,7 @@ class ClaudeDecider:
         if unconstrained_menu is not None:
             body["unconstrained_menu"] = unconstrained_menu
         if menu is not None:
-            body["menu"] = _menu_for_prompt(menu)
+            body["menu"] = _menu_for_prompt(menu, self.oms_nodes)
         rendered = json.dumps(body, indent=2, sort_keys=True, default=str)
         return f"{rendered}\n\n{instruction}"
 

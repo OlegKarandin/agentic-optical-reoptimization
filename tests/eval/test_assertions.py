@@ -342,6 +342,7 @@ def test_candidates_that_cost_a_pair_are_not_this_checks_business():
          "new_lightpaths": [{"oms_sequence": ["oms_1"]}],
          "restored_gbps": 300.0, "shortfall_gbps": 0.0, "cost_vector": {}}]}
     _check_no_free_escape("T1a", menu, current={"lp-current-working-0"},
+                          oms_nodes={"oms_1": ["site_a", "site_b"]},
                           **_T1_KW)
 
 

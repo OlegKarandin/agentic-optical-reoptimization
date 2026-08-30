@@ -100,15 +100,19 @@ PROBE_MENU = {
     "pairs": [],
 }
 
+# oms_1's two endpoint SITES, for spares_needed to resolve PROBE_MENU's one
+# real new lightpath against.
+PROBE_OMS_NODES = {"oms_1": ["satna", "rewa"]}
 
-def test_the_probe_projection_shows_what_exists_and_what_it_costs_in_pairs():
-    projected = unconstrained_menu_projection(PROBE_MENU)
+
+def test_the_probe_projection_shows_what_exists_and_what_it_costs_in_spares():
+    projected = unconstrained_menu_projection(PROBE_MENU, PROBE_OMS_NODES)
     assert projected["status"] == "solution"
     assert projected["candidates"] == [
         {"candidate_label": "candidate_0", "lever": "ip_reroute",
-         "pairs_needed": 0},
+         "spares_needed": {}},
         {"candidate_label": "candidate_1", "lever": "optical_reroute",
-         "pairs_needed": 1},
+         "spares_needed": {"satna": 1, "rewa": 1}},
     ]
 
 
@@ -116,7 +120,7 @@ def test_the_probe_projection_withholds_the_cost_vector():
     # F3's fix must not collapse decisions 2 and 3 into one. Weighing the
     # cost vector IS decision 3's job; showing it at decision 2 would make
     # the objective step a rubber stamp (remediation spec, W3.3).
-    projected = unconstrained_menu_projection(PROBE_MENU)
+    projected = unconstrained_menu_projection(PROBE_MENU, PROBE_OMS_NODES)
     for candidate in projected["candidates"]:
         assert "cost_vector" not in candidate
         assert "new_lightpaths" not in candidate
@@ -286,7 +290,8 @@ def test_action_payloads_resolves_the_real_hour_label_not_a_synthesized_one():
     # effective_at_index=3, and index 3 in this list names t6, not t3.
     t2a_hours = ["t0", "t1", "t2", "t6"]
     action = Action(hour="t2", hour_index=2, lever="optical_reroute",
-                    effective_at_index=3, pairs=1, service_id="storm-svc-1")
+                    effective_at_index=3, spares={"satna": 1},
+                    service_id="storm-svc-1")
     [payload] = action_payloads((action,), hours=t2a_hours)
     assert payload["effective_at_index"] == 3
     assert payload["effective_at_hour"] == "t6"
@@ -298,7 +303,8 @@ def test_action_payloads_resolves_none_past_the_last_hour():
     # past the end of `hours` -- must not raise, must not synthesize a label.
     hours = ["t0", "t1"]
     action = Action(hour="t1", hour_index=1, lever="optical_reroute",
-                    effective_at_index=2, pairs=1, service_id="storm-svc-1")
+                    effective_at_index=2, spares={"satna": 1},
+                    service_id="storm-svc-1")
     [payload] = action_payloads((action,), hours=hours)
     assert payload["effective_at_hour"] is None
 
@@ -307,7 +313,7 @@ def test_action_payloads_defaults_hours_to_empty_for_positional_callers():
     # tests/eval/test_scoring.py constructs Action directly and never calls
     # action_payloads with a `hours` argument; the default must not raise.
     action = Action(hour="t0", hour_index=0, lever="ip_reroute",
-                    effective_at_index=0, pairs=0, service_id="storm-svc-1")
+                    effective_at_index=0, spares={}, service_id="storm-svc-1")
     [payload] = action_payloads((action,))
     assert payload["effective_at_hour"] is None
 
@@ -371,7 +377,7 @@ def test_the_constraints_step_is_shown_the_menu_it_is_about_to_narrow(
     assert probe["status"] == "solution"
     assert probe["candidates"], "a real unconstrained menu is never empty here"
     for candidate in probe["candidates"]:
-        assert set(candidate) == {"candidate_label", "lever", "pairs_needed"}
+        assert set(candidate) == {"candidate_label", "lever", "spares_needed"}
     # The probe is the menu BEFORE the agent's avoid set, so it is the same
     # object for every iteration of ONE hour -- it does not depend on the
     # answer, and re-probing per iteration would be a wasted tool call.
@@ -514,7 +520,7 @@ def test_the_next_hour_is_told_what_was_committed_in_the_previous_one(
     remembered = at_t1.actions_taken[0]
     assert remembered["hour"] == "t0"
     assert remembered["lever"] == committed.lever
-    assert remembered["pairs"] == committed.pairs
+    assert remembered["spares"] == committed.spares
     assert remembered["effective_at_index"] == committed.effective_at_index
     # SMOKE's hours are positional (["t0", "t1"]), so the label happens to
     # equal what a naive f"t{index}" scheme would guess here -- the real
@@ -528,7 +534,9 @@ def test_the_next_hour_is_told_what_was_committed_in_the_previous_one(
     # The avoid set is what makes the memory usable: "I already routed
     # around that risk group" is the premise the agent got wrong.
     assert "risk_groups" in remembered["avoid"]
-    assert at_t1.spares_spent == committed.pairs
+    # spares_spent is scoped to the depot site alone (ledger.py's own
+    # contract) -- satna, since that's every real reroute's own home site.
+    assert at_t1.spares_spent == committed.spares.get("satna", 0)
 
 
 def test_a_committed_action_debits_the_ledger_and_records_its_lead_time(
@@ -543,7 +551,9 @@ def test_a_committed_action_debits_the_ledger_and_records_its_lead_time(
     # ip_reroute lands at once; anything else costs the scenario's lead time.
     expected = 0 if action.lever == "ip_reroute" else 1
     assert action.effective_at_index == action.hour_index + expected
-    assert trace.spares_remaining == 2 - sum(a.pairs for a in trace.actions)
+    # spares_remaining is on_hand at the depot site (satna) alone.
+    assert trace.spares_remaining == 2 - sum(
+        a.spares.get("satna", 0) for a in trace.actions)
 
 
 def test_an_unaffordable_choice_is_rejected_and_the_loop_retries(
@@ -771,7 +781,7 @@ def test_service_points_is_unchanged_and_still_costs_four_calls(tmp_path):
                      "get_services"]
 
 
-def test_menu_for_prompt_adds_the_label_and_the_pair_cost_and_keeps_the_rest():
+def test_menu_for_prompt_adds_the_label_and_the_spare_cost_and_keeps_the_rest():
     menu = {"status": "solution", "candidates": [
         {"lever": "ip_reroute", "reused_lightpaths": ["lp_1"],
          "new_lightpaths": [], "restored_gbps": 300.0, "shortfall_gbps": 0.0,
@@ -782,11 +792,12 @@ def test_menu_for_prompt_adds_the_label_and_the_pair_cost_and_keeps_the_rest():
                              "bitrate_gbps": 400.0}],
          "restored_gbps": 300.0, "shortfall_gbps": 0.0,
          "cost_vector": {"transponders": 420.0}}]}
-    out = runner.menu_for_prompt(menu)
+    out = runner.menu_for_prompt(menu, {"oms_sj": ["satna", "jhansi"]})
     assert out["status"] == "solution"
     assert [c["candidate_label"] for c in out["candidates"]] == [
         "candidate_0", "candidate_1"]
-    assert [c["pairs_needed"] for c in out["candidates"]] == [0, 1]
+    assert [c["spares_needed"] for c in out["candidates"]] == [
+        {}, {"satna": 1, "jhansi": 1}]
     # Unlike unconstrained_menu_projection, this one keeps the cost vector --
     # it is what decision 3 weighs.
     assert out["candidates"][0]["cost_vector"] == {"transponders": 418.0}

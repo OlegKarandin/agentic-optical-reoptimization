@@ -179,6 +179,10 @@ MENU = {
     "pairs": [],
 }
 
+# oms_1's two endpoint SITES, for spares_needed to resolve MENU's/PROBE's one
+# real new lightpath against.
+OMS_NODES = {"oms_1": ["site_a", "site_b"]}
+
 
 class FakeToolUse:
     """Mimics exactly the four attributes the decider reads off a real
@@ -240,9 +244,11 @@ OBJECTIVE_OK = {"choice": "candidate_1",
                 "reasoning": "the ip_reroute costs no spare pairs"}
 
 
-def _decider(*responses, model=DEFAULT_MODEL, **kwargs):
+def _decider(*responses, model=DEFAULT_MODEL, oms_nodes=OMS_NODES, **kwargs):
     client = FakeAnthropic(*responses)
-    return ClaudeDecider(model=model, client=client, **kwargs), client
+    return (ClaudeDecider(model=model, client=client, oms_nodes=oms_nodes,
+                          **kwargs),
+            client)
 
 
 def test_the_decider_name_namespaces_the_model():
@@ -401,7 +407,8 @@ def test_the_objective_prompt_states_each_candidates_own_spare_cost():
     decider.objective(_obs(others=CLAIMANTS), MENU)
     content = client.messages.calls[0]["messages"][0]["content"]
     menu = json.loads(content.split("\n\n")[0])["menu"]
-    assert [c["pairs_needed"] for c in menu["candidates"]] == [1, 0]
+    assert [c["spares_needed"] for c in menu["candidates"]] == [
+        {"site_a": 1, "site_b": 1}, {}]
     assert [c["candidate_label"] for c in menu["candidates"]] == [
         "candidate_0", "candidate_1"]
 

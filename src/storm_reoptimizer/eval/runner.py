@@ -43,7 +43,7 @@ from ..geo_mapper import Edge, load_edges, map_geo_event_to_assets
 from ..mcp_client import call_tool_json
 from .cone import Segment
 from .decisions import ConstraintDecision, Decider, candidate_index
-from .ledger import SpareLedger, pairs_needed
+from .ledger import SpareLedger, spares_needed
 from .observation import build_observation, latest_issuance, lead_time_hours_for
 from .plans import PlanTranslationError, build_topology_index, plan_from_candidate
 from .scenario_file import ScenarioFile
@@ -59,6 +59,15 @@ MAX_ITERATIONS = 5
 # spans score exposure can never disagree.
 EVENT_TYPE = "storm"
 
+# The depot site for the one scenario family this harness runs today.
+# scenario.spares_on_hand has always meant "spares at satna" (storm-svc-1's
+# own home site -- see CLAUDE.md's "seeded demo service" note); Task 9 of the
+# exposure-and-depot plan moves this onto ScenarioFile as `depot_site`/
+# `spare_inventory`. Until then this constant IS the real value, not a
+# fallback masking a missing one -- every scenario file this harness loads
+# scores storm-svc-1's exposure against satna's depot.
+DEPOT_SITE = "satna"
+
 
 @dataclass(frozen=True)
 class Action:
@@ -66,7 +75,10 @@ class Action:
     hour_index: int
     lever: str
     effective_at_index: int
-    pairs: int
+    # site -> transponders charged there by this action. Empty for an
+    # ip_reroute. Renamed from `pairs: int` -- a pair spans two sites and
+    # cannot be scoped to one (exposure-and-depot design, §4.1).
+    spares: dict
     service_id: str
     # The avoid set this candidate was routed under -- the one fact that
     # makes "I already routed around that risk group" checkable by the
@@ -93,7 +105,7 @@ def action_payloads(actions, hours=()) -> tuple[dict, ...]:
     every index is then out of range and resolves to `None`, same as an
     index that runs past the end of a real `hours` list -- e.g. acting on the
     episode's last hour with a lead time of 1."""
-    return tuple({"hour": a.hour, "lever": a.lever, "pairs": a.pairs,
+    return tuple({"hour": a.hour, "lever": a.lever, "spares": a.spares,
                   "avoid": a.avoid,
                   "effective_at_index": a.effective_at_index,
                   "effective_at_hour": (hours[a.effective_at_index]
@@ -102,7 +114,8 @@ def action_payloads(actions, hours=()) -> tuple[dict, ...]:
                  for a in actions)
 
 
-def unconstrained_menu_projection(menu: dict) -> dict:
+def unconstrained_menu_projection(menu: dict,
+                                  oms_nodes: dict | None = None) -> dict:
     """What decision 2 is shown of the menu it is about to reshape.
 
     decisions.py states the mechanic: decision 2's `avoid` is what
@@ -115,31 +128,41 @@ def unconstrained_menu_projection(menu: dict) -> dict:
 
     Label, lever and spare cost only. The cost vector is DELIBERATELY absent:
     weighing it is decision 3's job, and showing it here would collapse the
-    two steps into one and make the objective decision a rubber stamp."""
+    two steps into one and make the objective decision a rubber stamp.
+
+    `oms_nodes` resolves each candidate's `new_lightpaths` to endpoint SITES
+    (ledger.spares_needed) -- the static optical adjacency, unchanged across
+    an episode's hours, so callers read it once from
+    `ServiceGeometry.oms_nodes` rather than re-fetching it."""
+    oms_nodes = oms_nodes or {}
     return {"status": menu.get("status"),
             "candidates": [{"candidate_label": f"candidate_{i}",
                             "lever": candidate["lever"],
-                            "pairs_needed": pairs_needed(candidate)}
+                            "spares_needed": spares_needed(candidate,
+                                                          oms_nodes)}
                            for i, candidate in enumerate(
                                menu.get("candidates") or [])]}
 
 
-def menu_for_prompt(menu: dict) -> dict:
+def menu_for_prompt(menu: dict, oms_nodes: dict | None = None) -> dict:
     """The routing menu with two derived fields per candidate: the label the
-    objective decision must answer with, and `pairs_needed` -- the candidate's
-    OWN spare cost (ledger.pairs_needed), which cost_vector["transponders"] is
-    not.
+    objective decision must answer with, and `spares_needed` -- the
+    candidate's OWN spare cost PER SITE (ledger.spares_needed), which
+    cost_vector["transponders"] is not.
 
     Lives here rather than in agent.py because BOTH readers need it: the model
     reads it at decision 3, and the trace records it so a rollout can be read
     afterwards. One function so the two can never disagree (run-viewer design,
     §5.1). Contrast unconstrained_menu_projection above, which strips the cost
     vector on purpose -- that one is shown to decision 2, this one to decision
-    3."""
+    3.
+
+    `oms_nodes` -- see unconstrained_menu_projection above."""
+    oms_nodes = oms_nodes or {}
     projected = dict(menu)
     projected["candidates"] = [
         {**candidate, "candidate_label": f"candidate_{i}",
-         "pairs_needed": pairs_needed(candidate)}
+         "spares_needed": spares_needed(candidate, oms_nodes)}
         for i, candidate in enumerate(menu.get("candidates") or [])]
     return projected
 
@@ -446,7 +469,12 @@ async def run_episode(
     started = time.monotonic()
     counting = _CountingClient(client)
     edges = load_edges(topology_path)
-    ledger = SpareLedger(on_hand=scenario.spares_on_hand)
+    # oms_nodes is filled in from the first hour's geometry below (it is the
+    # static optical adjacency, unchanged across the episode) -- constructing
+    # it here would cost an extra, uncounted-or-miscounted server call before
+    # the per-hour loop even starts.
+    ledger = SpareLedger(inventory={DEPOT_SITE: scenario.spares_on_hand},
+                         depot_site=DEPOT_SITE, oms_nodes={})
     defined_rgs: set[str] = set()
 
     hours: list[dict] = []
@@ -465,6 +493,10 @@ async def run_episode(
         # Costs four tool calls an hour, counted through `counting`.
         geometry = await service_geometry(client, topology_path,
                                           call=counting.call, edges=edges)
+        # Static across the episode; re-assigning it every hour is a no-op
+        # in practice and keeps the ledger's oms_nodes from ever going stale
+        # without adding a server call of its own.
+        ledger.oms_nodes = geometry.oms_nodes
         services = tuple((await counting.call("get_services"))["services"])
         # The roster scoring reads to know who could have survived -- the
         # final simulate_ip_routing reports links, not services.
@@ -507,7 +539,8 @@ async def run_episode(
                 avoid={}, reasoning="unconstrained probe"
             ).route_service_args(scenario.service_under_test)
             probe = unconstrained_menu_projection(
-                await counting.call("route_service", probe_args))
+                await counting.call("route_service", probe_args),
+                geometry.oms_nodes)
             record["unconstrained_menu"] = probe
             last_rejection: dict | None = None
             committed = False
@@ -533,7 +566,7 @@ async def run_episode(
                         # the viewer draws a route from. Recorded through the
                         # SAME function the prompt uses (menu_for_prompt), so
                         # the two cannot disagree.
-                        "menu": menu_for_prompt(menu),
+                        "menu": menu_for_prompt(menu, geometry.oms_nodes),
                         "projected": getattr(decider, "last_projection",
                                              None),
                         "objective": choice.to_dict()}
@@ -601,14 +634,14 @@ async def run_episode(
                     step["outcome"] = commit["status"]
                     continue
 
-                pairs = ledger.debit(candidate, hour=hour,
+                spares = ledger.debit(candidate, hour=hour,
                                      service_id=scenario.service_under_test)
                 lead = lead_time_hours_for(candidate["lever"],
                                            scenario.lead_time_hours)
                 actions.append(Action(
                     hour=hour, hour_index=hour_index,
                     lever=candidate["lever"],
-                    effective_at_index=hour_index + lead, pairs=pairs,
+                    effective_at_index=hour_index + lead, spares=spares,
                     service_id=scenario.service_under_test,
                     avoid=dict(constraints.avoid)))
                 step["outcome"] = "committed"

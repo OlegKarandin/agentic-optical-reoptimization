@@ -95,7 +95,8 @@ def test_an_action_landing_after_the_cut_is_too_late_and_kills_the_service(
 ):
     s = _scenario(tmp_path, "Pa", "act")
     late = Action(hour="t3", hour_index=3, lever="optical_reroute",
-                  effective_at_index=4, pairs=1, service_id="storm-svc-1")
+                  effective_at_index=4, spares={"satna": 1, "allahabad": 1},
+                  service_id="storm-svc-1")
     m = episode_metrics(s, _trace(
         actions=(late,), affected={"t3": ("storm-svc-1",)}))
     assert m["acted_too_late"] is True
@@ -105,7 +106,7 @@ def test_an_action_landing_after_the_cut_is_too_late_and_kills_the_service(
 def test_an_ip_reroute_at_the_cut_hour_lands_in_time(tmp_path):
     s = _scenario(tmp_path, "Pa", "act")
     prompt = Action(hour="t3", hour_index=3, lever="ip_reroute",
-                    effective_at_index=3, pairs=0, service_id="storm-svc-1")
+                    effective_at_index=3, spares={}, service_id="storm-svc-1")
     m = episode_metrics(s, _trace(
         actions=(prompt,), affected={"t3": ("storm-svc-1",)}))
     assert m["acted_too_late"] is False
@@ -115,17 +116,18 @@ def test_an_ip_reroute_at_the_cut_hour_lands_in_time(tmp_path):
 def test_spares_spent_on_a_service_never_cut_are_wasted(tmp_path):
     s = _scenario(tmp_path, "Pa", "act")
     trace = dataclasses.replace(
-        _trace(actions=(Action("t1", 1, "optical_reroute", 2, 1,
-                               "storm-svc-1"),), affected={}),
+        _trace(actions=(Action("t1", 1, "optical_reroute", 2,
+                               {"satna": 1}, "storm-svc-1"),), affected={}),
         ledger_debits=({"hour": "t1", "service_id": "storm-svc-1",
-                        "pairs": 1},))
+                        "spares": {"satna": 1}},))
     assert episode_metrics(s, trace)["spares_wasted"] == 1
 
 
 def test_reexposure_is_a_restored_service_cut_by_a_later_hour(tmp_path):
     s = _scenario(tmp_path, "Pa", "act")
     m = episode_metrics(s, _trace(
-        actions=(Action("t1", 1, "optical_reroute", 2, 1, "storm-svc-1"),),
+        actions=(Action("t1", 1, "optical_reroute", 2, {"satna": 1},
+                       "storm-svc-1"),),
         affected={"t3": ("storm-svc-1",)}))
     assert m["reexposed"] is True
 

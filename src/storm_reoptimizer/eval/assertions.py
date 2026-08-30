@@ -561,9 +561,10 @@ async def assert_gold_spare_action_is_grounded(
                 f"{action!r}; a half that never acts cannot 'spend'")
         return
 
-    from .ledger import pairs_needed
+    from .ledger import spares_needed
 
     menu = await menu_at_decision_hour(client, scenario)
+    oms_nodes = await _oms_nodes(client)
     candidates = [c for c in menu.get("candidates") or []
                  if c.get("lever") == committed_lever]
     if not candidates:
@@ -572,7 +573,7 @@ async def assert_gold_spare_action_is_grounded(
             f"real menu under reference_avoid {scenario.reference_avoid!r}; "
             f"gold_spare_action {action!r} cannot be grounded against reality")
 
-    costs = {pairs_needed(c) for c in candidates}
+    costs = {sum(spares_needed(c, oms_nodes).values()) for c in candidates}
     if action == "spend" and not any(cost > 0 for cost in costs):
         raise PairInvalid(
             f"{scenario.id}: every real {committed_lever!r} candidate under "
@@ -660,7 +661,8 @@ def _check_no_free_escape(scenario_id: str, menu: dict, current: set[str], *,
                           label_rule: str, gold_label: str,
                           reference_avoid: dict,
                           wide_avoid_risk_group: str | None = None,
-                          label_by_lever: dict | None = None) -> None:
+                          label_by_lever: dict | None = None,
+                          oms_nodes: dict | None = None) -> None:
     """The pure half of W1.6: given a menu and the service's CURRENT working
     lightpath ids, no zero-pair candidate that would actually flip the GRADED
     LABEL away from gold's may exist.
@@ -695,10 +697,11 @@ def _check_no_free_escape(scenario_id: str, menu: dict, current: set[str], *,
     hypothetical paths. The cheap version captures the distinction that
     matters: a 0-pair candidate that does not move you buys nothing, so gold
     is safe regardless of label_rule."""
-    from .ledger import pairs_needed
+    from .ledger import spares_needed
 
+    oms_nodes = oms_nodes or {}
     for index, candidate in enumerate(menu.get("candidates") or []):
-        if pairs_needed(candidate) != 0:
+        if sum(spares_needed(candidate, oms_nodes).values()) != 0:
             continue
         reused = set(candidate.get("reused_lightpaths") or ())
         if current <= reused:
@@ -722,6 +725,18 @@ def _check_no_free_escape(scenario_id: str, menu: dict, current: set[str], *,
             f"the label rule scores as WRONG. 'Act' and 'spend' are "
             f"different events; gold argues about spending and the label "
             f"reads acting.")
+
+
+async def _oms_nodes(client: Client) -> dict[str, list[str]]:
+    """oms_id -> [src_node_id, dst_node_id], the same static optical adjacency
+    `runner.service_geometry` builds -- what `ledger.spares_needed` needs to
+    resolve a candidate's new lightpaths to endpoint SITES. A live read
+    rather than a cached one: assertions.py runs once per twin pair against a
+    freshly connected client, so there is no per-hour loop to amortize this
+    against, unlike runner.run_episode's own oms_nodes."""
+    optical = await call_tool_json(client, "get_topology", {"layer": "optical"})
+    return {o["id"]: [o["src_node_id"], o["dst_node_id"]]
+            for o in optical["oms"]}
 
 
 async def _current_working_lightpaths(client: Client,
@@ -782,13 +797,15 @@ async def assert_wait_gold_has_no_free_escape(client: Client,
     menu = await menu_at_decision_hour(client, scenario)
     current = await _current_working_lightpaths(
         client, scenario.service_under_test)
+    oms_nodes = await _oms_nodes(client)
     _check_no_free_escape(
         scenario.id, menu, current,
         label_rule=scenario.metadata.get("label_rule"),
         gold_label=scenario.gold.label,
         reference_avoid=scenario.reference_avoid,
         wide_avoid_risk_group=scenario.metadata.get("wide_avoid_risk_group"),
-        label_by_lever=scenario.metadata.get("label_by_lever"))
+        label_by_lever=scenario.metadata.get("label_by_lever"),
+        oms_nodes=oms_nodes)
 
 
 def assert_no_single_variable_rule_solves(

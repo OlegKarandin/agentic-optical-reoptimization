@@ -89,7 +89,10 @@ def episode_metrics(scenario: ScenarioFile, trace: EpisodeTrace) -> dict:
         for a in trace.actions
         for h in hours[a.hour_index + 1:])
 
-    spares_wasted = sum(d["pairs"] for d in trace.ledger_debits
+    # Total transponders across every charged SITE, not just the depot: a
+    # wasted spend is wasted wherever it lands, and a lightpath's true cost is
+    # one transponder at EACH of its two endpoints (ledger.spares_needed).
+    spares_wasted = sum(sum(d["spares"].values()) for d in trace.ledger_debits
                         if d["service_id"] not in ever_affected)
 
     recovered = any(h.get("rejections") and h.get("committed")

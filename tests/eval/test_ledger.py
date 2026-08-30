@@ -1,62 +1,100 @@
-"""The harness-owned spare ledger (eval design spec, build order item 4).
-The unit is transponder PAIRS -- one per new lightpath."""
+"""The node-local spare depot (exposure-and-depot design, §4.1).
+
+A bare integer had a hole a hybrid candidate walks straight through: groom
+satna -> X on an existing lightpath, light a new X -> allahabad, and pay
+nothing from satna's depot. That is not a loophole to forbid -- a transponder
+at X really is what it costs -- so the ledger models it."""
 import pytest
 
 from storm_reoptimizer.eval.ledger import (
-    InsufficientSpares, SpareLedger, pairs_needed,
+    InsufficientSpares, SpareLedger, spares_needed,
 )
 
-
-def _candidate(n_new, *, lever="optical_reroute", total_lightpaths=40):
-    return {
-        "lever": lever,
-        "reused_lightpaths": ["lp-a"] if lever != "optical_reroute" else [],
-        "new_lightpaths": [
-            {"oms_sequence": ["oms_1"], "lam": i, "mode_id": "300G@4.8dB",
-             "gsnr_db": 12.0, "bitrate_gbps": 300.0} for i in range(n_new)],
-        "restored_gbps": 300.0, "shortfall_gbps": 0.0,
-        # Whole-network count, exactly as score_candidate reports it. The
-        # ledger must NOT read this field.
-        "cost_vector": {"transponders": 2.0 * total_lightpaths},
-    }
+OMS_NODES = {
+    "oms_satna_rewa": ["satna", "rewa"],
+    "oms_rewa_allahabad": ["rewa", "allahabad"],
+    "oms_satna_jabalpur": ["satna", "jabalpur"],
+    "oms_jabalpur_raipur": ["jabalpur", "raipur"],
+}
 
 
-def test_cost_is_one_pair_per_new_lightpath_not_the_network_transponder_count():
-    assert pairs_needed(_candidate(2, total_lightpaths=40)) == 2
-    assert pairs_needed(_candidate(0, lever="ip_reroute")) == 0
+def _lp(*oms):
+    return {"oms_sequence": list(oms)}
 
 
-def test_an_ip_reroute_costs_no_spare():
-    ledger = SpareLedger(on_hand=1)
-    ledger.debit(_candidate(0, lever="ip_reroute"), hour="t1", service_id="s")
-    assert ledger.on_hand == 1
-    assert ledger.spent == 0
+def test_an_ip_reroute_costs_nothing_anywhere():
+    # The whole point of the lever label: `ip_reroute` means "this recovery
+    # costs no transponders".
+    assert spares_needed({"lever": "ip_reroute", "new_lightpaths": []},
+                         OMS_NODES) == {}
 
 
-def test_an_affordable_candidate_decrements_by_its_own_count():
-    ledger = SpareLedger(on_hand=2)
-    assert ledger.can_afford(_candidate(2))
-    ledger.debit(_candidate(2), hour="t1", service_id="storm-svc-1")
+def test_a_new_lightpath_charges_one_transponder_at_each_endpoint_site():
+    candidate = {"lever": "optical_reroute",
+                 "new_lightpaths": [_lp("oms_satna_rewa", "oms_rewa_allahabad")]}
+    assert spares_needed(candidate, OMS_NODES) == {"satna": 1, "allahabad": 1}
+
+
+def test_the_endpoints_are_the_nodes_a_leg_touches_once():
+    # Interior junctions appear twice in the leg endpoints; the two that
+    # appear ONCE are the lightpath's ends. Derived this way rather than from
+    # leg ORDER, which is not guaranteed head-to-tail.
+    candidate = {"lever": "optical_reroute",
+                 "new_lightpaths": [_lp("oms_jabalpur_raipur",
+                                        "oms_satna_jabalpur")]}
+    assert spares_needed(candidate, OMS_NODES) == {"raipur": 1, "satna": 1}
+
+
+def test_two_new_lightpaths_at_the_same_site_charge_it_twice():
+    candidate = {"lever": "optical_reroute", "new_lightpaths": [
+        _lp("oms_satna_rewa"), _lp("oms_satna_jabalpur")]}
+    assert spares_needed(candidate, OMS_NODES) == {"satna": 2, "rewa": 1,
+                                                   "jabalpur": 1}
+
+
+def test_a_candidate_that_never_touches_the_depot_pays_nothing_there():
+    # The case that motivated the dict over a scalar.
+    candidate = {"lever": "hybrid",
+                 "new_lightpaths": [_lp("oms_rewa_allahabad")]}
+    ledger = SpareLedger(inventory={"satna": 1}, depot_site="satna",
+                         oms_nodes=OMS_NODES)
+    assert spares_needed(candidate, OMS_NODES) == {"rewa": 1, "allahabad": 1}
+    assert ledger.can_afford(candidate)
+
+
+def test_only_the_depot_site_binds():
+    ledger = SpareLedger(inventory={"satna": 1}, depot_site="satna",
+                         oms_nodes=OMS_NODES, default_spares_per_site=8)
+    one = {"lever": "optical_reroute",
+           "new_lightpaths": [_lp("oms_satna_rewa", "oms_rewa_allahabad")]}
+    assert ledger.can_afford(one)
+    assert ledger.debit(one, hour="t1", service_id="storm-svc-1") == {
+        "satna": 1, "allahabad": 1}
     assert ledger.on_hand == 0
-    assert ledger.spent == 2
-    assert ledger.debits == [
-        {"hour": "t1", "service_id": "storm-svc-1", "pairs": 2}]
+    assert ledger.spent == 1
+    # allahabad started at the generous default and is nowhere near binding.
+    assert ledger.inventory["allahabad"] == 7
+    assert not ledger.can_afford(one)
 
 
-def test_an_unaffordable_candidate_is_rejected_and_nothing_is_spent():
-    ledger = SpareLedger(on_hand=1)
-    candidate = _candidate(2)
-    assert not ledger.can_afford(candidate)
+def test_the_rejection_names_the_binding_site():
+    ledger = SpareLedger(inventory={"satna": 0}, depot_site="satna",
+                         oms_nodes=OMS_NODES)
+    candidate = {"lever": "optical_reroute",
+                 "new_lightpaths": [_lp("oms_satna_rewa", "oms_rewa_allahabad")]}
+    rejection = ledger.rejection(candidate)
+    assert rejection["type"] == "insufficient_spares"
+    assert rejection["site"] == "satna"
+    assert rejection["needed"] == {"satna": 1, "allahabad": 1}
     with pytest.raises(InsufficientSpares) as exc:
         ledger.debit(candidate, hour="t1", service_id="storm-svc-1")
-    assert exc.value.needed == 2
-    assert exc.value.on_hand == 1
-    assert ledger.on_hand == 1
-    assert ledger.spent == 0
-    assert ledger.debits == []
+    assert exc.value.site == "satna"
+    assert ledger.inventory == {"satna": 0}      # nothing changed
 
 
-def test_the_rejection_is_typed_for_the_retry_loop():
-    ledger = SpareLedger(on_hand=1)
-    assert ledger.rejection(_candidate(2)) == {
-        "type": "insufficient_spares", "needed": 2, "on_hand": 1}
+def test_the_word_pair_has_left_the_module():
+    # A pair spans two sites and cannot be scoped to one. `pairs_needed` is
+    # renamed, not aliased -- an alias would let the old, site-blind reading
+    # survive in a call site nobody re-read.
+    import storm_reoptimizer.eval.ledger as ledger_module
+    assert not hasattr(ledger_module, "pairs_needed")
