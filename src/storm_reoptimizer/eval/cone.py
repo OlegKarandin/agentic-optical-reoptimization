@@ -177,8 +177,8 @@ def _region_in_sigmas(spans, center_lat, center_lon, damage_radius_km,
     return region
 
 
-def p_cut_region(spans, center_lat: float, center_lon: float,
-                 width_km: float, damage_radius_km: float) -> float:
+def _p_cut_region_unfiltered(spans, center_lat: float, center_lon: float,
+                             width_km: float, damage_radius_km: float) -> float:
     """P(at least one of `spans` is cut) for a cone of diameter `width_km`
     centred at (center_lat, center_lon).
 
@@ -202,6 +202,47 @@ def p_cut_region(spans, center_lat: float, center_lon: float,
     region = _region_in_sigmas(spans, center_lat, center_lon,
                                damage_radius_km, sigma)
     return float(contains(region, _STANDARD_NORMAL_POINTS).mean())
+
+
+# A region whose nearest point is this many sigmas beyond the damage radius
+# contributes less than 1e-6 to p_cut -- three orders below the ~3e-3 margins
+# the suite resolves. shapely.distance is orders of magnitude cheaper than
+# 65,535 point-in-polygon tests, and 298 of the state's 573 services have no
+# storm-cuttable span at all and never reach either.
+NEGLIGIBLE_SIGMAS = 6.0
+
+
+def p_cut_region(spans, center_lat: float, center_lon: float,
+                 width_km: float, damage_radius_km: float) -> float:
+    """P(at least one of `spans` is cut) for a cone of diameter `width_km`
+    centred at (center_lat, center_lon).
+
+    Change of viewpoint, which is what makes this tractable: rather than "a
+    disc around the storm touches the span", ask "the storm centre lands in a
+    region around the span". The two are the same event, and the second is a
+    single random point against a single fixed region -- a probability
+    integral, estimated as the fraction of Gaussian-drawn points inside it.
+
+    Deliberately NOT 1 - prod(1 - p_i) over the spans: ONE storm centre cuts
+    all of them, so the per-span events are strongly positively correlated and
+    the product form overstates the union. Only the union region is correct.
+
+    Only spans the event's own filter admits are passed in (the caller does
+    that filtering, so this module stays free of event vocabulary): buried
+    conduit contributes nothing to a storm, and a service with none is
+    certainly not cut.
+
+    Two pre-filters, in order of cheapness. Neither is an approximation the
+    caller has to reason about: the first is exact (no cuttable span means no
+    cut), and the second is gated by a test that sweeps the boundary."""
+    if not spans:
+        return 0.0
+    sigma = cross_track_sigma_km(width_km)
+    if (nearest_span_offset_km(spans, center_lat, center_lon)
+            > damage_radius_km + NEGLIGIBLE_SIGMAS * sigma):
+        return 0.0
+    return _p_cut_region_unfiltered(spans, center_lat, center_lon, width_km,
+                                    damage_radius_km)
 
 
 def nearest_span_offset_km(spans, center_lat: float,

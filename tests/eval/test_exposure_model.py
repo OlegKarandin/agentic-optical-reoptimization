@@ -111,3 +111,20 @@ def test_projection_agrees_with_the_radial_offset_helper():
     x, y = project_to_km(*CENTRE, 25.5, 80.4)
     assert math.hypot(x, y) == pytest.approx(
         radial_offset_km(*CENTRE, 25.5, 80.4), abs=1e-9)
+
+
+def test_the_far_field_prefilter_changes_no_answer_it_is_allowed_to_change():
+    # A pre-filter that returns 0.0 early is only honest if the number it
+    # skips computing is below anything the suite can resolve. Sweep a span
+    # outward and require the filtered and unfiltered answers to agree to well
+    # inside the sampling error everywhere, including right at the boundary.
+    from storm_reoptimizer.eval.cone import NEGLIGIBLE_SIGMAS, _p_cut_region_unfiltered
+    lat, lon = CENTRE
+    sigma = cross_track_sigma_km(90.0)
+    for k in (5.0, NEGLIGIBLE_SIGMAS - 0.01, NEGLIGIBLE_SIGMAS,
+              NEGLIGIBLE_SIGMAS + 0.01, 8.0):
+        span = _point_span(74.0 + k * sigma)
+        filtered = p_cut_region([span], lat, lon, 90.0, 74.0)
+        unfiltered = _p_cut_region_unfiltered([span], lat, lon, 90.0, 74.0)
+        assert filtered == pytest.approx(unfiltered, abs=1e-6), k
+        assert p_cut_point(74.0 + k * sigma, 90.0, 74.0) < 1e-6, k
