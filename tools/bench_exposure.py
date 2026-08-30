@@ -21,7 +21,10 @@ never actually installed -- a Cyrillic path trips a pip install -e bug, see
 conftest.py's docstring); a real install needs none of this --
 mcp_client.DEFAULT_SERVER_COMMAND is what that uses.
 
-Run: C:/Users/olegk/miniconda3/envs/storm-reoptimizer/python.exe tools/bench_exposure.py
+Run (from the repo root; PYTHONPATH=src is needed because, unlike pytest,
+a plain script invocation doesn't pick up pyproject.toml's
+`pythonpath = ["src"]`):
+  PYTHONPATH=src C:/Users/olegk/miniconda3/envs/storm-reoptimizer/python.exe tools/bench_exposure.py
 """
 from __future__ import annotations
 
