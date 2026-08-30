@@ -245,6 +245,25 @@ regeneratable state JSON — never imported into this app's own runtime
 process. The pipeline still loads that state exclusively through the real
 server's `--state` flag over stdio, exactly like every other input.
 
+### The toy topology's mount types are scenario design (2026-08-30)
+
+`mount_type` is read only by this repo — `geo_mapper.py`, `events/filters.py`
+and the viewer. It appears zero times in `multilayer_optical_network`: it
+affects no routing, no QoT, no spectrum and no allocation, so changing one
+edge's mount type produces a bit-identical rebuilt state at the same seed and
+moves only the topology fingerprint.
+
+`satna <-> jabalpur` was changed from `buried` to `aerial` on 2026-08-30
+(exposure-and-depot design, §3.2, Option B) so that satna has a third aerial
+direction that shares no aerial span with `storm-svc-1`'s working
+(`satna <-> rewa`) or protection (`satna <-> jhansi`) legs. Without it, every
+satna-homed claimant's storm exposure is perfectly correlated with the service
+under test's, and the spare contention the eval scores is not a contest.
+
+This is legitimate — the toy topology is ours, built for this project — on the
+condition that it is recorded rather than quietly changed. It is recorded here
+and asserted in `tests/eval/test_build_eval_state.py`.
+
 ---
 
 ## Build order
