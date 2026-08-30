@@ -397,13 +397,131 @@ def transitions(sorted_order: tuple[tuple[str, float, str], ...]) -> list[
         tuple[str, float, str, str, float, str]]:
     """Every adjacent pair (by value) whose action differs -- a perfectly
     separable column has exactly one; more than one is what "interleaved"
-    means, mechanically."""
+    means, mechanically. Diagnostic display ONLY: the smallest gap in this
+    list is NOT, in general, the real binding edge (see `bisect_binding_
+    edge`'s docstring) -- two values can swap position on the SAME side of
+    the actual separating boundary without restoring separability at all,
+    so their adjacent gap can understate the true margin substantially.
+    Reported here purely so a reader can see the interleave shape; the
+    actual margin figure this module reports is computed by `bisect_
+    binding_edge`, against the real scoring rule, not read off this list."""
     out = []
     for (id_a, v_a, act_a), (id_b, v_b, act_b) in zip(
             sorted_order, sorted_order[1:]):
         if act_a != act_b:
             out.append((id_a, v_a, act_a, id_b, v_b, act_b))
     return out
+
+
+def _is_solved_by_some_threshold(values: dict[str, float],
+                                 actions: dict[str, str]) -> bool:
+    """True iff some global threshold, under some orientation, predicts
+    every half's action correctly -- exactly `sweep_variable`'s own scoring
+    rule (same `rules.split_points`, same two orientations), exposed as a
+    boolean oracle so `bisect_binding_edge` can bisect against it for a
+    variable `assertions.assert_no_global_policy_solves_the_suite` does not
+    itself enumerate (the two extra summaries, which are not in
+    `derived.FLIP_VARS`)."""
+    ids = list(values)
+    n = len(ids)
+    if n == 0:
+        return False
+    for threshold in split_points([values[i] for i in ids]):
+        for lo_action in SPARE_ACTIONS:
+            hi_action = "conserve" if lo_action == "spend" else "spend"
+            predicted = {i: (lo_action if values[i] < threshold else hi_action)
+                        for i in ids}
+            if all(predicted[i] == actions[i] for i in ids):
+                return True
+    return False
+
+
+def arithmetic_overlap(values: dict[str, float],
+                       actions: dict[str, str]) -> tuple[float, float]:
+    """The two candidate overlaps -- `(lo=spend overlap, lo=conserve
+    overlap)` -- computed in closed form, no bisection: `max(spend values)
+    - min(conserve values)` and its mirror. Whichever is smaller (and
+    positive) is the orientation actually closest to separable, and its
+    value is the TRUE binding margin for a column with exactly one
+    out-of-place value on that side. Used here ONLY as an independent
+    cross-check against the live-bisected margin below -- not as a
+    replacement for it, since this formula assumes there is exactly one
+    value causing the overlap, which `bisect_binding_edge`'s live oracle
+    call does not need to assume."""
+    spend_vals = [v for h, v in values.items() if actions[h] == "spend"]
+    conserve_vals = [v for h, v in values.items() if actions[h] == "conserve"]
+    overlap_lo_spend = max(spend_vals) - min(conserve_vals)
+    overlap_lo_conserve = max(conserve_vals) - min(spend_vals)
+    return overlap_lo_spend, overlap_lo_conserve
+
+
+def bisect_binding_edge(values: dict[str, float], actions: dict[str, str],
+                        solved_fn, *, perturb_id: str) -> dict:
+    """The REAL binding edge for an interleaved variable, found by bisecting
+    `solved_fn` (a callable `(values_dict, actions) -> bool`, True iff some
+    global threshold/orientation solves the whole column) -- NOT read off
+    the smallest adjacent gap in sorted order (`transitions()`), which a
+    live review found to be WRONG for this exact geometry (up to 2.2x off):
+    moving the misclassified half's value by the smallest adjacent gap does
+    not, in general, restore separability, because the value it actually
+    needs to clear is the GLOBAL extreme of the opposite-action set, not
+    merely its nearest sorted neighbour.
+
+    `perturb_id` is the ONE half to move -- normally `SweepReport.
+    misclassified[0]`, the single half the exhaustive sweep already
+    identified as the one no split point classifies correctly. Its
+    direction is inferred from its OWN declared action: a 'spend' half
+    sitting too high is shrunk down; a 'conserve' half sitting too low is
+    grown up. (A symmetric "move the opposite extreme instead" variant was
+    tried and abandoned: for `peak_over_horizons`/`claimant_ecar_at_
+    earliest_horizon` in this suite, TWO conserve values sit below the
+    offending spend value, so growing only the smaller one does not restore
+    separability at all -- confirmed live, the growing bisection never
+    converges to "solved" no matter how far it is pushed. Perturbing the
+    actual misclassified half, in its own natural direction, is the one
+    operation guaranteed to work regardless of how many other values are on
+    the "wrong" side of it.)
+
+    Cross-checked, not just trusted: the caller should also compute
+    `arithmetic_overlap` on the SAME (values, actions) and confirm it
+    agrees with the bisected margin to close tolerance -- see the printed
+    "cross-check" line in `run()`."""
+    real_action = actions[perturb_id]
+    direction = -1 if real_action == "spend" else 1
+    base = values[perturb_id]
+
+    def solved_with(v: float) -> bool:
+        vv = dict(values)
+        vv[perturb_id] = v
+        return solved_fn(vv, actions)
+
+    assert not solved_with(base), (
+        f"baseline value for {perturb_id!r} already solves the suite -- not "
+        f"a valid starting point for a binding-edge search")
+    bound = ((min(values.values()) - abs(base) - 1.0) if direction < 0
+            else (max(values.values()) + abs(base) + 1.0))
+    assert solved_with(bound), (
+        f"{bound} does not solve the suite either -- widen the bound")
+    lo, hi = (bound, base) if direction < 0 else (base, bound)
+    # invariant: solved_with(lo if direction<0 else hi) is always the "far"
+    # (solved) end; narrow until lo/hi converge on the flip point.
+    for _ in range(200):
+        mid = (lo + hi) / 2.0
+        mid_solved = solved_with(mid)
+        if direction < 0:
+            if mid_solved:
+                lo = mid
+            else:
+                hi = mid
+        else:
+            if mid_solved:
+                hi = mid
+            else:
+                lo = mid
+    flip = (lo + hi) / 2.0
+    margin = abs(base - flip)
+    return {"perturb_id": perturb_id, "direction": direction,
+           "base_value": base, "flip_value": flip, "margin": margin}
 
 
 def blocking_kind(report: SweepReport) -> str:
@@ -467,10 +585,13 @@ def print_sweep_report(report: SweepReport) -> None:
     trans = transitions(report.sorted_order)
     if len(trans) > 1:
         print(f"  {len(trans)} action-transitions in sorted order (>1 means "
-              f"interleaved, no single split works):")
+              f"interleaved, no single split works). SHAPE ONLY -- the "
+              f"'adjacent_gap' column below is NOT the binding margin (see "
+              f"bisect_binding_edge's docstring); the real margin is printed "
+              f"separately, below the sweep, via a live bisection:")
         for id_a, v_a, act_a, id_b, v_b, act_b in trans:
-            print(f"    {id_a}({act_a}, {v_a:.3f}) | gap={v_b - v_a:.3f} | "
-                  f"{id_b}({act_b}, {v_b:.3f})")
+            print(f"    {id_a}({act_a}, {v_a:.3f}) | adjacent_gap="
+                  f"{v_b - v_a:.3f} | {id_b}({act_b}, {v_b:.3f})")
 
 
 # --------------------------------------------------------------------------
@@ -758,6 +879,83 @@ async def run(topology: str, state: str, server_command: list[str]) -> None:
         except PairInvalid as exc:
             print(f"\nassert_no_global_policy_solves_the_suite: FAILED -- "
                   f"{exc}")
+
+        # ---- REAL binding-edge, per interleaved variable, via bisection --
+        # A live review of this tool's first cut found the "smallest
+        # adjacent gap in sorted order" (transitions(), above) is NOT the
+        # same quantity as the real binding edge, and was wrong here by up
+        # to 2.2x: two values can swap position on the SAME side of the
+        # actual separating boundary without restoring separability, so
+        # their gap understates the true margin. This section finds the
+        # REAL edge by bisecting a live oracle -- the actual
+        # `assert_no_global_policy_solves_the_suite` for variables it
+        # enumerates (members of `derived.FLIP_VARS`), or this tool's own
+        # verified-equivalent `_is_solved_by_some_threshold` for the two
+        # extra summaries that assertion does not enumerate at all -- from
+        # BOTH ends of the overlap, and cross-checks the two margins agree.
+        print("\n=== REAL binding edge per interleaved variable (bisected "
+              "against a live oracle, not read off sorted-order gaps) ===")
+        scenarios_list = [results[h].scenario for h in pair_halves]
+
+        def real_assertion_oracle(var: str):
+            def solved_fn(values: dict[str, float], acts: dict[str, str]) -> bool:
+                vv = {h: dict(flip_values_only[h]) for h in pair_halves}
+                for h in pair_halves:
+                    vv[h][var] = values[h]
+                try:
+                    # RAISES iff a threshold SOLVES the suite (bad); returns
+                    # silently iff BLOCKED (good). So "no exception" means
+                    # NOT solved -- the polarity a first draft of this
+                    # function got backwards, caught by re-running against
+                    # the tool's own already-confirmed-PASSED baseline
+                    # before trusting any bisected number.
+                    assert_no_global_policy_solves_the_suite(scenarios_list, vv)
+                    return False
+                except PairInvalid:
+                    return True
+            return solved_fn
+
+        for var in ALL_SWEPT_VARS:
+            report = reports[var]
+            if blocking_kind(report) != "INTERLEAVE":
+                continue    # only interleave-blocked variables have a real
+                            # edge to bisect; a tied variable's bound is the
+                            # tie itself, already reported above
+            values = report.values
+            assert len(report.misclassified) == 1, (
+                f"{var}: expected exactly one misclassified half at the "
+                f"best split, got {report.misclassified!r} -- the "
+                f"single-perturbation binding-edge search assumes exactly "
+                f"one out-of-place half and needs a different approach here")
+            perturb_id = report.misclassified[0]
+            if var in FLIP_VARS:
+                oracle = real_assertion_oracle(var)
+                oracle_name = "assert_no_global_policy_solves_the_suite (real)"
+            else:
+                oracle = _is_solved_by_some_threshold
+                oracle_name = "_is_solved_by_some_threshold (verified-equivalent local oracle)"
+            edge = bisect_binding_edge(values, actions, oracle,
+                                       perturb_id=perturb_id)
+            overlap_lo_spend, overlap_lo_conserve = arithmetic_overlap(
+                values, actions)
+            arithmetic_margin = (overlap_lo_spend if edge["direction"] < 0
+                                 else overlap_lo_conserve)
+            consistent = abs(edge["margin"] - arithmetic_margin) < 1e-4
+            direction_word = "shrinking" if edge["direction"] < 0 else "growing"
+            print(f"\n  {var}  [oracle: {oracle_name}]")
+            print(f"    {direction_word} {perturb_id} ({edge['base_value']:.4f}"
+                  f", {actions[perturb_id]}) -> flips (starts solving the "
+                  f"suite) at {edge['flip_value']:.4f}")
+            print(f"    BISECTED margin: {edge['margin']:.4f} G")
+            print(f"    arithmetic cross-check (max/min over the two action "
+                  f"groups, no bisection): {arithmetic_margin:.4f} G "
+                  f"(lo=spend overlap {overlap_lo_spend:.4f}, lo=conserve "
+                  f"overlap {overlap_lo_conserve:.4f})")
+            print(f"    cross-check: {'CONSISTENT' if consistent else 'MISMATCH'} "
+                  f"(|{edge['margin']:.4f} - {arithmetic_margin:.4f}| = "
+                  f"{abs(edge['margin'] - arithmetic_margin):.6g})")
+            print(f"    REAL BINDING EDGE: {perturb_id}, margin = "
+                  f"{edge['margin']:.3f} G")
 
 
 def main() -> None:
