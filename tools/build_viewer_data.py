@@ -165,6 +165,14 @@ _HTML_TEMPLATE = """<!doctype html>
   <select id="episode"></select>
   <select id="run"></select>
   <label><input type="checkbox" id="plant"> aerial plant</label>
+  <button id="reset-view" type="button">reset view</button>
+  <div id="legend">
+    <span><span class="swatch" style="background:#1a1a1a"></span>working</span>
+    <span><span class="swatch" style="background:#888"></span>protection</span>
+    <span><span class="swatch" style="background:#1a4fcc"></span>working (spotlit)</span>
+    <span><span class="swatch" style="background:#a626cc"></span>protection (spotlit)</span>
+    <span><span class="swatch" style="background:#cc6633"></span>committed route</span>
+  </div>
   <span id="gold"></span>
 </header>
 <main>
@@ -174,7 +182,6 @@ _HTML_TEMPLATE = """<!doctype html>
     <g id="layer-points"></g>
   </svg>
   <aside id="panels">
-    <section id="candidates"></section>
     <section id="saw"></section>
     <section id="said"></section>
   </aside>
@@ -194,9 +201,15 @@ body { margin: 0; font-family: ui-monospace, "Cascadia Code", Consolas,
             border-bottom: 1px solid #ccc; }
 #controls select, #controls label { font: inherit; }
 #gold { margin-left: auto; font-weight: bold; }
+#reset-view { font: inherit; cursor: pointer; }
+#legend { display: flex; gap: 10px; font-size: 11px; color: #555;
+          align-items: center; white-space: nowrap; }
+.swatch { display: inline-block; width: 14px; height: 3px;
+          margin-right: 3px; vertical-align: middle; }
 main { display: grid; grid-template-columns: 1fr 380px; gap: 0;
        height: calc(100vh - 90px); }
-#map { width: 100%; height: 100%; background: #f7f7f5; }
+#map { width: 100%; height: 100%; background: #f7f7f5; cursor: grab; }
+#map.dragging { cursor: grabbing; }
 #panels { overflow-y: auto; border-left: 1px solid #ccc; padding: 8px; }
 #panels section { margin-bottom: 16px; }
 #panels h3 { margin: 0 0 4px 0; font-size: 12px; text-transform: uppercase;
@@ -209,10 +222,13 @@ th { background: #f0f0ee; }
                     font-size: 11px; font-weight: bold; }
 .shown { background: #d6f0d6; color: #146214; }
 .omitted { background: #eee; color: #777; }
-.candidate-row { cursor: pointer; }
-.candidate-row:hover { background: #f0f4ff; }
-.candidate-row.committed { font-weight: bold; }
-.candidate-row.selected { outline: 2px solid #3366cc; }
+.candidate-row { cursor: default; }
+.candidate-row.committed { cursor: pointer; font-weight: bold; }
+.candidate-row.committed:hover { background: #f0f4ff; }
+.candidate-row.selected { outline: 2px solid #cc6633; }
+.exposure-row { cursor: pointer; }
+.exposure-row:hover { background: #f0f4ff; }
+.exposure-row.selected { outline: 2px solid #1a4fcc; background: #eaf0ff; }
 footer { border-top: 1px solid #ccc; padding: 6px 12px; }
 #scrubber { display: flex; gap: 1px; }
 .hcell { flex: 1; padding: 3px 2px; text-align: center; cursor: pointer;
@@ -230,12 +246,19 @@ pre.reasoning { white-space: pre-wrap; background: #f7f7f5; padding: 6px;
 .rejection { color: #a33; margin: 2px 0; }
 .contested { background: #fff4e0; border: 1px solid #e0c080; padding: 4px;
              margin: 4px 0; }
+.step-label { margin: 10px 0 2px; font-weight: bold; }
+details.raw-json { margin: 4px 0 10px; }
+details.raw-json summary { cursor: pointer; font-size: 11px; color: #555; }
+details.raw-json pre { max-height: 320px; overflow: auto; background: #f7f7f5;
+                        border: 1px solid #eee; padding: 6px; margin: 4px 0;
+                        white-space: pre-wrap; word-break: break-word; }
 """
 
 
 _JS = r"""
 const P = JSON.parse(document.getElementById('payload').textContent);
-let state = {episode: null, run: null, hourIndex: 0, candidate: null};
+let state = {episode: null, run: null, hourIndex: 0, spotlight: null,
+             candidateVisible: false};
 
 // ---- geometry -------------------------------------------------------
 
@@ -278,6 +301,67 @@ function clearLayer(name) {
     const g = layer(name);
     while (g.firstChild) g.removeChild(g.firstChild);
 }
+
+// ---- zoom / pan ---------------------------------------------------------
+// viewBox manipulation, not a CSS transform, so strokes and text stay crisp
+// at any zoom level.
+
+const FULL_VIEW = {x: 0, y: 0, w: 800, h: 800};
+let view = {x: 0, y: 0, w: 800, h: 800};
+
+function applyView() {
+    document.getElementById('map').setAttribute(
+        'viewBox', `${view.x} ${view.y} ${view.w} ${view.h}`);
+}
+
+function resetView() {
+    view = {...FULL_VIEW};
+    applyView();
+}
+
+function svgPoint(evt) {
+    const svg = document.getElementById('map');
+    const pt = svg.createSVGPoint();
+    pt.x = evt.clientX;
+    pt.y = evt.clientY;
+    return pt.matrixTransform(svg.getScreenCTM().inverse());
+}
+
+function zoomAt(p, factor) {
+    const newW = Math.min(FULL_VIEW.w, Math.max(20, view.w * factor));
+    const newH = Math.min(FULL_VIEW.h, Math.max(20, view.h * factor));
+    view.x = p.x - (p.x - view.x) * (newW / view.w);
+    view.y = p.y - (p.y - view.y) * (newH / view.h);
+    view.w = newW;
+    view.h = newH;
+    applyView();
+}
+
+document.getElementById('map').addEventListener('wheel', (ev) => {
+    ev.preventDefault();
+    zoomAt(svgPoint(ev), ev.deltaY < 0 ? 0.9 : 1.1);
+}, {passive: false});
+
+let panState = null;
+document.getElementById('map').addEventListener('mousedown', (ev) => {
+    panState = {startClientX: ev.clientX, startClientY: ev.clientY,
+                startView: {...view}};
+    document.getElementById('map').classList.add('dragging');
+});
+window.addEventListener('mousemove', (ev) => {
+    if (!panState) return;
+    const rect = document.getElementById('map').getBoundingClientRect();
+    const scaleX = panState.startView.w / rect.width;
+    const scaleY = panState.startView.h / rect.height;
+    view.x = panState.startView.x - (ev.clientX - panState.startClientX) * scaleX;
+    view.y = panState.startView.y - (ev.clientY - panState.startClientY) * scaleY;
+    applyView();
+});
+window.addEventListener('mouseup', () => {
+    panState = null;
+    document.getElementById('map').classList.remove('dragging');
+});
+document.getElementById('reset-view').addEventListener('click', resetView);
 
 // ---- plant ------------------------------------------------------------
 
@@ -377,26 +461,31 @@ function drawCones(episode, hour) {
 
 function drawService(id, hour, opts) {
     opts = opts || {};
+    const dim = !!opts.dim;
+    const spot = !!opts.spotlight;
     const paths = (hour.service_paths || {})[id];
     if (paths) {
         if (paths.working) {
-            drawPolyline(paths.working,
-                {weight: opts.emphasis ? 3.5 : 2.5, colour: '#1a1a1a',
-                 layer: 'paths'});
+            drawPolyline(paths.working, {
+                weight: spot ? 4 : (dim ? 1 : (opts.emphasis ? 3.5 : 2.5)),
+                colour: spot ? '#1a4fcc' : (dim ? '#ddd' : '#1a1a1a'),
+                layer: 'paths'});
         }
         if (paths.protection) {
-            drawPolyline(paths.protection,
-                {weight: opts.emphasis ? 2 : 1.2, colour: '#888',
-                 layer: 'paths'});
+            drawPolyline(paths.protection, {
+                weight: spot ? 3 : (dim ? 1 : (opts.emphasis ? 2 : 1.2)),
+                colour: spot ? '#a626cc' : (dim ? '#ddd' : '#888'),
+                layer: 'paths'});
         }
     }
     const point = (hour.service_points || {})[id];
     if (point) {
         const [x, y] = project(point[0], point[1]);
         layer('points').appendChild(svgEl('circle', {
-            cx: x, cy: y, r: opts.emphasis ? 6 : 4,
-            fill: opts.colour || '#cc3333',
-            stroke: '#fff', 'stroke-width': 1,
+            cx: x, cy: y, r: spot ? 7 : (opts.emphasis ? 6 : 4),
+            fill: spot ? '#ffd23f' : (dim ? '#ddd' : (opts.colour || '#cc3333')),
+            stroke: spot ? '#1a1a1a' : '#fff',
+            'stroke-width': spot ? 2 : 1,
             'data-service': id,
         }));
     }
@@ -479,29 +568,26 @@ function esc(s) {
         .replace(/>/g, '&gt;');
 }
 
-function renderCandidates(hour) {
-    const el = document.getElementById('candidates');
-    el.innerHTML = '<h3>Candidates</h3>';
-    if (!hour) return;
+function committedCandidate(hour) {
     const iter = selectedIteration(hour);
     const candidates = (iter && iter.menu && iter.menu.candidates) || [];
-    if (!candidates.length) {
-        el.appendChild(document.createTextNode('(no menu this hour)'));
-        return;
-    }
-    // The committed candidate is selected on load; a click overrides it for
-    // the rest of this hour's viewing session.
-    const selected = candidates.find(c => c.candidate_label === state.candidate)
-        || candidates.find(c => c.committed) || null;
-    state.candidate = selected ? selected.candidate_label : null;
+    return candidates.find(c => c.committed) || null;
+}
 
+// A priced candidate menu, rendered wherever it was ACTUALLY shown to the
+// model (inline in "What it said", at the objective step of its own
+// iteration) rather than pinned in a panel of its own at the top -- there is
+// no "menu" independent of an hour and an iteration, so there is no honest
+// place to show one before the reasoning it fed.
+function candidateTable(candidates) {
     const table = document.createElement('table');
     table.innerHTML = '<tr><th>label</th><th>lever</th><th>spares</th>' +
         '<th>restored</th><th>shortfall</th><th>cost</th></tr>';
-    candidates.forEach((c) => {
+    (candidates || []).forEach((c) => {
         const tr = document.createElement('tr');
-        tr.className = 'candidate-row' + (c.committed ? ' committed' : '') +
-            (c === selected ? ' selected' : '');
+        const committed = !!c.committed;
+        tr.className = 'candidate-row' + (committed ? ' committed' : '') +
+            (committed && state.candidateVisible ? ' selected' : '');
         // spares_needed is site -> transponder count (ledger.py's per-site
         // ledger, exposure-and-depot design §4.1) -- render each site's
         // charge rather than a single count, since a hybrid candidate can
@@ -514,39 +600,85 @@ function renderCandidates(hour) {
             `<td>${esc(c.restored_gbps)}</td>` +
             `<td>${esc(c.shortfall_gbps)}</td>` +
             `<td>${esc(JSON.stringify(c.cost_vector || {}))}</td>`;
-        tr.addEventListener('click', () => {
-            state.candidate = c.candidate_label;
-            renderCandidates(hour);
-        });
+        if (committed) {
+            tr.title = state.candidateVisible
+                ? 'click to hide its route on the map'
+                : 'click to show its route on the map';
+            tr.addEventListener('click', () => {
+                state.candidateVisible = !state.candidateVisible;
+                renderAll();
+            });
+        }
         table.appendChild(tr);
     });
-    el.appendChild(table);
+    return table;
+}
 
-    const run = currentRun();
-    if (selected) {
-        drawCandidate(selected, run ? run.oms_nodes : {});
-    } else {
-        clearLayer('candidate');
-    }
+// The cheaper menu the CONSTRAINTS decision sees, before any avoid set narrows
+// it -- no cost vector, no committed flag, it is never what gets picked.
+function unconstrainedMenuTable(menu) {
+    const table = document.createElement('table');
+    table.innerHTML = '<tr><th>label</th><th>lever</th><th>spares</th></tr>';
+    ((menu && menu.candidates) || []).forEach((c) => {
+        const tr = document.createElement('tr');
+        const sparesText = Object.entries(c.spares_needed || {})
+            .map(([site, n]) => `${site}:${n}`).join(', ') || '-';
+        tr.innerHTML = `<td>${esc(c.candidate_label)}</td>` +
+            `<td>${esc(c.lever)}</td><td>${esc(sparesText)}</td>`;
+        table.appendChild(tr);
+    });
+    return table;
+}
+
+// The literal JSON body one API call received (agent.py's _user_content
+// wraps this exact shape and json.dumps's it) -- collapsed by default since
+// it duplicates the curated tables above it, but never trimmed or
+// re-summarized: this is "everything", verbatim.
+function rawJson(label, obj) {
+    const details = document.createElement('details');
+    details.className = 'raw-json';
+    const summary = document.createElement('summary');
+    summary.textContent = 'raw payload sent to ' + label;
+    details.appendChild(summary);
+    const pre = document.createElement('pre');
+    pre.textContent = JSON.stringify(obj, null, 2);
+    details.appendChild(pre);
+    return details;
+}
+
+function stepLabel(text) {
+    const div = document.createElement('div');
+    div.className = 'step-label';
+    div.textContent = text;
+    return div;
 }
 
 function renderSaw(hour) {
     const el = document.getElementById('saw');
-    el.innerHTML = '<h3>What the agent saw</h3>';
+    el.innerHTML = '<h3>What the agent saw (click a row to spotlight it)</h3>';
     if (!hour) return;
-    const rows = hour.exposure_rows || [];
+    // Only what the agent was actually shown -- the omitted rows this table
+    // used to include (project_observation's own trim) are noise here; the
+    // trim itself is still checked in tests/eval/test_build_viewer_data.py.
+    const rows = (hour.exposure_rows || []).filter(r => r.shown);
     const table = document.createElement('table');
     table.innerHTML = '<tr><th>service</th><th>horizon</th><th>offset_km</th>' +
-        '<th>p_cut</th><th>demand_gbps</th><th>ECAR</th><th></th></tr>';
+        '<th>p_cut</th><th>demand_gbps</th><th>ECAR</th></tr>';
     for (const r of rows) {
         const tr = document.createElement('tr');
+        tr.className = 'exposure-row' +
+            (r.service_id === state.spotlight ? ' selected' : '');
         tr.innerHTML =
             `<td>${esc(r.service_id)}</td><td>${esc(r.horizon)}</td>` +
             `<td>${esc(r.offset_km)}</td><td>${esc(r.p_cut)}</td>` +
             `<td>${esc(r.demand_gbps)}</td>` +
-            `<td>${esc(r.expected_capacity_at_risk_gbps)}</td>` +
-            `<td><span class="${r.shown ? 'shown' : 'omitted'}">` +
-            `${r.shown ? 'shown' : 'omitted'}</span></td>`;
+            `<td>${esc(r.expected_capacity_at_risk_gbps)}</td>`;
+        tr.addEventListener('click', () => {
+            state.spotlight = state.spotlight === r.service_id
+                ? null : r.service_id;
+            renderSaw(hour);
+            renderMap();
+        });
         table.appendChild(tr);
     }
     el.appendChild(table);
@@ -572,6 +704,8 @@ function renderSaw(hour) {
         `risk_group_ids: ${JSON.stringify(obs.risk_group_ids || {})}\n` +
         `actions_taken: ${JSON.stringify(obs.actions_taken || [])}`;
     el.appendChild(misc);
+
+    el.appendChild(rawJson('timing', {observation: hour.projected}));
 }
 
 function renderSaid(hour) {
@@ -582,6 +716,7 @@ function renderSaid(hour) {
         el.appendChild(document.createTextNode('(no reasoning recorded)'));
         return;
     }
+    el.appendChild(stepLabel('1. Timing'));
     const timing = document.createElement('div');
     timing.innerHTML = `<b>action:</b> ${esc(hour.timing.action)}`;
     const timingReasoning = document.createElement('pre');
@@ -596,6 +731,7 @@ function renderSaid(hour) {
             JSON.stringify(hour.timing.contested_claim);
         el.appendChild(cc);
     }
+    el.appendChild(rawJson('timing', {observation: hour.projected}));
 
     for (const rej of hour.rejections || []) {
         const d = document.createElement('div');
@@ -604,32 +740,35 @@ function renderSaid(hour) {
         el.appendChild(d);
     }
 
-    (hour.iterations || []).forEach((it) => {
+    // Each iteration replays BOTH remaining decisions in the order the model
+    // actually received them: the unconstrained menu and the constraints
+    // call's raw input, then what it decided; then the PRICED menu that
+    // decision produced and the objective call's raw input, then what it
+    // chose. The candidate table therefore sits right where it was seen --
+    // immediately before the decision it fed -- not in a panel of its own.
+    (hour.iterations || []).forEach((it, idx) => {
         const h = document.createElement('div');
         h.innerHTML = `<b>iteration ${esc(it.iteration)}</b> -- ` +
             `menu ${esc(it.menu_status)} (${esc(it.menu_size)}) -- ` +
             `outcome ${esc(it.outcome)}`;
         el.appendChild(h);
 
+        if (idx === 0 && hour.unconstrained_menu) {
+            el.appendChild(stepLabel(
+                '2. Constraints -- menu before constraining'));
+            el.appendChild(unconstrainedMenuTable(hour.unconstrained_menu));
+        }
+        el.appendChild(rawJson(`constraints, iteration ${it.iteration}`,
+            {observation: it.projected,
+             unconstrained_menu: hour.unconstrained_menu}));
+
         const constraints = it.constraints || {};
+        el.appendChild(stepLabel('2. Constraints decision'));
         const cPre = document.createElement('pre');
         cPre.className = 'reasoning';
         cPre.textContent = `avoid: ${JSON.stringify(constraints.avoid || {})}\n` +
             (constraints.reasoning || '');
         el.appendChild(cPre);
-
-        const objective = it.objective || {};
-        const oPre = document.createElement('pre');
-        oPre.className = 'reasoning';
-        oPre.textContent = `choice: ${objective.choice}\n` +
-            (objective.reasoning || '');
-        el.appendChild(oPre);
-
-        // Both decisions can carry a contested_claim, and T3's graded
-        // spend/conserve judgement lives in the objective decision's
-        // `choice` -- render both, independently labelled, rather than
-        // silently preferring one when both are populated (final-review
-        // fix, 2026-08-29).
         if (constraints.contested_claim) {
             const cc = document.createElement('div');
             cc.className = 'contested';
@@ -637,6 +776,24 @@ function renderSaid(hour) {
                 JSON.stringify(constraints.contested_claim);
             el.appendChild(cc);
         }
+
+        el.appendChild(stepLabel('3. Objective -- priced candidate menu'));
+        el.appendChild(candidateTable((it.menu && it.menu.candidates) || []));
+        el.appendChild(rawJson(`objective, iteration ${it.iteration}`,
+            {observation: it.projected, menu: it.menu}));
+
+        const objective = it.objective || {};
+        el.appendChild(stepLabel('3. Objective decision'));
+        const oPre = document.createElement('pre');
+        oPre.className = 'reasoning';
+        oPre.textContent = `choice: ${objective.choice}\n` +
+            (objective.reasoning || '');
+        el.appendChild(oPre);
+        // Both decisions can carry a contested_claim, and T3's graded
+        // spend/conserve judgement lives in the objective decision's
+        // `choice` -- render both, independently labelled, rather than
+        // silently preferring one when both are populated (final-review
+        // fix, 2026-08-29).
         if (objective.contested_claim) {
             const cc = document.createElement('div');
             cc.className = 'contested';
@@ -695,7 +852,7 @@ function renderScrubber(episode, run) {
 
         cell.addEventListener('click', () => {
             state.hourIndex = i;
-            state.candidate = null;
+            state.candidateVisible = false;
             renderAll();
         });
         el.appendChild(cell);
@@ -713,12 +870,27 @@ function renderMap() {
     const hour = currentHour();
     if (!episode || !hour) { clearLayer('cones'); return; }
     drawCones(episode, hour);
-    for (const svc of hour.services || []) {
+    const services = hour.services || [];
+    const spotlightId = services.includes(state.spotlight) ? state.spotlight : null;
+    for (const svc of services) {
+        if (svc === spotlightId) continue;
         const emphasis = svc === (hour.actionable_service || episode.actionable_service);
         drawService(svc, hour, {
             emphasis,
+            dim: !!spotlightId,
             colour: emphasis ? '#cc3333' : '#3366cc',
         });
+    }
+    // Drawn last, in its own pass, so it sits on top of every dimmed path.
+    if (spotlightId) {
+        drawService(spotlightId, hour, {spotlight: true});
+    }
+    if (state.candidateVisible) {
+        const committed = committedCandidate(hour);
+        if (committed) {
+            const run = currentRun();
+            drawCandidate(committed, run ? run.oms_nodes : {});
+        }
     }
 }
 
@@ -735,7 +907,6 @@ function renderAll() {
     const run = currentRun();
     const hour = currentHour();
     renderMap();
-    renderCandidates(hour);
     renderSaw(hour);
     renderSaid(hour);
     renderScrubber(episode, run);
@@ -753,7 +924,9 @@ function populateDropdowns() {
         state.episode = epSel.value;
         state.run = 0;
         state.hourIndex = 0;
-        state.candidate = null;
+        state.spotlight = null;
+        state.candidateVisible = false;
+        resetView();
         populateRunDropdown();
         renderAll();
     });
@@ -778,7 +951,9 @@ function populateRunDropdown() {
     runSel.onchange = () => {
         state.run = Number(runSel.value);
         state.hourIndex = 0;
-        state.candidate = null;
+        state.spotlight = null;
+        state.candidateVisible = false;
+        resetView();
         renderAll();
     };
     state.run = 0;
@@ -791,11 +966,11 @@ document.addEventListener('keydown', (ev) => {
     if (!run) return;
     if (ev.key === 'ArrowLeft' && state.hourIndex > 0) {
         state.hourIndex -= 1;
-        state.candidate = null;
+        state.candidateVisible = false;
         renderAll();
     } else if (ev.key === 'ArrowRight' && state.hourIndex < run.hours.length - 1) {
         state.hourIndex += 1;
-        state.candidate = null;
+        state.candidateVisible = false;
         renderAll();
     }
 });
