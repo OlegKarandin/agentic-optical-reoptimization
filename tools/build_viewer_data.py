@@ -97,6 +97,29 @@ def _exposure_rows(hour: dict) -> list[dict]:
     return rows
 
 
+def _competing_services(hour: dict) -> list[str]:
+    """The actionable service plus every member of every restorable group at
+    this hour -- the only services that actually contend for the depot's one
+    spare transponder pair (observation._restorable_groups' own
+    depot-eligible, co-terminating definition). `hour.services` (the full
+    roster `get_services` returns, ~500+ on the real eval state) is
+    deliberately NOT the map's drawing set: most of it is background traffic
+    the storm never comes near, and drawing all of it buries the one rival
+    claim that actually matters in noise."""
+    observation = hour.get("observation") or {}
+    members = {
+        member
+        for groups in (observation.get("restorable_groups") or {}).values()
+        for group in groups
+        for member in group.get("members", ())
+    }
+    actionable = (observation.get("actionable_service")
+                 or observation.get("service_under_test"))
+    if actionable:
+        members.add(actionable)
+    return sorted(members)
+
+
 def _mark_committed(hour: dict) -> None:
     """Flag the candidate that actually committed, so each hour opens on what
     happened and divergence is a deliberate click."""
@@ -121,6 +144,7 @@ def load_run(path: Path) -> dict:
             observation.get("actionable_service")
             or observation.get("service_under_test"))
         enriched["exposure_rows"] = _exposure_rows(enriched)
+        enriched["competing_services"] = _competing_services(enriched)
         enriched.setdefault("service_points", {})
         enriched.setdefault("service_paths", {})
         enriched.setdefault("unmapped_nodes", {})
@@ -870,7 +894,10 @@ function renderMap() {
     const hour = currentHour();
     if (!episode || !hour) { clearLayer('cones'); return; }
     drawCones(episode, hour);
-    const services = hour.services || [];
+    // Only the services that actually contend for this hour's spare (the SUT
+    // plus every restorable-group member) -- not hour.services, the full
+    // ~500+-service network roster, most of which the storm never touches.
+    const services = hour.competing_services || [];
     const spotlightId = services.includes(state.spotlight) ? state.spotlight : null;
     for (const svc of services) {
         if (svc === spotlightId) continue;
