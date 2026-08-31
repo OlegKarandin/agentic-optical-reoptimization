@@ -521,6 +521,27 @@ function drawCandidate(candidate, omsNodes) {
     clearLayer('candidate');
     omsNodes = omsNodes || {};
 
+    const newLightpaths = candidate.new_lightpaths || [];
+
+    // An ip_reroute (and any candidate with no new_lightpaths at all) lights
+    // nothing new -- by construction it only re-homes IP traffic onto a
+    // lightpath that already exists, and that lightpath is already on the
+    // map as this service's working or protection line (drawService, drawn
+    // every hour regardless of which candidate is spotlit). There is no
+    // second, different route to overlay, so say that plainly instead of
+    // reporting it as a gap.
+    if (newLightpaths.length === 0 &&
+        (candidate.reused_lightpaths || []).length > 0) {
+        const note = svgEl('text', {
+            x: 10, y: 20, fill: '#555', 'font-size': 12,
+        });
+        note.textContent = 'no new route: this candidate reuses an ' +
+            "existing lightpath, already drawn as the service's " +
+            'working/protection line';
+        layer('candidate').appendChild(note);
+        return;
+    }
+
     // reused_lightpaths are bare lightpath-id strings in every trace on
     // disk today, never {oms_sequence} objects, and this payload carries
     // no lightpath -> OMS map to resolve them -- a genuine payload-shape
@@ -539,7 +560,7 @@ function drawCandidate(candidate, omsNodes) {
             else unresolvedReused = true;
         }
     }
-    for (const lp of candidate.new_lightpaths || []) {
+    for (const lp of newLightpaths) {
         omsSeq.push(...(lp.oms_sequence || []));
     }
 
