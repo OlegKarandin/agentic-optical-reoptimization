@@ -37,8 +37,8 @@ The table `render_results_table()` produces, from a real run against
 
 | decider | pair_solved | episodes correct | notes |
 |---|---|---|---|
-| baseline:at_deadline | 0.00 | 1/7 | fixed policy: same input in both halves, so exactly one half per pair |
-| baseline:immediate | 0.00 | 1/7 | fixed policy: same input in both halves, so exactly one half per pair |
+| baseline:at_deadline | 0.00 | 2/7 | fixed policy: same input in both halves, so exactly one half per pair |
+| baseline:immediate | 0.00 | 2/7 | fixed policy: same input in both halves, so exactly one half per pair |
 
 Budget: seed(s) [17] x 7 episodes x N=3 = 42 rollouts (both baseline variants
 are collapsed to one real rollout per episode by `collapse_deterministic`; the
@@ -55,13 +55,31 @@ discussion) -- it is not runtime output, and a mechanical re-paste of a fresh
 results table must not overwrite it.
 ---
 
+**Re-run 2026-08-31 (Task 15, exposure-and-depot plan), against the corrected
+exposure model.** `episodes correct` moved from 1/7 to 2/7 for BOTH baseline
+variants — `pair_solved` did not move (still `0.00` for both, over all three
+pairs). The extra correct episode is `D1`, not a change within any pair; see
+"Reading `episodes correct` honestly" below for why, and
+`docs/superpowers/rehearsals/D1.md`'s rewritten Q3 for the live-verified
+mechanism.
+
 **Claim 1 (provable).** The agent beats every fixed policy that does not read
 the forecast: the twins' menus and observables are identical by construction,
 so such a policy emits the same answer twice and scores exactly 50%.
 **Claim 2 (asserted at build time).** No rule keyed on any single forecast
 variable -- and no parameter-free greedy policy -- solves the suite; checked
-over the gold labels before any rollout runs. Two distinct static checks now
-back this claim, and they ask opposite questions:
+over the gold labels before any rollout runs. This claim is now backed by a
+WIDER enumeration than any earlier version of this document reported: **all
+seven** claimant-side summary variables the harness can derive (the five
+members of `derived.FLIP_VARS` -- `claimant_ecar_at_exposure_horizon`,
+`claimant_ecar_before_exposure_horizon`, `claimant_ecar_peak_over_horizons`,
+`claimant_ecar_min_over_horizons`, `largest_restorable_group_ecar_gbps` --
+plus two further summaries of the same per-horizon map that are NOT in
+`FLIP_VARS`, `claimant_ecar_at_earliest_horizon` and `claimant_ecar_
+median_over_horizons`), swept jointly against the REAL satna-homed claimant
+(`claimant-satna-jabalpur-fwd`/`-rev`, Task 14, 2026-08-30) rather than the
+narrative placeholder claimants earlier drafts of this document used. Two
+distinct static checks back this claim, and they ask opposite questions:
 
 - `assertions.assert_no_single_variable_rule_solves` -- per pair, over the
   variables both halves are supposed to SHARE (`rules.OBSERVABLE_VARS` and
@@ -73,81 +91,87 @@ back this claim, and they ask opposite questions:
   fixed orientation, answer all six halves at once -- i.e. could an operator
   deploy a bare number and skip the comparison the agent is meant to make?
 
-Until 2026-08-26 the claimant side of every gold comparison was never
-enumerated by either check -- nothing had ever tested whether a bare
-threshold on it could answer the suite. Building the second check took two
-attempts, and the first one's failure is the more useful half of the story:
+**The full 7-variable sweep (Task 13, `tools/derive_episodes.py`, recorded in
+`docs/superpowers/plans/notes/2026-08-30-joint-tuning.md`) confirms all seven
+are genuinely blocked**, by one of two structural reasons:
 
-1. The check was built sweeping **three** claimant-side variants -- the
-   aggregate at the exposure horizon, before it, and peaked over all
-   horizons -- and it passed on the first live run. That was written up as a
-   structural guarantee: each variant has at least one pair whose halves are
-   TIED to high precision by construction, and a tied pair predicts the same
-   label for both halves under any threshold.
-2. A whole-branch code review then asked what the **minimum** over the same
-   per-horizon map does. It solved the suite **6/6**, at a single global
-   threshold of **89.35 G**, lo -> spend and hi -> conserve -- confirmed
-   live, at full precision. That reproduces almost exactly the eval design
-   spec's own predicted "89.4 G, 6/6" finding, which the first write-up had
-   dismissed as an artifact of reading a different horizon per pair. It is
-   not an artifact: `min` performs that per-pair horizon selection
-   *mechanically*, with one rule applied uniformly, because it reads
-   whichever horizon happens to be smaller rather than a horizon fixed in
-   advance. The three-variant pass was evidence about the list, not about the
-   episodes.
-3. `claimant_ecar_min_over_horizons` was added to `derived.FLIP_VARS`, the
-   check was observed genuinely FAILING, and **T2's near-horizon geometry was
-   retuned** until it passes for real: T2a's near cone moved outward along its
-   300.0 km radial-offset circle about `storm-svc-1` (bearing 288.0 ->
-   290.0 deg -- only the bearing, so every scalar the per-pair derived-geometry
-   check reads stays equal across the halves, bitwise), lifting its claimant
-   aggregate from 71.1 G to 114.6 G.
+| Variable | Blocked by | Best achievable (of 6 halves) |
+|---|---|---|
+| `claimant_ecar_at_exposure_horizon` | TIE (T2, T3 each share a byte-identical far horizon) | 4/6 |
+| `claimant_ecar_before_exposure_horizon` | TIE (T1 publishes no horizon before its own exposure horizon) | 4/6 |
+| `claimant_ecar_peak_over_horizons` | INTERLEAVE (no tie) | 5/6 |
+| `claimant_ecar_min_over_horizons` | TIE (T2's own min reads its shared far horizon in both halves) | 5/6 |
+| `largest_restorable_group_ecar_gbps` | TIE (T2, T3, same far-horizon reason) | 4/6 |
+| `claimant_ecar_at_earliest_horizon` (not in `FLIP_VARS`) | INTERLEAVE (identical column to `peak_over_horizons` in this suite) | 5/6 |
+| `claimant_ecar_median_over_horizons` (not in `FLIP_VARS`) | INTERLEAVE (no tie) | 5/6 |
 
-The check passes today over all four variants, and the reasons are not
-uniform. Three are blocked by a structural tie: at-exposure-horizon ties on
-TWO pairs (T2 and T3 each hold a byte-identical far/exposure horizon across
-their own halves by design); before-horizon ties on T1 (historically because
-its near-horizon nowcast was byte-identical across its halves, and today
-trivially, because that nowcast was later deleted for an unrelated reason and
-T1's decision-hour issuance publishes no earlier horizon at all); and
-peak-over-horizons ties on T3, for the same shared-far-horizon reason. The
-fourth, min-over-horizons, has no tie at all and is blocked by an engineered
-**interleave**: T1b 21.5 (spend) < T3a 51.0 (spend) < **T1a 107.6 (conserve)
-< T2a 114.6 (spend)** < T2b 128.4 (conserve) < T3b 182.8 (conserve). A
-conserve value sits below a spend value, so no threshold survives in either
-orientation.
+A TIE means at least one pair's two halves read the identical value on that
+variable, so any single threshold necessarily assigns them the same label --
+an upper bound on what a bare-scalar policy can score, confirmed tight in
+every row above except `before_exposure_horizon` (bound 5/6, not tight: T2a's
+own value sits out of order relative to T1a's independently of the tie). An
+INTERLEAVE means no two halves tie, but sorting all six values still puts a
+`conserve`-labelled half below a `spend`-labelled one, so no single threshold
+in either orientation separates the column; confirmed by live-bisecting each
+interleaved variable's own binding edge and cross-checking the bisected point
+against a closed-form `max(spend values) - min(conserve values)` computation
+with no bisection at all (the two agree to `1e-6`).
 
-Swept live, the best score any of the four actually reaches is 4/6, 5/6, 4/6
-and 5/6 respectively. Note those are *measured*, not inferred from the ties:
-a tied pair gives an upper **bound**, and for peak-over-horizons that bound
-(5/6) is not tight.
+**The tightest real margin in the whole construction is 31.798 G**
+(`claimant_ecar_peak_over_horizons` and `claimant_ecar_at_earliest_horizon`,
+both blocked by the SAME pair of values: `T2a`'s network-wide total, `687.276
+G`, against `T1a`'s, `655.477 G` -- shrinking `T2a`'s total by more than
+31.798 G would re-solve both checks 6/6). The second-tightest is
+`claimant_ecar_median_over_horizons`'s **49.973 G** (`T2a` vs `T3b`). Both
+margins are two to three orders of magnitude above `cone.py`'s own documented
+~2.56e-4 Sobol sampling noise floor, so neither is a coin-flip against
+numerical noise. A prior draft of the underlying joint-tuning note reported a
+SMALLER, INCORRECT margin here (14.586 G, read off the smallest sorted-
+adjacent gap rather than the actual value the interleave has to clear) before
+a live review caught and corrected it -- see the note's own "What was wrong
+in the first pass" section for the full account; the 31.798 G figure above is
+the corrected, live-bisected one.
 
-The interleave is what the retune bought, and it was not free: T2a's own
-decision margin narrowed from 2.19x (156.0/71.1) to 1.36x (156.0/114.6) --
-a claimant-side overestimate of 36% would now flip that half, against 119%
-before. It is the smallest price that buys the property: the only binding
-edge is T1a's 107.6 G (a conserve half), and measured directly, the suite is
-solved at every T2a near value <= 107.5 G and unsolved from 108 G up. The
-honest reading of Claim 2 is therefore that the suite forecloses a global
-bare-scalar policy *partly by per-pair design and partly by deliberate
-tuning*, not by design alone -- and that four variants is an enumeration, not
-a proof: a fifth summary of the same per-horizon map (the aggregate at the
-earliest published horizon) also solved the pre-retune suite 6/6 and was
-found only by looking after the fact. The same retune closes it. (Separately,
-and out of scope for this claim: a related check (`assert_wait_gold_has_no_
-free_escape`, W1.6) found that storm-svc-1's own static protection lightpath
-is a free, zero-pair `ip_reroute` candidate under every conserve-gold half's
-near-neutral `reference_avoid={}` -- but tracing that escape through each
-half's own `label_rule` (2026-08-26 re-review, Finding #5) found it is only
-GENUINELY exploitable on ONE of the three, `T1a`: taking it there commits
-something and flips T1a's graded label from gold's `wait` to `act`. On the
-other two, `T2b` and `T3b`, taking the very same free candidate reads the
-SAME label gold does under their own `label_rule` (`narrow` and `B`
-respectively) -- not an exploitable escape, just an unused free option, and
-`test_a_conserve_gold_with_an_unexploitable_free_escape_passes` now confirms
-this live. Only `T1a`'s case remains `xfail`, pending its own follow-up
-workstream -- Claim 2 is about the two checks above, not a claim that every
-shortcut in the suite is closed.)
+**This 7-variable sweep replaces every narrower or earlier version of this
+claim.** A pre-2026-08-30 version of this document swept only four
+claimant-side variants against OLD, narrative placeholder claimants
+(`d0029`/`d0348` for T1, eight kanpur/agra services for T2, `d0462`/`d0212`/
+`d0363` for T3) -- none of which were real, depot-eligible competitors for
+`storm-svc-1`'s own spare pool under the corrected per-site ledger (Task 9).
+That version's own account of a near-miss (a threshold on
+`claimant_ecar_min_over_horizons` solving the OLD suite 6/6 at a single
+global 89.35 G, forcing a retune of T2's near cone) is now moot: the claimant
+identity it was tuned against no longer exists in the shipped episodes, and
+the CURRENT geometry was derived fresh against the real claimant by Task 13's
+own `tools/derive_episodes.py` run, not by patching the old numbers. See
+`docs/superpowers/plans/notes/2026-08-30-joint-tuning.md` for the complete,
+reproducible derivation (re-run the tool against the live server to
+regenerate every figure above digit for digit).
+
+**Separately, and out of scope for this claim, two known findings this
+rewrite carries forward honestly rather than silently drops:**
+
+1. A related check (`assert_wait_gold_has_no_free_escape`, W1.6) found that
+   storm-svc-1's own static protection lightpath is a free, zero-pair
+   `ip_reroute` candidate under every conserve-gold half's near-neutral
+   `reference_avoid={}` -- genuinely exploitable on exactly one of the three
+   pairs, `T1a` (taking it flips T1a's graded label from gold's `wait` to
+   `act`), and correctly a no-op on `T2b`/`T3b` (the same free candidate
+   reads the SAME label gold does there).
+   `test_a_conserve_gold_with_an_unexploitable_free_escape_passes` confirms
+   this live; only `T1a`'s case remains `xfail`, pending its own follow-up
+   workstream. Claim 2 is about the two checks above, not a claim that every
+   shortcut in the suite is closed.
+2. T2's and T3's OLDER `avoid_horizon_at_decision_hour` scoring dimension
+   (separate from the spend/conserve flip this claim is about) turned out to
+   be structurally broken by this same plan's own `satna<->jabalpur`
+   topology change, for the `T2a`/`T3a` halves specifically -- documented in
+   full, investigated to a definitive conclusion, and deliberately deferred
+   rather than fixed:
+   `docs/superpowers/2026-08-31-t2-t3-wide-avoid-finding.md`. This does not
+   touch the claim above (which is about the spend/conserve flip variable,
+   verified independently three times in Task 13), but a reader auditing the
+   suite's overall honesty should know about it.
 
 `pair_solved` over three pairs takes values in {0, 1/3, 2/3, 1}: enough to tell
 a working harness from a broken one, not enough to separate luck from skill.
@@ -202,9 +226,12 @@ the test.
 
 ### Reading `episodes correct` honestly
 
-The `episodes correct` column above is 1/7 for both baseline variants, not
-the "roughly half" a naive reading of "both baselines tie every pair at
-exactly one half" might predict. This is not a bug in the harness or a
+The `episodes correct` column above is 2/7 for both baseline variants
+(re-measured 2026-08-31, Task 15, against the corrected exposure model --
+it was 1/7 before Task 14's rebuild, and the change is `D1` becoming correct,
+not a change within any pair; see below), not the "roughly half" a naive
+reading of "both baselines tie every pair at exactly one half" might predict.
+This is not a bug in the harness or a
 confounded pair — both `T1a`/`T1b` (`test_each_baseline_variant_scores_
 exactly_one_half`) and `T2`/`T3`'s equivalent checks already pass in
 `tests/eval/test_episodes.py`, which is the pre-flight signal that would
@@ -238,18 +265,31 @@ or 0/2), not about hitting 50% raw label accuracy — and `pair_solved` is
 A baseline that never commits also never solves a pair; it just fails
 differently than one that commits and picks wrong.
 
-`D1` (the seventh episode in the "1/7" denominator, and not part of any
-pair) is wrong for both baseline variants too, on this real run: its own
-`ForecastBlindBaseline._nearest_exposed_horizon` check is a crude "is the
-offset inside the cone's own half-width" geometric test, and D1's cone
-centre is deliberately placed so `storm-svc-1`'s offset (58.4km) exceeds
-that half-width (7.5km) even though the probabilistic cut probability at
-that offset is 0.976 (see `D1.yaml`'s own commentary on why the centre
-moved off `storm-svc-1`'s point). The baseline reads "wait"; gold is "act".
-That is the intended lesson of a diagnostic built to show "hold the spare"
-has no excuse here — not a discriminating twin, and not counted in
-`pair_solved`, but it is why the single correct episode out of seven is
-`T1b` alone rather than `T1b` plus `D1`.
+`D1` (the seventh episode, and not part of any pair) is now CORRECT for both
+baseline variants, and this is the entire reason `episodes correct` moved
+from 1/7 to 2/7 — verified live for this rewrite, not inferred from the model
+change alone (`ForecastBlindBaseline` run for real against the current server
+state: both variants' `timing.action` at `t0` is `"act"`, matching
+`gold.label`). This reverses the pre-Task-14 finding this section used to
+report. `ForecastBlindBaseline._nearest_exposed_horizon` is a crude "is the
+offset inside the cone's own half-width" geometric test, and under the OLD
+midpoint-based exposure model, D1's cone centre made `storm-svc-1`'s offset
+(58.4 km) exceed that half-width (7.5 km) even though the probabilistic cut
+probability at that offset was 0.976 — the baseline read "wait" against a
+gold "act". Task 3's corrected model redefines `offset_km` as the distance to
+the NEAREST POINT OF THE REAL CUTTABLE SPAN, and D1's cone is centred exactly
+on `satna`, which is a literal endpoint of `storm-svc-1`'s own real span — so
+the corrected offset is `0.000000 km`, which DOES satisfy the containment
+test. `decision_label` for D1 (`timing_at_decision_hour`) reads the raw
+timing action regardless of whether anything later commits, and it is now
+`"act"` in both variants, matching gold. (A second, independent finding,
+recorded in `docs/superpowers/rehearsals/D1.md`'s rewritten Q3: the baseline
+still never physically COMMITS anything here, for the identical
+buried-protection-leg/`basis="physical"` reason T2 and T3 document — but that
+does not change `decision_label`, which is scored on the raw timing action.)
+This is not a discriminating twin and is not counted in `pair_solved`, but it
+is why the two correct episodes out of seven are `T1b` and `D1` together, not
+`T1b` alone.
 
 ### The one tension the three pairs share
 
@@ -272,6 +312,21 @@ unedited run — `ClaudeDecider(model="claude-sonnet-5")` against
 `eval/states/loaded-s17.json`, scoped to `D1` alone (run 0 of 3) — captured
 to show exactly what the model is shown and exactly what it says back, not a
 paraphrase of either.
+
+**This captured trace predates the 2026-08-30 exposure-model correction
+(Task 14, exposure-and-depot plan) and is kept here as an unedited historical
+record, not re-run for this document.** Regenerating it would need a real,
+paid `--include-agent` call, which this rewrite did not make. Under the
+corrected model, `storm-svc-1`'s own `offset_km`/`p_cut` at this cone are now
+`0.000000`/`1.000000` (not `58.4457`/`0.9761` below), and the real
+`claimant-satna-jabalpur-fwd`/`-rev` pair now reads `p_cut = 1.000000` at
+this exact cone too — a genuine, depot-eligible competing claim the observation
+below never shows the model, because the pin that creates that claimant
+postdates this trace. See `docs/superpowers/rehearsals/D1.md`'s corrected
+banner and Q3 for the current, live-verified numbers and for what changed in
+the baseline's own behaviour as a result. The reasoning quoted below is still
+a genuine, faithful account of what this model said against the numbers it
+was actually shown; only the numbers themselves are now historical.
 
 **The setup** (`src/storm_reoptimizer/eval/scenarios/D1.yaml`). `storm-svc-1`
 (300 Gbps, `satna`↔`allahabad`) routes working via `satna↔rewa` and
