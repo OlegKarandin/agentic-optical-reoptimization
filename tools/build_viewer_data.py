@@ -496,15 +496,21 @@ function renderCandidates(hour) {
     state.candidate = selected ? selected.candidate_label : null;
 
     const table = document.createElement('table');
-    table.innerHTML = '<tr><th>label</th><th>lever</th><th>pairs</th>' +
+    table.innerHTML = '<tr><th>label</th><th>lever</th><th>spares</th>' +
         '<th>restored</th><th>shortfall</th><th>cost</th></tr>';
     candidates.forEach((c) => {
         const tr = document.createElement('tr');
         tr.className = 'candidate-row' + (c.committed ? ' committed' : '') +
             (c === selected ? ' selected' : '');
+        // spares_needed is site -> transponder count (ledger.py's per-site
+        // ledger, exposure-and-depot design §4.1) -- render each site's
+        // charge rather than a single count, since a hybrid candidate can
+        // charge two DIFFERENT sites unevenly.
+        const sparesText = Object.entries(c.spares_needed || {})
+            .map(([site, n]) => `${site}:${n}`).join(', ') || '-';
         tr.innerHTML =
             `<td>${esc(c.candidate_label)}</td><td>${esc(c.lever)}</td>` +
-            `<td>${esc(c.pairs_needed)}</td>` +
+            `<td>${esc(sparesText)}</td>` +
             `<td>${esc(c.restored_gbps)}</td>` +
             `<td>${esc(c.shortfall_gbps)}</td>` +
             `<td>${esc(JSON.stringify(c.cost_vector || {}))}</td>`;
@@ -667,10 +673,17 @@ function renderScrubber(episode, run) {
         const acted = actionsByHour[h.hour] || [];
         let cls = 'unknown';
         if (gold.gold_spare_action && acted.length) {
-            // pairs > 0 spends a physical spare (optical_reroute); pairs ==
-            // 0 does not (ip_reroute / rate-reduce) -- that split is what
+            // Any site charged (a non-empty, non-zero `spares` dict) spends
+            // a physical spare (optical_reroute); an empty dict does not
+            // (ip_reroute / rate-reduce) -- that split is what
             // gold_spare_action ("conserve" vs "spend") is judging.
-            const spent = acted.some(a => (a.pairs || 0) > 0);
+            // Action.spares (site -> count) replaced the old scalar
+            // `pairs: int` (exposure-and-depot design, §4.1); reading
+            // `a.pairs` here always evaluated to `(undefined || 0) > 0` ->
+            // false, silently misreporting every action as "conserve"
+            // (whole-branch final review, finding 2).
+            const spent = acted.some(
+                a => Object.values(a.spares || {}).some(n => n > 0));
             const agentAction = spent ? 'spend' : 'conserve';
             cls = agentAction === gold.gold_spare_action ? 'match' : 'mismatch';
         }

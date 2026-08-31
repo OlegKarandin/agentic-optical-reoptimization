@@ -590,6 +590,48 @@ def test_the_objective_prompt_states_each_candidates_own_spare_cost():
         "candidate_0", "candidate_1"]
 
 
+def test_build_deciders_wiring_gap_is_closed(monkeypatch):
+    """Whole-branch final review, finding 1: suite.build_deciders() builds a
+    ClaudeDecider with no `oms_nodes` (suite.py never passes that kwarg), and
+    -- before runner.py's fix -- nothing else ever set it either: only
+    `ledger.oms_nodes` got assigned from `geometry.oms_nodes` each hour. The
+    reviewer reproduced the resulting crash live, on the first real costed
+    candidate: `ValueError: lightpath [...] does not resolve to exactly two
+    endpoint sites (got [])`, raised out of ledger._lightpath_endpoints via
+    _menu_for_prompt/spares_needed, before any API call.
+
+    This constructs the decider exactly the way build_deciders() does (not
+    the `_decider()` test helper above, which always passes oms_nodes) and
+    proves both halves: unwired, a real costed candidate (MENU's
+    optical_reroute, with a real new_lightpaths entry) still crashes exactly
+    that way; wired the way runner.run_episode's per-hour loop now does it
+    (`if hasattr(decider, "oms_nodes"): decider.oms_nodes =
+    geometry.oms_nodes`, mirroring the ledger's own line beside it), the same
+    menu renders onto the wire with no crash."""
+    monkeypatch.setattr(
+        "storm_reoptimizer.eval.suite.AGENT_AUDIT_PATH", None)
+    args = SimpleNamespace(include_agent=True, agent_model=DEFAULT_MODEL)
+    decider = build_deciders(args)[-1]
+    assert isinstance(decider, ClaudeDecider)
+    assert decider.oms_nodes == {}, (
+        "build_deciders() is expected to leave oms_nodes unset -- runner.py, "
+        "not suite.py, is where it gets wired")
+
+    decider._client = FakeAnthropic(
+        FakeResponse(FakeToolUse(OBJECTIVE_TOOL, OBJECTIVE_OK)))
+    with pytest.raises(ValueError, match="does not resolve to exactly two"):
+        decider.objective(_obs(others=CLAIMANTS), MENU)
+
+    # runner.run_episode's wiring, reproduced here rather than invoked
+    # through a live rollout: `if hasattr(decider, "oms_nodes"):
+    # decider.oms_nodes = geometry.oms_nodes`.
+    if hasattr(decider, "oms_nodes"):
+        decider.oms_nodes = OMS_NODES
+    decider._client = FakeAnthropic(
+        FakeResponse(FakeToolUse(OBJECTIVE_TOOL, OBJECTIVE_OK)))
+    decider.objective(_obs(others=CLAIMANTS), MENU)  # no crash
+
+
 PROBE = {"status": "solution",
          "candidates": [{"candidate_label": "candidate_0",
                          "lever": "ip_reroute", "pairs_needed": 0},

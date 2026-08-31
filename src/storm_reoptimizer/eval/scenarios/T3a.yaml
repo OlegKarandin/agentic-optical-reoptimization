@@ -207,9 +207,29 @@ metadata:
                                 # halves. Only their exposure differs.
   exposure_horizon_hours: 2    # EQUAL in T3b -- t6 is hours_ahead=2 from t1
   spares_on_hand: 1            # EQUAL in T3b
-  widest_avoid_feasible: true  # EQUAL in T3b -- both candidates commit
-                                # cleanly under the SAME fixed avoid={} in
-                                # both halves (constraints is non-flip here)
+  # FALSE (final-review fix wave, finding 3, corrected the same way as
+  # T2a/T2b -- see docs/superpowers/2026-08-31-t2-t3-wide-avoid-finding.md).
+  # This field is NOT asking "does the gold decision (avoid={}) commit
+  # cleanly" (it does, in both halves, and that is unaffected by this fix --
+  # see gold_spare_action below) -- it is rules.greedy_rules'
+  # `widest_feasible_avoid` input: whether route_service under avoid={
+  # risk_groups:[this episode's OWN far/exposure-horizon named risk group]}
+  # returns a solution at all. Live-verified (not merely inferred): T3's
+  # shared t6 far cone (width 320, wider than T2's 200) geometrically
+  # encloses ALL THREE of satna's aerial spans (satna<->rewa, satna<->jhansi,
+  # satna<->jabalpur) -- `map_geo_event_to_assets` against the real topology
+  # returns all three, same as T2a's/T2b's byte-identical-mechanism far cone.
+  # Since satna has degree exactly 3 and all three edges are aerial (Task 5),
+  # a risk group naming all three leaves satna with NO edge at all, so ANY
+  # service touching it is unroutable. Confirmed directly (not merely
+  # deduced): defining that real risk group and calling
+  # route_service(avoid={risk_groups:[...]}, basis=risk_group,
+  # level=risk_group) against the live server returns
+  # status=no_solution/0 candidates, identically for T3a and T3b (both share
+  # the same t6 far cone). Was `true` before this fix -- the previous value
+  # reflected the gold decision's own fixed avoid={}, not this field's actual
+  # meaning.
+  widest_avoid_feasible: false
   # W1.2's whole-suite check needs ONE global orientation, but the three pairs
   # draw gold labels from three vocabularies (act/wait, wide/narrow, A/B).
   # This is the common axis. Deliberately NOT in rules.OBSERVABLE_VARS or

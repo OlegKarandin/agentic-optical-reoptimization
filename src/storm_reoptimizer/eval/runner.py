@@ -491,6 +491,15 @@ async def run_episode(
         # in practice and keeps the ledger's oms_nodes from ever going stale
         # without adding a server call of its own.
         ledger.oms_nodes = geometry.oms_nodes
+        # ClaudeDecider needs the same static OMS adjacency to resolve a
+        # candidate's new_lightpaths to endpoint sites in _menu_for_prompt
+        # (see agent.py's ClaudeDecider.__init__) -- suite.build_deciders()
+        # constructs it with oms_nodes={} and nothing else ever sets it,
+        # which crashes the first real costed candidate with a ValueError
+        # (whole-branch final review, finding 1). Baselines have no such
+        # attribute, hence the guard.
+        if hasattr(decider, "oms_nodes"):
+            decider.oms_nodes = geometry.oms_nodes
         services = tuple((await counting.call("get_services"))["services"])
         # The roster scoring reads to know who could have survived -- the
         # final simulate_ip_routing reports links, not services.

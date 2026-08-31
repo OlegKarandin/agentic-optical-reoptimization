@@ -20,13 +20,26 @@ bvd = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(bvd)
 
 
+# Field names and nesting here are checked against a REAL trace: this is not
+# hand-guessed. `spares_needed`/`Action.spares`/`SpareLedger.debits`'s dict
+# shape, the 3-key `horizon_totals`, and the 2-bucket `omitted_services` were
+# all confirmed by running a scripted, always-acting episode against the
+# live server (SMOKE, exposure-and-depot's own smoke fixture in
+# tests/eval/test_runner.py) and inspecting the resulting EpisodeTrace.to_dict()
+# JSON directly -- see the final-review fix wave's report for the exact
+# command. The narrative values below (which service, which numbers) are
+# still curated by hand for readability, as the ORIGINAL fixture's were; only
+# the shape was stale (whole-branch final review, finding 2), and that is
+# what this fixture now certifies.
 FIXTURE_TRACE = {
     "scenario_id": "T3b", "decider_name": "agent:claude-sonnet-5",
     "run_index": 0, "terminal_status": "converged",
     "spares_remaining": 0, "ledger_debits": [
-        {"hour": "t1", "service_id": "storm-svc-1", "pairs": 1}],
+        {"hour": "t1", "service_id": "storm-svc-1",
+         "spares": {"satna": 1, "allahabad": 1}}],
     "actions": [{"hour": "t1", "hour_index": 1, "lever": "optical_reroute",
-                 "effective_at_index": 2, "pairs": 1,
+                 "effective_at_index": 2,
+                 "spares": {"satna": 1, "allahabad": 1},
                  "service_id": "storm-svc-1", "avoid": {}}],
     "oms_nodes": {"oms_sj": ["satna", "jhansi"]},
     "affected_by_hour": {}, "tool_calls": 61, "wall_clock_s": 1.0,
@@ -51,15 +64,30 @@ FIXTURE_TRACE = {
             "services": [{"id": "storm-svc-1", "demand_gbps": 300.0,
                           "actionable": True},
                          {"id": "d0462", "demand_gbps": 100.0}],
+            # observation.py's real 3-key shape (Task 10):
+            # sut_ecar_gbps / largest_restorable_group_ecar_gbps /
+            # non_sut_ineligible_ecar_gbps. The old fixture's
+            # `non_sut_total_ecar_gbps` never existed in this shape.
             "horizon_totals": {"t6": {"sut_ecar_gbps": 156.0,
-                                      "non_sut_total_ecar_gbps": 88.3}},
+                                      "largest_restorable_group_ecar_gbps":
+                                          88.3,
+                                      "non_sut_ineligible_ecar_gbps": 88.3}},
             "risk_group_ids": {"t6": "rg_T3b_t1_t6"}},
         "projected": {
             "exposure": {"storm-svc-1": {}},
-            "omitted_services": {"count": 571, "p_cut_threshold": 0.005,
-                                 "max_p_cut": 0.0,
-                                 "summed_expected_capacity_at_risk_gbps":
-                                     0.0}},
+            # agent.py's real 2-bucket shape: below_threshold (quiet) and
+            # ineligible_for_depot (badly exposed but nowhere the depot can
+            # reach), each its own {count, max_p_cut,
+            # summed_expected_capacity_at_risk_gbps} rollup. The old
+            # fixture's single flat bucket never existed in this shape.
+            "omitted_services": {
+                "p_cut_threshold": 0.005,
+                "below_threshold": {"count": 569, "max_p_cut": 0.0,
+                                    "summed_expected_capacity_at_risk_gbps":
+                                        0.0},
+                "ineligible_for_depot": {"count": 2, "max_p_cut": 0.9,
+                                         "summed_expected_capacity_at_risk_gbps":
+                                             90.0}}},
         "service_points": {"storm-svc-1": [24.6, 80.8],
                            "d0462": [26.4, 80.3]},
         "service_paths": {
@@ -68,7 +96,7 @@ FIXTURE_TRACE = {
         "unmapped_nodes": {},
         "unconstrained_menu": {"status": "solution", "candidates": [
             {"candidate_label": "candidate_0", "lever": "ip_reroute",
-             "pairs_needed": 0}]},
+             "spares_needed": {}}]},
         "iterations": [{
             "iteration": 0, "menu_status": "solution", "menu_size": 1,
             "constraints": {"avoid": {}, "protected": False,
@@ -79,7 +107,8 @@ FIXTURE_TRACE = {
                           "reasoning": "r", "contested_claim": None},
             "menu": {"status": "solution", "candidates": [
                 {"candidate_label": "candidate_0", "lever": "optical_reroute",
-                 "pairs_needed": 1, "reused_lightpaths": [],
+                 "spares_needed": {"satna": 1, "allahabad": 1},
+                 "reused_lightpaths": [],
                  "new_lightpaths": [{"oms_sequence": ["oms_sj"]}],
                  "restored_gbps": 300.0, "shortfall_gbps": 0.0,
                  "cost_vector": {"transponders": 420.0}}]},

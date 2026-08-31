@@ -143,7 +143,20 @@ metadata:
                                 # and -rev
   exposure_horizon_hours: 2    # EQUAL to T3a
   spares_on_hand: 1            # EQUAL to T3a
-  widest_avoid_feasible: true  # EQUAL to T3a
+  # FALSE (final-review fix wave, finding 3, corrected the same way as
+  # T2a/T2b -- see docs/superpowers/2026-08-31-t2-t3-wide-avoid-finding.md
+  # and T3a.yaml's own comment on this field, EQUAL here). This field is
+  # rules.greedy_rules' `widest_feasible_avoid` input (route_service under
+  # avoid={risk_groups:[this episode's far-horizon named risk group]}), NOT
+  # the gold decision's own fixed avoid={} (which does still commit cleanly,
+  # unaffected -- see gold_spare_action below). Live-verified: T3's shared t6
+  # far cone geometrically encloses all three of satna's aerial spans
+  # (rewa/jhansi/jabalpur -- satna's full degree, all aerial since Task 5),
+  # and defining that real risk group and calling route_service(avoid={
+  # risk_groups:[...]}, basis=risk_group, level=risk_group) against the live
+  # server returns status=no_solution/0 candidates, identically to T3a (both
+  # share the same t6 far cone). Was `true` before this fix.
+  widest_avoid_feasible: false  # EQUAL to T3a
   # W1.2's whole-suite check needs ONE global orientation, but the three pairs
   # draw gold labels from three vocabularies (act/wait, wide/narrow, A/B).
   # This is the common axis. Deliberately NOT in rules.OBSERVABLE_VARS or

@@ -162,12 +162,19 @@ rewrite carries forward honestly rather than silently drops:**
    this live; only `T1a`'s case remains `xfail`, pending its own follow-up
    workstream. Claim 2 is about the two checks above, not a claim that every
    shortcut in the suite is closed.
-2. T2's and T3's OLDER `avoid_horizon_at_decision_hour` scoring dimension
-   (separate from the spend/conserve flip this claim is about) turned out to
-   be structurally broken by this same plan's own `satna<->jabalpur`
-   topology change, for the `T2a`/`T3a` halves specifically -- documented in
-   full, investigated to a definitive conclusion, and deliberately deferred
-   rather than fixed:
+2. T2's OLDER `avoid_horizon_at_decision_hour` scoring dimension (separate
+   from the spend/conserve flip this claim is about; T3 does not carry this
+   dimension at all) turned out to be structurally broken by this same
+   plan's own `satna<->jabalpur` topology change, for the `T2a` half
+   specifically: its gold `wide` label is unreachable (`route_service`
+   under the named risk-group avoid returns zero candidates). Separately,
+   `T2a` and `T3a` share a different, narrower problem: the same jabalpur
+   `optical_reroute` both rely on is, under honest post-commit accounting, a
+   worse deal than its gold rationale assumes (a net loss for `T3a`) -- an
+   economics problem, not a reachability one, and the ONLY problem `T3a`
+   has (its gold `A` label remains perfectly reachable). Both are
+   documented in full, investigated to a definitive conclusion, and
+   deliberately deferred rather than fixed:
    `docs/superpowers/2026-08-31-t2-t3-wide-avoid-finding.md`. This does not
    touch the claim above (which is about the spend/conserve flip variable,
    verified independently three times in Task 13), but a reader auditing the
