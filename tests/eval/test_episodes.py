@@ -544,47 +544,60 @@ def test_no_global_policy_solves_the_shipped_suite(
     `derived.FLIP_VARS`, under ONE fixed orientation, answers all six twin
     halves.
 
-    This was a reporting probe (try/except, print the exception) for as long
-    as W1.3's retune was outstanding. It is an assertion now because the
-    retune landed on 2026-08-26 -- and it landed because the sweep it guards
-    had, until that day, been running against an INCOMPLETE `FLIP_VARS`.
-    Three claimant-side variants were enumerated; the fourth,
-    `claimant_ecar_min_over_horizons`, was not, and it solved the shipped
-    suite 6/6 at a single threshold of 89.35 G. Adding it made this check
-    fail for real, T2a's near cone was moved outward along its 300.0 km
-    circle (bearing 288.0 -> 290.0 deg, claimant aggregate 71.1 -> 114.6 G)
-    until the six values INTERLEAVED, and the check now passes on its own
-    merits. All four variants are blocked live. "Bound" below is what a tied
-    pair guarantees; "best" is what an exhaustive sweep of every threshold
-    under both orientations actually reaches. They are not always the same
-    number, and quoting the bound as if it were the measured score makes the
-    suite look closer to solvable than it is:
+    RE-DERIVED 2026-08-30 (Task 14, exposure-and-depot plan) against the REAL
+    satna-homed claimant pair (`claimant-satna-jabalpur-fwd`/`-rev`) and
+    Task 13's frozen geometry -- every number below is from a live run of
+    `tools/derive_episodes.py` and matches
+    `docs/superpowers/plans/notes/2026-08-30-joint-tuning.md` digit for
+    digit; the PRE-Task-13 numbers this docstring used to quote (89.35 G
+    threshold, 128.4/284.0 G ties, a 107.6/114.6/128.4 G interleave) described
+    the OLD placeholder claimants and no longer exist. "Bound" below is what
+    a tied pair guarantees; "best" is what an exhaustive sweep of every
+    threshold under both orientations actually reaches. They are not always
+    the same number, and quoting the bound as if it were the measured score
+    makes the suite look closer to solvable than it is:
 
-      * `..._at_exposure_horizon`   -- tied on T2 (both 128.4 G) and on T3
-                                       (both 284.0 G): each pair publishes a
+      * `..._at_exposure_horizon`   -- tied on T2 (both 529.441 G) and on T3
+                                       (both 444.080 G): each pair publishes a
                                        byte-identical far horizon.
                                        Bound 4/6, best 4/6.
       * `..._before_exposure_horizon` -- tied on T1 (both 0.0): T1's
                                        decision-hour issuance publishes only
                                        its exposure horizon, so the sum is
                                        over an empty set.
-                                       Bound 5/6, best 5/6.
-      * `..._peak_over_horizons`   -- tied on T3 (both 284.0 G), the same
-                                       shared far horizon dominating both
-                                       halves. Bound 5/6, best 4/6 -- the
-                                       tie is not the only thing limiting
-                                       this one.
-      * `..._min_over_horizons`    -- no tie at all; blocked by a genuine
-                                       INTERLEAVE after the retune: T1a
-                                       107.6 (conserve) < T2a 114.6 (spend)
-                                       < T2b 128.4 (conserve). Best 5/6.
+                                       Bound 5/6, best 4/6 -- the bound is NOT
+                                       tight here: T2a (687.276, spend) sits
+                                       between T3b (672.689, conserve) and T2b
+                                       (1087.764, conserve), costing a second
+                                       misclassification beyond the T1 tie.
+      * `..._peak_over_horizons`   -- NO tie at all; blocked by a genuine
+                                       INTERLEAVE: sorted order is spend,
+                                       spend, conserve, conserve, **spend**
+                                       (T2a), conserve -- three transitions.
+                                       Best 5/6. The real binding edge,
+                                       live-bisected and cross-checked against
+                                       closed-form arithmetic: shrinking T2a
+                                       down flips the check at T1a's own value
+                                       (655.4772), margin 31.798 G -- T1a is
+                                       the binder, not the adjacent-in-sorted-
+                                       order T3b (whose gap to T2a, 14.586 G,
+                                       is NOT the real margin; see the notes
+                                       file's own correction of exactly this
+                                       trap).
+      * `..._min_over_horizons`    -- tied on T2 (both 529.441 G): both
+                                       halves' `min` reads the SAME far-
+                                       horizon value because each half's OWN
+                                       near-horizon total is larger than it.
+                                       Bound 5/6, best 5/6 (tight).
 
     A tied pair predicts the same label for both halves under any threshold
-    and any orientation. An interleave is the stronger outcome, and the only
-    one available to the min variant -- which is why it is T2's geometry that
-    had to move. The one binding condition on that move is T1a's 107.563 G:
-    swept directly, the suite is solved at every T2a near value <= 107.5 G
-    and unsolved from 108 G up."""
+    and any orientation. An interleave is the stronger outcome; T2a's near
+    cone (bearing 202.0/213.0 deg at 250.0 km from storm-svc-1's own point,
+    both halves) is what buys it for `peak_over_horizons`. All four FLIP_VARS
+    members (plus the fifth, `largest_restorable_group_ecar_gbps`, added
+    2026-08-30 -- TIED on T2 at 75.633 G and on T3 at 51.408 G, bound and
+    best both 4/6) are genuinely blocked; see the notes file for the full,
+    triple-verified derivation."""
     episodes = [load_scenario(SCENARIOS / f"{n}.yaml")
                 for n in ("T1a", "T1b", "T2a", "T2b", "T3a", "T3b")]
 

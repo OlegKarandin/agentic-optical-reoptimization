@@ -87,6 +87,17 @@ gold:
     nothing physically moved). It sits inside the t6 cone -- no insurance
     bought -- which is correct here because the pair is worth more to the
     claimant corridor.
+
+    KNOWN, UNRESOLVED FINDING (Task 14 fix-report, 2026-08-31) -- see
+    T2a.yaml's identical finding for the full investigation trail. This
+    half's own gold `narrow` (do NOT commit the jabalpur reroute) happens to
+    already be the label a fully honest, post-commit accounting would ALSO
+    reach here -- confirmed by committing the reroute for real and
+    re-measuring: the real net benefit of WIDE (33.385 G) is even further
+    below this half's own 197.78 G claim than the "147.535 G goes away"
+    framing above states, so NARROW's margin here is understated, not
+    overstated. Flagged for consistency with T2a's finding, not because this
+    half's own label is in doubt.
 flip_variable: [claimant, spare, near, horizon]
 metadata:
   # Same two real claimants as T2a (identical member services; only their
@@ -109,9 +120,17 @@ metadata:
   largest_restorable_group_ecar_gbps: 75.633
   label_rule: avoid_horizon_at_decision_hour
   wide_avoid_risk_group: rg_T2b_t1_t6   # matches the runner's rg_{scenario}_{issued}_{horizon} minting
-  widest_avoid_feasible: true           # EQUAL to T2a -- see rehearsal doc Q1;
-                                         # do NOT reintroduce the discarded
-                                         # draft's false/true split
+  # FALSE (fix-report, 2026-08-31, exposure-and-depot plan) -- was true; see
+  # T2a.yaml's identical comment for the full live-confirmed finding
+  # (satna<->jhansi and satna<->jabalpur are geometrically tied at 58.352 km
+  # from the shared far cone's centre, so no radius separates them and
+  # route_service(avoid={risk_groups:[rg_T2b_t1_t6]}, ...) returns zero
+  # candidates under either basis today). Still EQUAL to T2a (both false),
+  # which is what matters for `greedy:widest_feasible_avoid` -- do NOT
+  # reintroduce the discarded draft's false/true SPLIT (that would let this
+  # one predicate solve the pair by itself); an equal value on both halves,
+  # true or false, cannot become that confound.
+  widest_avoid_feasible: false
   cone_width_km: 60            # EQUAL to T2a (the near horizon's declared
                                 # width; the far horizon's 200 is equal too and
                                 # is checked directly by the derived-geometry

@@ -147,6 +147,28 @@ gold:
     whenever this corridor is hit -- none terminate at satna, so none are
     depot-eligible and none belong in this comparison; see
     docs/superpowers/plans/notes/2026-08-30-joint-tuning.md.)
+
+    KNOWN, UNRESOLVED FINDING (Task 14 fix-report, 2026-08-31,
+    exposure-and-depot plan -- escalated, not fixed here; see T2a.yaml's
+    identical finding and the plan's Task 14 fix-report for the full
+    investigation trail). The "102.3 G given up now"/"77.642 G given up now"
+    framing above treats candidate_4 (the jabalpur reroute) as if it fully
+    escapes exposure once committed. Confirmed FALSE by actually COMMITTING
+    it (via `reference_avoid={}`, then `validate_plan` + `commit_plan`, both
+    succeeded) and re-reading storm-svc-1's OWN NEW `cuttable_spans` against
+    this SAME far cone: the reroute's own residual exposure is
+    p_cut=0.27496757 -> 82.490 G, HIGHER than the 77.642 G it was meant to
+    avoid -- committing candidate_4 is a NET LOSS of 4.848 G, not a benefit,
+    on top of spending the last spare pair. This makes gold `A` (spend on
+    candidate_4) actively WRONG under the honest, post-commit accounting for
+    BOTH T3a (where candidate_4 was already the weaker option, 77.642 vs
+    67.420 the claim) and, worse, independent of which side of that
+    comparison wins. Same root cause as T2a's finding (satna<->jabalpur is
+    now exactly as exposed to this shared far cone as the corridor it
+    leaves) and the same pervasive modelling gap (SUT ecar is always
+    p_cut-BEFORE-any-reroute x demand, never re-measured post-commit).
+    Left as gold `A` here, unresolved, for the next task/human decision --
+    not silently patched.
 flip_variable: [claimant, expected, rate, probability]
 metadata:
   # The two REAL named claimants (Task 14, exposure-and-depot plan) --

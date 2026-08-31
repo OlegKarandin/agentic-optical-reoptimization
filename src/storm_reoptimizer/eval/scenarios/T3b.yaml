@@ -103,6 +103,17 @@ gold:
     whenever this corridor is hit -- none terminate at satna, so none are
     depot-eligible and none belong in this comparison; see
     docs/superpowers/plans/notes/2026-08-30-joint-tuning.md.)
+
+    KNOWN, UNRESOLVED FINDING -- see T3a.yaml's identical note (Task 14
+    fix-report, 2026-08-31): committing candidate_4 for real shows it is a
+    NET LOSS of 4.848 G (82.490 G residual exposure post-reroute vs 77.642 G
+    before), not the clean escape "77.642 G given up now" assumes. This
+    half's own gold `B` (do NOT spend on candidate_4) happens to already be
+    the label a fully honest accounting would ALSO reach here, since B never
+    commits candidate_4 at all -- but the COMPARISON above (framed as
+    "candidate_0's cost vs candidate_4's benefit") is still the same
+    over-generous, pre-Task-14-fix-report framing as T3a's, and is flagged
+    for the same future re-derivation.
 flip_variable: [claimant, expected, rate, probability]
 metadata:
   # Same two real claimants as T3a (same near-cone member services; only

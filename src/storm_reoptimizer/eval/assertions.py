@@ -1279,9 +1279,13 @@ def assert_sampling_error_within_margin(
     `derived.FlipScalars.values()` produces and
     `assert_no_global_policy_solves_the_suite` already consumes.
 
-    Written now; Task 14 (not this task) wires it against the real, frozen
-    per-episode numbers once they exist -- for now it is tested only
-    against constructed values."""
+    Wired into `suite.main()`'s pre-flight by Task 14 (exposure-and-depot
+    plan, 2026-08-30), against the real, frozen per-episode FLIP_VARS values
+    -- confirmed live: the smallest sorted-adjacent gap across all five
+    FLIP_VARS members (shared between `claimant_ecar_before_exposure_horizon`
+    and `claimant_ecar_peak_over_horizons`, both T3b vs T2a) is 14.586 G,
+    clearing `measured_error * 10` (2.56e-3 G at the shipped
+    `measured_error=2.56e-4`) by ~56,977x."""
     from .rules import _distinct_within_tolerance
 
     margins: list[float] = []

@@ -116,25 +116,51 @@ gold:
     confirms this exact route still exists and validates cleanly under
     basis=risk_group/level=risk_group.
 
-    KNOWN, PRE-EXISTING FINDING (Task 14, 2026-08-30, out of this task's own
-    scope to fix -- flagged rather than papered over): naming the SPECIFIC
-    far-horizon risk group `rg_T2a_t1_t6` in the avoid set (rather than
-    reference_avoid={}) no longer isolates satna<->rewa and satna<->jhansi
-    the way it did when this rationale was first written. Since Task 5 of
-    this same plan made satna<->jabalpur aerial too, and that span's satna
-    end sits well inside this half's far cone's own ~100 km radius, the
-    LIVE-minted `rg_T2a_t1_t6` now ALSO contains satna<->jabalpur --
-    confirmed directly (`geo_mapper.map_geo_event_to_assets` against the t6
-    cone returns all three of satna's aerial edges). Avoiding the FULL group
-    by its risk-group id therefore excludes the jabalpur escape route TOO,
-    and `route_service` returns zero candidates (`status=no_solution`) under
-    EITHER basis, not merely one that fails validate_plan as originally
-    described here. This does not change the comparison, the numbers, or the
-    WIDE/NARROW gold label above (both remain honest statements about
-    expected value), only the specific "name this one risk-group id" WORKED
-    EXAMPLE of how the wide lever is reached -- see
-    `test_t2a_carries_a_real_validate_plan_rejection` in test_episodes.py for
-    the live-confirmed detail.
+    KNOWN, UNRESOLVED FINDING (Task 14 fix-report, 2026-08-31,
+    exposure-and-depot plan -- escalated, not fixed here; see the plan's
+    Task 14 fix-report for the full investigation trail). TWO problems, both
+    confirmed live, both out of a routine fix's scope:
+
+    (1) UNREACHABLE. Naming the SPECIFIC far-horizon risk group
+    `rg_T2a_t1_t6` in the avoid set no longer isolates satna<->rewa and
+    satna<->jhansi the way it did when this rationale was first written.
+    Task 5 of this plan made satna<->jabalpur aerial too, and
+    `nearest_span_offset_km` from this far cone's own centre (storm-svc-1's
+    own point) to satna<->jhansi and to satna<->jabalpur is the EXACT SAME
+    FLOAT, 58.352 km, in both cases -- because satna itself, their shared
+    endpoint, is the nearest point on BOTH spans, and satna sits closer to
+    the centre than either jhansi or jabalpur. Investigated whether ANY far-
+    horizon RADIUS could separate them (the natural fix, since the geometry
+    stays otherwise frozen): it cannot -- any radius that includes
+    satna<->jhansi (needed for "wide" to route clear of protection) also
+    includes satna<->jabalpur (the escape route itself) at the exact same
+    radius, confirmed by direct computation, not assumed. `route_service`
+    under `avoid={risk_groups:[rg_T2a_t1_t6]}` now returns ZERO candidates
+    (`status=no_solution`) under EITHER basis -- see
+    `metadata.widest_avoid_feasible: false` above and
+    `test_t2a_carries_a_real_validate_plan_rejection` in test_episodes.py.
+
+    (2) EVEN IF RECOVERED, THE ARITHMETIC IS BACKWARDS. Confirmed by
+    actually COMMITTING the real jabalpur reroute (via `reference_avoid={}`
+    instead of the broken risk-group avoid, then `validate_plan` +
+    `commit_plan`, both succeeded) and re-reading storm-svc-1's OWN NEW
+    `cuttable_spans` against this SAME far cone: the reroute's OWN residual
+    exposure is p_cut=0.38049897 -> 114.150 G (it now rides
+    satna<->jabalpur, which is exactly as exposed to this cone as the
+    corridor it left), not the 0.0 the "147.535 G goes away" framing above
+    assumes. The REAL net benefit of spending the pair is
+    147.535 - 114.150 = 33.385 G -- LESS than the 124.96 G claim it is
+    weighed against, meaning the honest comparison favours NARROW, not WIDE.
+    This is a pervasive modelling choice (every `sut_ecar_by_horizon` figure
+    in this suite is p_cut-BEFORE-any-reroute x demand, never re-measured
+    post-commit), not a defect specific to this half, and fixing it credibly
+    means re-deriving T2's (and T3's, which shows the SAME reroute is a NET
+    LOSS there -- see T3a.yaml) whole near/far construction against the
+    honest post-commit numbers, which could not be done without breaking
+    `assert_gold_choices_differ` for at least one of the two pairs (flipping
+    T2a's label to NARROW would make BOTH T2 halves NARROW). Left as gold
+    `wide` here, unresolved, for the next task/human decision -- not
+    silently patched.
 flip_variable: [claimant, spare, near, horizon]
 metadata:
   # The two REAL named claimants (Task 14, exposure-and-depot plan) --
@@ -163,7 +189,29 @@ metadata:
   largest_restorable_group_ecar_gbps: 75.633
   label_rule: avoid_horizon_at_decision_hour
   wide_avoid_risk_group: rg_T2a_t1_t6   # matches the runner's rg_{scenario}_{issued}_{horizon} minting
-  widest_avoid_feasible: true           # EQUAL in T2b -- see rehearsal doc Q1
+  # FALSE (fix-report, 2026-08-31, exposure-and-depot plan) -- was true.
+  # Confirmed live and NOT fixable by moving this far cone's radius: the
+  # near-point of BOTH satna<->jhansi and satna<->jabalpur to this far
+  # cone's own centre (storm-svc-1's own point) is the EXACT SAME float,
+  # 58.352 km, because satna itself -- their shared endpoint -- is the
+  # nearest point on both spans, and satna sits closer to the centre than
+  # either jhansi or jabalpur. No radius can include satna<->jhansi (needed
+  # so the wide avoid actually clears storm-svc-1's own protection corridor)
+  # without also including satna<->jabalpur (the escape route itself) at
+  # the SAME radius -- confirmed by direct computation
+  # (`cone.nearest_span_offset_km`), not assumed. So `route_service(avoid=
+  # {risk_groups:[rg_T2a_t1_t6]}, ...)` returns ZERO candidates under EITHER
+  # basis today (confirmed live) -- the widest (risk-group) avoid is
+  # genuinely infeasible, EQUAL in T2b (both halves share this same,
+  # byte-identical far cone, so this greedy predicate's own input stays
+  # equal across the pair -- see rules.greedy_rules' widest_feasible_avoid
+  # and the comment on why an equal declared value here cannot become a
+  # confound). See test_episodes.py's
+  # test_t2a_carries_a_real_validate_plan_rejection for the live-confirmed
+  # detail and gold.rationale above for what this means for the WIDE label
+  # itself (the specific "avoid by risk-group id" worked example is stale;
+  # unresolved, flagged for a follow-up task).
+  widest_avoid_feasible: false
   cone_width_km: 60            # EQUAL in T2b (the near horizon's declared
                                 # width; the far horizon's 200 is equal too and
                                 # is checked directly by the derived-geometry
