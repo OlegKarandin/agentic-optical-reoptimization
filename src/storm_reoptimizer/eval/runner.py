@@ -49,7 +49,7 @@ from .decisions import ConstraintDecision, Decider, candidate_index
 from .ledger import SpareLedger, spares_needed
 from .observation import build_observation, latest_issuance, lead_time_hours_for
 from .plans import PlanTranslationError, build_topology_index, plan_from_candidate
-from .scenario_file import Issuance, ScenarioFile
+from .scenario_file import ConeAtHorizon, Issuance, ScenarioFile
 
 MAX_ITERATIONS = 5
 
@@ -614,6 +614,34 @@ async def service_points(client: Client, topology_path: str | Path, *,
     return (await service_geometry(client, topology_path, call=call)).points
 
 
+def horizon_risk_group_asset_ids(cone: ConeAtHorizon, *, edges: list[Edge],
+                                 oms: list[dict], filter_fn) -> list[str]:
+    """The fiber asset ids one horizon's risk group names: every `fiber_*`
+    element of every OMS whose two endpoints are a local-topology edge that
+    the hazard geometry touches AND the event's own filter admits.
+
+    Extracted from `_define_horizon_risk_groups` so `assertions.
+    assert_risk_group_covers_measurable_exposure` can ask what a horizon's
+    group WOULD contain without defining it on a server -- which is what
+    makes the pre-flight check and the real rollout structurally unable to
+    disagree about the answer, the same discipline
+    `assert_pair_derived_geometry_is_equal` states for derived geometry.
+
+    `oms` is `get_topology(layer="optical")["oms"]`, passed in rather than
+    fetched so the caller can read it once and reuse it across every episode
+    sharing a state file.
+
+    Both node orders are matched: the local topology's edge direction and the
+    server's OMS direction are independent facts and do agree only by
+    accident."""
+    exposed = map_geo_event_to_assets(cone.cone, edges, filter_fn)
+    pairs = ({(e.src, e.dst) for e in exposed}
+             | {(e.dst, e.src) for e in exposed})
+    return [a for o in oms
+            if (o["src_node_id"], o["dst_node_id"]) in pairs
+            for a in o["elements"] if a.startswith("fiber_")]
+
+
 async def _define_horizon_risk_groups(
     counting: _CountingClient, scenario: ScenarioFile, issuance, *,
     edges: list[Edge], defined: set[str],
@@ -632,12 +660,8 @@ async def _define_horizon_risk_groups(
         rg_ids[horizon] = rg_id
         if rg_id in defined:
             continue
-        exposed = map_geo_event_to_assets(cone.cone, edges, filter_fn)
-        pairs = ({(e.src, e.dst) for e in exposed}
-                 | {(e.dst, e.src) for e in exposed})
-        fiber_ids = [a for oms in topo["oms"]
-                     if (oms["src_node_id"], oms["dst_node_id"]) in pairs
-                     for a in oms["elements"] if a.startswith("fiber_")]
+        fiber_ids = horizon_risk_group_asset_ids(
+            cone, edges=edges, oms=topo["oms"], filter_fn=filter_fn)
         await counting.call("define_risk_group", {
             "rg_id": rg_id, "asset_ids": fiber_ids,
             "metadata": {"event_type": EVENT_TYPE, "scenario": scenario.id,

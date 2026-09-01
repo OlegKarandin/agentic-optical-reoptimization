@@ -1177,3 +1177,37 @@ def test_recording_costs_no_extra_server_calls(
         state_path=loaded_state_path, server_command=local_server_command,
         server_env=local_server_env))
     assert trace.tool_calls == EXPECTED_TOOL_CALLS_IMMEDIATE_BASELINE
+
+
+def test_the_risk_group_walk_names_fibers_of_filtered_edges_only():
+    """horizon_risk_group_asset_ids resolves the edges a hazard geometry
+    touches to the FIBER element ids of the OMS between the same two nodes,
+    in either node order, and drops non-fiber elements."""
+    from shapely.geometry import LineString
+
+    from storm_reoptimizer.eval.runner import horizon_risk_group_asset_ids
+    from storm_reoptimizer.eval.scenario_file import ConeAtHorizon
+    from storm_reoptimizer.events.geo import circle_polygon
+    from storm_reoptimizer.geo_mapper import Edge
+
+    inside = Edge(src="a", dst="b", mount_type="aerial",
+                  geometry=LineString([(81.0, 25.0), (81.1, 25.0)]))
+    buried = Edge(src="a", dst="c", mount_type="buried",
+                  geometry=LineString([(81.0, 25.0), (81.1, 25.05)]))
+    far = Edge(src="d", dst="e", mount_type="aerial",
+               geometry=LineString([(90.0, 25.0), (90.1, 25.0)]))
+    oms = [
+        # dst/src reversed relative to the Edge, to pin the both-orders walk.
+        {"id": "oms_ab", "src_node_id": "b", "dst_node_id": "a",
+         "elements": ["fiber_a_b_0", "edfa_a_b_0"]},
+        {"id": "oms_ac", "src_node_id": "a", "dst_node_id": "c",
+         "elements": ["fiber_a_c_0"]},
+        {"id": "oms_de", "src_node_id": "d", "dst_node_id": "e",
+         "elements": ["fiber_d_e_0"]},
+    ]
+    cone = ConeAtHorizon(cone=circle_polygon(25.0, 81.05, 30.0),
+                         width_km=60.0, center={"lat": 25.0, "lon": 81.05})
+
+    assert horizon_risk_group_asset_ids(
+        cone, edges=[inside, buried, far], oms=oms,
+        filter_fn=lambda e: e.mount_type == "aerial") == ["fiber_a_b_0"]
