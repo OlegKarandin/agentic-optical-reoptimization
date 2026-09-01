@@ -1,0 +1,83 @@
+{
+  "derived": {
+    "D1": {
+      "sut_p_cut_at_exposure_horizon": 1.0,
+      "within_issuance_cone_motion_kmh": 0.0
+    },
+    "T1a": {
+      "sut_p_cut_at_exposure_horizon": 0.09692530708781567,
+      "within_issuance_cone_motion_kmh": 0.0
+    },
+    "T1b": {
+      "sut_p_cut_at_exposure_horizon": 0.09692530708781567,
+      "within_issuance_cone_motion_kmh": 0.0
+    },
+    "T2a": {
+      "sut_p_cut_at_exposure_horizon": 0.49178301670862895,
+      "within_issuance_cone_motion_kmh": 250.00000000000014
+    },
+    "T2b": {
+      "sut_p_cut_at_exposure_horizon": 0.49178301670862895,
+      "within_issuance_cone_motion_kmh": 250.00000000000006
+    },
+    "T3a": {
+      "sut_p_cut_at_exposure_horizon": 0.25880827038986803,
+      "within_issuance_cone_motion_kmh": 289.9999999999999
+    },
+    "T3b": {
+      "sut_p_cut_at_exposure_horizon": 0.25880827038986803,
+      "within_issuance_cone_motion_kmh": 290.0000000000003
+    }
+  },
+  "flip": {
+    "D1": {
+      "claimant_ecar_at_exposure_horizon": 1100.0,
+      "claimant_ecar_before_exposure_horizon": 0,
+      "claimant_ecar_min_over_horizons": 1100.0,
+      "claimant_ecar_peak_over_horizons": 1100.0,
+      "largest_restorable_group_ecar_gbps": 200.0
+    },
+    "T1a": {
+      "claimant_ecar_at_exposure_horizon": 655.4772259098193,
+      "claimant_ecar_before_exposure_horizon": 0,
+      "claimant_ecar_min_over_horizons": 655.4772259098193,
+      "claimant_ecar_peak_over_horizons": 655.4772259098193,
+      "largest_restorable_group_ecar_gbps": 118.209
+    },
+    "T1b": {
+      "claimant_ecar_at_exposure_horizon": 63.047226672770286,
+      "claimant_ecar_before_exposure_horizon": 0,
+      "claimant_ecar_min_over_horizons": 63.047226672770286,
+      "claimant_ecar_peak_over_horizons": 63.047226672770286,
+      "largest_restorable_group_ecar_gbps": 3.485
+    },
+    "T2a": {
+      "claimant_ecar_at_exposure_horizon": 529.4407568474861,
+      "claimant_ecar_before_exposure_horizon": 687.2755016403447,
+      "claimant_ecar_min_over_horizons": 529.4407568474861,
+      "claimant_ecar_peak_over_horizons": 687.2755016403447,
+      "largest_restorable_group_ecar_gbps": 75.633
+    },
+    "T2b": {
+      "claimant_ecar_at_exposure_horizon": 529.4407568474861,
+      "claimant_ecar_before_exposure_horizon": 1087.763790341039,
+      "claimant_ecar_min_over_horizons": 529.4407568474861,
+      "claimant_ecar_peak_over_horizons": 1087.763790341039,
+      "largest_restorable_group_ecar_gbps": 75.633
+    },
+    "T3a": {
+      "claimant_ecar_at_exposure_horizon": 444.08026245517664,
+      "claimant_ecar_before_exposure_horizon": 370.8125429159991,
+      "claimant_ecar_min_over_horizons": 370.8125429159991,
+      "claimant_ecar_peak_over_horizons": 444.08026245517664,
+      "largest_restorable_group_ecar_gbps": 51.408
+    },
+    "T3b": {
+      "claimant_ecar_at_exposure_horizon": 444.08026245517664,
+      "claimant_ecar_before_exposure_horizon": 672.6894026092929,
+      "claimant_ecar_min_over_horizons": 444.08026245517664,
+      "claimant_ecar_peak_over_horizons": 672.6894026092929,
+      "largest_restorable_group_ecar_gbps": 51.408
+    }
+  }
+}

@@ -2,6 +2,7 @@
 rollout is scored (eval design spec, "Twin-pair discipline"). A pair failing
 these is cut, not shipped."""
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -19,7 +20,7 @@ from storm_reoptimizer.eval.baseline import ForecastBlindBaseline
 from storm_reoptimizer.eval.decisions import (
     ConstraintDecision, ObjectiveDecision, TimingDecision,
 )
-from storm_reoptimizer.eval.derived import flip_scalars_for
+from storm_reoptimizer.eval.derived import derived_scalars_for, flip_scalars_for
 from storm_reoptimizer.eval.runner import run_episode
 from storm_reoptimizer.eval.scenario_file import (
     SCENARIOS_DIR as SCENARIOS, load_all_scenarios, load_scenario,
@@ -810,3 +811,50 @@ def test_gold_spare_action_is_grounded_in_a_real_candidate(
                 committed_lever=_GOLD_COMMITTED_LEVER[scenario_id])
 
     asyncio.run(_run())
+
+
+FROZEN_SCALARS_PATH = (
+    Path(__file__).parent / "fixtures" / "frozen_derived_scalars.json")
+
+
+def test_the_probability_model_scalars_are_unmoved(
+    loaded_state_path, local_server_command, local_server_env,
+):
+    """cone.py's outputs are frozen against a snapshot taken before the
+    hazard-footprint seam fix (plan 2026-09-01, Task 1).
+
+    This is the load-bearing guarantee that the fix touches ROUTING
+    behaviour -- which candidates survive `avoid`, whether the baseline acts
+    -- and not the probability model. `derived.FLIP_VARS` feeds
+    `assert_no_global_policy_solves_the_suite`, whose interleave margins are
+    under 1 G; if any of these moved, Claim 2 would have to be re-argued
+    rather than merely re-run.
+
+    Bit-identical, not approximate. The scalars are deterministic (SOBOL_M is
+    a contract, the Sobol sequence is unscrambled and built once at import),
+    so any tolerance here would only hide a real move.
+    """
+    frozen = json.loads(FROZEN_SCALARS_PATH.read_text(encoding="utf-8"))
+    episodes = load_all_scenarios()
+    scenarios = list(episodes.values())
+
+    @asynccontextmanager
+    async def _connect():
+        async with connect_server(
+            TOPOLOGY_PATH, server_command=local_server_command,
+            env=local_server_env,
+            extra_args=["--state", str(loaded_state_path)],
+        ) as client:
+            yield client
+
+    async def _run():
+        async with _connect() as client:
+            derived = await derived_scalars_for(
+                client, scenarios, topology_path=TOPOLOGY_PATH)
+            flip = await flip_scalars_for(
+                client, scenarios, topology_path=TOPOLOGY_PATH)
+        return derived, {sid: f.values() for sid, f in flip.items()}
+
+    derived, flip = asyncio.run(_run())
+    assert derived == frozen["derived"]
+    assert flip == frozen["flip"]
