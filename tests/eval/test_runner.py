@@ -133,40 +133,68 @@ def test_a_menu_with_no_solution_projects_to_an_empty_candidate_list():
 
 
 # A minimal, deliberately non-discriminating episode: two hours, one issuance,
-# one realized cut. Its job is to exercise the loop, not to score anyone.
+# no realized cut. Its job is to exercise the loop, not to score anyone.
 #
-# `center`/`width_km` (what build_observation's p_cut arithmetic reads) sit
-# ON storm-svc-1's real working aerial span (satna<->rewa), so its exposure
-# is genuinely nonzero under the region model -- Task 3 of the exposure-and-
-# depot plan scores exposure off the real span, not an averaged midpoint, so
-# a cone that no longer touches the real corridor at all (the old, pre-Task-3
-# geometry below) reads zero exposure and the baseline never acts.
+# COHERENT GEOMETRY (retuned 2026-09-01, hazard-footprint seam fix). Before
+# that fix the risk group came from the `cone` POLYGON while exposure came
+# from `center`/`width_km`, and this fixture exploited the gap: its polygon
+# was a box near allahabad touching no aerial edge at all (empty avoid set,
+# so every reroute was the inert same-corridor one), while `center`/
+# `width_km` sat on the real working span so exposure still read nonzero.
+# That decoupling IS the seam defect the fix closes -- `avoid` now derives
+# from `events.geo.damage_footprint(center, width_km, damage_radius_km)`,
+# a disc of radius `width_km/2 + damage_radius_km` about the SAME centre the
+# p_cut arithmetic reads -- so the split is no longer expressible and the
+# three fields below have to be chosen together.
 #
-# `cone` (the GeoJSON polygon `_define_horizon_risk_groups` intersects
-# against the LOCAL topology's edges to build the avoid set) is DELIBERATELY
-# a different, disjoint box, near allahabad, that intersects no aerial edge
-# at all -- confirmed live. Avoiding satna-rewa for real is not a free
-# no-op: it is a shared backbone trunk carrying hundreds of other services,
-# and route_service's cheapest alternative for storm-svc-1 then runs
-# straight through protection's own corridor (satna<->jhansi<->allahabad),
-# which is exactly the disjointness_collapse `_WidensOnDisjointnessRejection`
-# exists to recover from -- not something a plain ForecastBlindBaseline
-# ever will.
+# What the real topology allows, measured with `geo_mapper.load_edges` +
+# Shapely against src/storm_reoptimizer/data/toy_india_topology.json:
 #
-# `ConeAtHorizon` never cross-checks its `cone` polygon against its
-# `center`/`width_km` (scenario_file.py), so this split is legal -- but it is
-# a NEW incoherence, not an inherited one: the OLD, pre-Task-3 fixture's
-# `center`/`width_km` (25.1, 81.8 / 120) was itself roughly the centroid and
-# extent of ITS OWN polygon (the same box below, near allahabad) -- the two
-# fields agreed, and its "empty risk group" property fell out of the polygon
-# alone sitting off every aerial edge. Task 3 moved exposure scoring onto the
-# real span, which is nowhere near that polygon, so THIS fixture is the first
-# one in the suite to deliberately point `center`/`width_km` at a location
-# its own `cone` polygon doesn't cover. That's a real, new fiction, kept
-# because the alternative -- a `cone` that actually reaches the real span --
-# makes the avoid set non-empty and forces the genuine disjointness_collapse
-# above, which is exactly what SMOKE exists NOT to exercise (that's
-# EXPOSURE_SMOKE's job, paired with `_WidensOnDisjointnessRejection`, below).
+#   * storm-svc-1 is satna->rewa->allahabad working, satna->jhansi->allahabad
+#     protection. Its ONLY storm-cuttable (aerial) working span is
+#     satna<->rewa, so ANY nonzero exposure means the footprint disc reaches
+#     that span, which means the risk group always names it. "Exposed but
+#     satna<->rewa not avoided" is arithmetically impossible now.
+#   * satna's three aerial spans (rewa ~96 deg, jabalpur ~212 deg, jhansi
+#     ~291 deg) all START AT SATNA, so for any centre off those bearings the
+#     nearest point of the jhansi span and of the jabalpur span is satna
+#     itself -- identical distances. A DISC therefore cannot separate them:
+#     the only two reachable risk groups are {satna<->rewa} (disc short of
+#     satna) and all three spans (disc reaching satna, which encloses the
+#     depot and leaves no egress at all). The keyhole polygon EXPOSURE_SMOKE
+#     used to cut jabalpur out of the group is dead weight now, for the same
+#     reason: `damage_footprint` never looks at `cone.cone`.
+#
+# So this fixture takes the only usable option: centre the cone ON the
+# satna<->rewa corridor but PAST rewa, at (24.50333, 81.58) -- 1.6 span
+# lengths out along satna->rewa -- with width_km 90 and damage_radius_km 20.
+# Then W = width_km/2 = 45 and R = W + damage_radius_km = 65, against
+# measured offsets of 28.5 km to satna<->rewa (so 28.5 <= 45: the service is
+# INSIDE the cone and the forecast-blind baseline acts, p_cut 0.1659) and
+# 76.1 km to both the jhansi and the jabalpur span (so 76.1 > 65: neither is
+# in the group -- 11.1 km of clearance). Risk group == {satna<->rewa},
+# verified live via `map_geo_event_to_assets(damage_footprint(...))`.
+#
+# CONSEQUENCE, and why the deciders below changed: avoiding satna<->rewa for
+# real is not a free no-op. rewa is a stub behind that span (its only other
+# edge is the buried rewa<->allahabad), and allahabad's three accesses --
+# fatehpur, rewa, jhansi -- are ALL BURIED, so no storm risk group can ever
+# name jhansi<->allahabad. route_service's cheapest alternative is therefore
+# satna->jhansi->allahabad, which IS the protection path: a real, first-try
+# `disjointness_collapse` on `oms_jhansi_allahabad` under basis=physical/
+# level=link. A plain ForecastBlindBaseline re-proposes it every iteration
+# and hits the cap with zero commits; `_WidensOnDisjointnessRejection` adds
+# the violation's own shared_assets and commits an optical_reroute on the
+# next iteration (satna->jabalpur->...->fatehpur->allahabad, the one route
+# to allahabad that is genuinely disjoint from protection). Every test in
+# this file that needs SMOKE to COMMIT is therefore paired with that decider;
+# the ones that only need the loop to run, or need a rejection rather than a
+# commit, still use the plain baseline.
+#
+# After the t0 reroute the service's nearest aerial span is satna<->jabalpur
+# at 76.1 km -- outside the 45 km half-width -- so the baseline waits at t1
+# and the episode commits exactly once. (Nothing can change that: t1 exposure
+# would need the disc to reach satna, which is the enclose-the-depot case.)
 SMOKE = textwrap.dedent("""
     id: SMOKE
     seed: 17
@@ -179,11 +207,11 @@ SMOKE = textwrap.dedent("""
     spares_on_hand: 2
     depot_site: satna
     spare_inventory: {satna: 2}
-    damage_radius_km: 74
+    damage_radius_km: 20
     reference_avoid: {}
     forecast:
       t0:
-        t1: {cone: {type: Polygon, coordinates: [[[81.3, 24.8], [82.3, 24.8], [82.3, 25.4], [81.3, 25.4], [81.3, 24.8]]]}, width_km: 90, center: {lat: 24.55, lon: 81.15}}
+        t1: {cone: {type: Polygon, coordinates: [[[81.58, 24.90802], [81.69511, 24.89424], [81.80238, 24.85381], [81.89449, 24.78949], [81.96516, 24.70568], [82.0096, 24.60807], [82.02475, 24.50333], [82.0096, 24.39859], [81.96516, 24.30098], [81.89449, 24.21717], [81.80238, 24.15285], [81.69511, 24.11242], [81.58, 24.09864], [81.46489, 24.11242], [81.35762, 24.15285], [81.26551, 24.21717], [81.19484, 24.30098], [81.1504, 24.39859], [81.13525, 24.50333], [81.1504, 24.60807], [81.19484, 24.70568], [81.26551, 24.78949], [81.35762, 24.85381], [81.46489, 24.89424], [81.58, 24.90802]]]}, width_km: 90, center: {lat: 24.50333, lon: 81.58}}
     realized:
       t1: []
     gold:
@@ -202,54 +230,52 @@ SMOKE = textwrap.dedent("""
       claimant_services: []
 """)
 
-# Originally the t0 cone was T2a.yaml's t1:t6 (far) cone, copied verbatim --
-# a ~100km-radius circle centred ON storm-svc-1's own point (24.855553,
-# 81.327777), 200km wide. That circle excluded both satna<->rewa (working)
-# and satna<->jhansi (protection), the wide avoid group that funnelled every
-# real reroute candidate through jhansi<->allahabad (protection's own
-# segment), producing the genuine disjointness_collapse
-# `test_t2a_carries_a_real_validate_plan_rejection` already proves recovers
-# via widen-and-retry.
+# The fixture for "exposure follows the service after it reroutes": the
+# rollout must actually MOVE storm-svc-1, and both the pre- and post-commit
+# exposure readings must be real numbers off the real corridor, so that
+# `p_cut` dropping is a measurement and not a degeneration to zero.
 #
-# Retuned 2026-08-30 (exposure-and-depot design, satna<->jabalpur going
-# aerial, §3.2 Option B). satna has degree 3 and, once jabalpur is aerial
-# too, that same circle also swept up satna<->jabalpur (its nearest point to
-# the circle's centre is ~65km, well inside the ~100km radius) -- fully
-# enclosing satna. With NO edge left outside the avoid set, "avoid the risk
-# group" and "reach satna" become mutually exclusive and the menu comes back
-# no_solution even after widening: there was no longer an escape route left
-# to find. jabalpur is the escape route this scenario needs to prove exists
-# (that's the whole point of "exposure follows the service after it
-# reroutes" -- a reroute has to actually be possible), so the fix is
-# geometric, not a parameter tweak: the circle can't simply shrink, because
-# jhansi and jabalpur's spans are BOTH ~65km from this centre along nearly
-# the same distance band (satna is their common near endpoint), so no radius
-# alone separates "expose jhansi" from "expose jabalpur" -- confirmed by
-# sweeping every radius from 20-125km, which flips both together every time
-# (scratchpad/sweep_exposure_smoke_radius.py). What DOES separate them is
-# direction: jhansi sits at bearing ~291 deg from satna, rewa at ~96 deg,
-# jabalpur at ~212 deg -- three very different directions. The cone below is
-# the same technique Task 3 used for `SMOKE` (the `cone` polygon that
-# `map_geo_event_to_assets` actually routes against and `center`/`width_km`,
-# which only feed `p_cut_region`/`nearest_span_offset_km`'s scoring, are
-# never cross-checked against each other -- confirmed in `scenario_file.py`)
-# taken one step further: `cone` is now a hand-built "keyhole" polygon --
-# the same ~90km-radius disc, centred at satna itself this time, with a
-# small hole directly over satna's own point (so all three of satna's edges
-# don't trivially touch it at their shared origin) and an 80 deg wide wedge
-# cut out toward jabalpur's bearing (212 +/- 40 deg, comfortably clear of
-# rewa's 96 deg and jhansi's 291 deg) removed. `center`/`width_km` are left
-# exactly as they were (still the real storm-svc-1 point, 200km) since they
-# don't drive routing and this fixture's own p_cut/offset_km assertions
-# still hold under them (rewa's offset from that centre, ~36km, is smaller
-# than jabalpur's, ~65-100km, so p_cut still drops after the reroute onto
-# jabalpur, as the test requires). Verified against the real geo_mapper:
-# exposed == {(satna,rewa), (satna,jhansi)} only, both before and after
-# rounding coordinates to 5 decimals (scratchpad/build_exposure_smoke_cone.py,
-# scratchpad/finalize_exposure_smoke_cone.py). A plain
-# ForecastBlindBaseline("immediate") still never recovers from the
-# rewa+jhansi disjointness_collapse (it hits the cap with zero commits), so
-# this fixture remains reserved for tests that pair it with
+# History, kept because it is the reason this fixture exists separately from
+# SMOKE. The t0 cone started as T2a.yaml's t1:t6 circle, ~100km radius
+# centred on storm-svc-1's own point. When satna<->jabalpur went aerial
+# (2026-08-30, exposure-and-depot design §3.2 Option B) that circle swept up
+# all three of satna's aerial spans, enclosing the depot: "avoid the risk
+# group" and "reach satna" became mutually exclusive and no widening could
+# find an escape. The 2026-08-30 answer was a hand-built "keyhole" polygon --
+# a disc with an 80 deg wedge cut out toward jabalpur's bearing -- which
+# worked only because `map_geo_event_to_assets` was fed `cone.cone` while
+# `p_cut` was computed from `center`/`width_km`, two independently
+# controllable geometries.
+#
+# The 2026-09-01 hazard-footprint seam fix removes that degree of freedom on
+# purpose: the risk group is now `damage_footprint(center, width_km,
+# damage_radius_km)`, a DISC, and it never looks at `cone.cone` at all. The
+# keyhole cannot come back -- and no disc can reproduce it, because satna is
+# the common near endpoint of the jhansi and jabalpur spans, so any centre
+# off those two bearings is exactly equidistant from both (verified live:
+# identical offsets to the tenth of a km, and the 2026-08-30 radius sweep
+# already reported both flipping together at every radius from 20 to 125km).
+#
+# So this fixture uses the one shape that leaves an escape route, the same
+# one SMOKE uses -- a disc on the satna<->rewa corridor that stops short of
+# satna -- but pushed further out and made wider, which is what keeps this
+# fixture distinct: centre (24.48333, 81.76667), exactly two span lengths
+# along satna->rewa, width_km 120, damage_radius_km 25. Measured against the
+# real topology (geo_mapper.load_edges + Shapely): W = 60, R = 85; offset to
+# satna<->rewa 47.6 km (inside the half-width, so the service is exposed and
+# the forecast-blind timing rule fires, p_cut 0.1143); offset to the jhansi
+# and jabalpur spans 95.1 km each (10.1 km outside R, so the group is
+# {satna<->rewa} alone and jabalpur stays open as the egress). After the
+# commit the service rides satna->jabalpur->...->fatehpur->allahabad, whose
+# nearest aerial span sits at 95.1 km: offset_km moves 47.6 -> 95.1 and
+# p_cut 0.1143 -> 0.0196 -- still nonzero, which is the point. The wider cone
+# is what keeps that residual reading measurable rather than a floor at 0.
+#
+# As before, a plain ForecastBlindBaseline("immediate") never recovers from
+# the resulting disjointness_collapse on jhansi<->allahabad (it hits the cap
+# with zero commits -- allahabad's three accesses are all BURIED, so no storm
+# risk group can ever name the protection corridor's own segment), so this
+# fixture stays reserved for tests that pair it with
 # `_WidensOnDisjointnessRejection`.
 EXPOSURE_SMOKE = textwrap.dedent("""
     id: EXPOSURE_SMOKE
@@ -263,11 +289,11 @@ EXPOSURE_SMOKE = textwrap.dedent("""
     spares_on_hand: 2
     depot_site: satna
     spare_inventory: {satna: 2}
-    damage_radius_km: 74
+    damage_radius_km: 25
     reference_avoid: {}
     forecast:
       t0:
-        t1: {cone: {type: Polygon, coordinates: [[[81.62627533988763, 24.425603365240285], [81.6069971776491, 24.34864062744429], [81.58026817756033, 24.27393807660027], [81.5463457545037, 24.202215139109416], [81.50555659995715, 24.134162546067515], [81.45829353577656, 24.07043568114689], [81.40501173110663, 24.011648268893378], [81.34622431885312, 23.95836646422344], [81.28249745393249, 23.911103400042858], [81.2144448608906, 23.8703142454963], [81.14272192339973, 23.836391822439673], [81.06801937255571, 23.80966282235089], [80.99105663475972, 23.790384660112373], [80.9471105934481, 23.783865880676014], [80.85224219210275, 24.450446012092105], [80.85961777245996, 24.45117244335206], [80.88489532056663, 24.458840303739944], [80.90819124232209, 24.471292233340478], [80.92861028851777, 24.48804971148223], [80.94536776665953, 24.50846875767792], [80.95781969626006, 24.53176467943338], [80.96548755664794, 24.557042227540048], [80.96807667624866, 24.58333], [80.96548755664794, 24.609617772459952], [80.95781969626006, 24.63489532056662], [80.94536776665953, 24.65819124232208], [80.92861028851777, 24.67861028851777], [80.90819124232209, 24.695367766659523], [80.88489532056663, 24.707819696260056], [80.85961777245996, 24.71548755664794], [80.83333, 24.718076676248653], [80.80704222754005, 24.71548755664794], [80.78176467943338, 24.707819696260056], [80.75846875767792, 24.695367766659523], [80.73804971148223, 24.67861028851777], [80.72129223334048, 24.65819124232208], [80.70884030373995, 24.63489532056662], [80.70117244335206, 24.609617772459952], [80.69858332375135, 24.58333], [80.70117244335206, 24.557042227540048], [80.70583876097633, 24.541659439870248], [80.06548793506103, 24.332360528040812], [80.0596628223509, 24.34864062744429], [80.04038466011238, 24.425603365240285], [80.02874299496499, 24.504085096751165], [80.02484994250808, 24.58333], [80.02874299496499, 24.662574903248835], [80.04038466011238, 24.741056634759715], [80.0596628223509, 24.81801937255571], [80.08639182243968, 24.89272192339973], [80.1203142454963, 24.964444860890584], [80.16110340004286, 25.032497453932486], [80.20836646422345, 25.09622431885311], [80.26164826889338, 25.155011731106622], [80.32043568114689, 25.20829353577656], [80.38416254606751, 25.255556599957142], [80.45221513910941, 25.2963457545037], [80.52393807660027, 25.330268177560328], [80.5986406274443, 25.35699717764911], [80.67560336524029, 25.376275339887627], [80.75408509675117, 25.387917005035014], [80.83333, 25.391810057491917], [80.91257490324884, 25.387917005035014], [80.99105663475972, 25.376275339887627], [81.06801937255571, 25.35699717764911], [81.14272192339973, 25.330268177560328], [81.21444486089058, 25.2963457545037], [81.28249745393249, 25.255556599957142], [81.34622431885312, 25.20829353577656], [81.40501173110663, 25.155011731106622], [81.45829353577656, 25.09622431885311], [81.50555659995715, 25.032497453932486], [81.5463457545037, 24.964444860890584], [81.58026817756033, 24.892721923399733], [81.6069971776491, 24.81801937255571], [81.62627533988763, 24.741056634759715], [81.63791700503502, 24.662574903248835], [81.64181005749192, 24.58333], [81.63791700503502, 24.504085096751165], [81.62627533988763, 24.425603365240285]]]}, width_km: 200, center: {lat: 24.855553333333333, lon: 81.32777666666667}}
+        t1: {cone: {type: Polygon, coordinates: [[[81.76667, 25.02292], [81.92013, 25.00454], [82.06312, 24.95063], [82.18592, 24.86488], [82.28014, 24.75313], [82.33937, 24.62299], [82.35958, 24.48333], [82.33937, 24.34367], [82.28014, 24.21353], [82.18592, 24.10178], [82.06312, 24.01603], [81.92013, 23.96212], [81.76667, 23.94374], [81.61321, 23.96212], [81.47022, 24.01603], [81.34742, 24.10178], [81.2532, 24.21353], [81.19397, 24.34367], [81.17376, 24.48333], [81.19397, 24.62299], [81.2532, 24.75313], [81.34742, 24.86488], [81.47022, 24.95063], [81.61321, 25.00454], [81.76667, 25.02292]]]}, width_km: 120, center: {lat: 24.48333, lon: 81.76667}}
     realized:
       t1: []
     gold:
@@ -278,7 +304,7 @@ EXPOSURE_SMOKE = textwrap.dedent("""
       rationale: smoke episode; not scored
     flip_variable: [smoke]
     metadata:
-      cone_width_km: 200
+      cone_width_km: 120
       cone_motion_kmh: 20
       n_future_claimants: 0
       exposure_horizon_hours: 1
@@ -373,7 +399,12 @@ def test_the_constraints_step_is_shown_the_menu_it_is_about_to_narrow(
 ):
     # F3 (remediation spec lines 96-112). decisions.py: decision 2 changes
     # which candidates EXIST. It was made blind to what constraining costs.
-    decider = _RecordingDecider(ForecastBlindBaseline("immediate"))
+    # Paired with the widening decider because a plain ForecastBlindBaseline
+    # can no longer commit on SMOKE at all (see SMOKE's own note: avoiding the
+    # exposed working span funnels every cheap reroute through the service's
+    # own protection corridor), and this test needs a committed hour to read
+    # `unconstrained_menu` back off the trace.
+    decider = _RecordingDecider(_WidensOnDisjointnessRejection())
     trace = asyncio.run(_run(
         _scenario(tmp_path), decider,
         loaded_state_path, local_server_command, local_server_env))
@@ -387,12 +418,12 @@ def test_the_constraints_step_is_shown_the_menu_it_is_about_to_narrow(
     # The probe is the menu BEFORE the agent's avoid set, so it is the same
     # object for every iteration of ONE hour -- it does not depend on the
     # answer, and re-probing per iteration would be a wasted tool call.
-    # SMOKE's immediate baseline commits at BOTH of its hours here
-    # (spares_on_hand=2 is sized for exactly that: storm-svc-1's offset from
-    # the cone centre never crosses outside the half-width even after t0's
-    # reroute), so decider.probes spans two DIFFERENT acting hours with two
-    # different real route_service results -- check same-object reuse within
-    # each hour's own iterations, not across the whole episode.
+    # SMOKE acts at t0 only (after the t0 reroute storm-svc-1's nearest aerial
+    # span is 76.1km out, past the 45km half-width, so t1 waits), and t0 runs
+    # TWO iterations -- the first-try disjointness_collapse and the widened
+    # retry -- which is exactly the case this check exists for: same-object
+    # reuse WITHIN one hour's iterations, walked per hour rather than across
+    # the whole episode so a second acting hour would not be assumed away.
     offset = 0
     for hour_record in trace.hours:
         n_iterations = len(hour_record.get("iterations", []))
@@ -411,8 +442,8 @@ def test_the_constraints_step_is_shown_the_menu_it_is_about_to_narrow(
 
 
 class _WidensOnDisjointnessRejection:
-    """Wraps ForecastBlindBaseline('immediate') -- same timing/objective --
-    but reacts to a genuine validate_plan disjointness_collapse rejection by
+    """Wraps a ForecastBlindBaseline variant -- same timing/objective -- but
+    reacts to a genuine validate_plan disjointness_collapse rejection by
     adding the violation's OWN `shared_assets` to the avoid set and retrying.
 
     Local to this module (test_runner.py's own docstring: the seven real
@@ -428,10 +459,23 @@ class _WidensOnDisjointnessRejection:
     disjointness_collapse under basis=physical/level=link, not fabricated.
     Widening with the violation's own shared_assets (naming the specific
     jhansi<->allahabad fiber/amp/roadm ids) finds a genuinely disjoint route
-    that validates on a later iteration."""
+    that validates on a later iteration --
+    satna->jabalpur->...->fatehpur->allahabad, the only way into allahabad
+    that touches neither the avoided working span nor the protection leg
+    (allahabad's other two accesses are rewa, a stub behind satna<->rewa, and
+    jhansi, protection's own).
 
-    def __init__(self) -> None:
-        self._inner = ForecastBlindBaseline("immediate")
+    Since the 2026-09-01 hazard-footprint seam fix this is the ONLY decider in
+    this file that can commit against SMOKE or EXPOSURE_SMOKE while actually
+    honouring the exposed risk group: that group now always names the exposed
+    working span, so every reroute is real and every first try collides with
+    protection. (The scripted deciders still commit, but they route under
+    avoid={} and so never face the collision.) `variant` is forwarded to the
+    wrapped baseline so a test about at_deadline timing still gets a real
+    committed action to assert on."""
+
+    def __init__(self, variant: str = "immediate") -> None:
+        self._inner = ForecastBlindBaseline(variant)
         self.name = "widens-on-disjointness-rejection"
 
     def timing(self, obs):
@@ -470,11 +514,11 @@ def test_exposure_follows_the_service_after_it_reroutes(
     # clear of its own protection leg without a widen-and-retry
     # (task-1-report.md); a plain ForecastBlindBaseline("immediate") never
     # moves the node sequence at all, so this uses
-    # _WidensOnDisjointnessRejection instead. This is why the test uses its
-    # own EXPOSURE_SMOKE scenario rather than the shared SMOKE fixture:
-    # SMOKE's cone is deliberately kept clear of storm-svc-1's corridor so
-    # every OTHER test in this file, which pairs it with a plain
-    # ForecastBlindBaseline, keeps committing cleanly at t0.
+    # _WidensOnDisjointnessRejection instead. EXPOSURE_SMOKE rather than the
+    # shared SMOKE fixture because this test needs BOTH readings to be real
+    # numbers off the real corridor: its wider, further-out cone leaves the
+    # post-commit path measurably (not vanishingly) exposed, so p_cut
+    # 0.1143 -> 0.0196 is a measurement rather than a collapse to the floor.
     decider = _RecordingDecider(_WidensOnDisjointnessRejection())
     trace = asyncio.run(_run(
         _exposure_scenario(tmp_path), decider,
@@ -496,8 +540,14 @@ def test_exposure_follows_the_service_after_it_reroutes(
 def test_a_baseline_rollout_completes_and_records_every_hour(
     tmp_path, loaded_state_path, local_server_command, local_server_env,
 ):
+    # Still a forecast-blind baseline (same timing rule, same fixed objective
+    # ordering); the widening wrapper is what lets it reach a terminal state
+    # other than the retry cap on SMOKE now that the risk group really names
+    # the exposed working span. Keeping the plain baseline here would make the
+    # terminal_status assertion below accept every status there is, which is
+    # not a check any more.
     trace = asyncio.run(_run(
-        _scenario(tmp_path), ForecastBlindBaseline("immediate"),
+        _scenario(tmp_path), _WidensOnDisjointnessRejection(),
         loaded_state_path, local_server_command, local_server_env))
     assert [h["hour"] for h in trace.hours] == ["t0", "t1"]
     assert trace.terminal_status in {"converged", "declared_infeasible"}
@@ -510,8 +560,10 @@ def test_the_next_hour_is_told_what_was_committed_in_the_previous_one(
 ):
     # F4's no-memory half (remediation spec lines 122-132). The decider is
     # asked to decide again at t1 with no hint that it already acted at t0
-    # unless the harness tells it.
-    decider = _RecordingDecider(ForecastBlindBaseline("immediate"))
+    # unless the harness tells it. Widening wrapper because SMOKE's t0 commit
+    # only happens after the disjointness retry (see SMOKE's own note); the
+    # memory being asserted is the harness's, not the decider's.
+    decider = _RecordingDecider(_WidensOnDisjointnessRejection())
     trace = asyncio.run(_run(
         _scenario(tmp_path), decider,
         loaded_state_path, local_server_command, local_server_env))
@@ -549,9 +601,11 @@ def test_a_committed_action_debits_the_ledger_and_records_its_lead_time(
     tmp_path, loaded_state_path, local_server_command, local_server_env,
 ):
     trace = asyncio.run(_run(
-        _scenario(tmp_path), ForecastBlindBaseline("immediate"),
+        _scenario(tmp_path), _WidensOnDisjointnessRejection(),
         loaded_state_path, local_server_command, local_server_env))
-    assert trace.actions, "the immediate baseline should have acted at t0"
+    assert trace.actions, (
+        "the immediate baseline, widened past the disjointness collapse, "
+        "should have acted at t0")
     action = trace.actions[0]
     assert action.hour == "t0"
     # ip_reroute lands at once; anything else costs the scenario's lead time.
@@ -685,13 +739,17 @@ def test_a_decider_that_only_ever_declares_infeasible_still_terminates(
 def test_lead_time_marks_an_optical_reroute_at_the_cut_hour_as_late(
     tmp_path, loaded_state_path, local_server_command, local_server_env,
 ):
-    # The service is cut at t1 and the baseline acts at t1 (not t0), so an
-    # optical_reroute cannot have landed. This is scored in Task 10; here we
-    # only assert the trace carries the arithmetic to score it.
+    # The at_deadline variant acts when the hours-to-exposure meets an
+    # optical_reroute's lead time, so an optical_reroute committed there
+    # lands strictly LATER than the hour it was decided in. This is scored in
+    # Task 10; here we only assert the trace carries the arithmetic to score
+    # it -- so the run has to produce an action, which on SMOKE means going
+    # through the widening retry (see SMOKE's own note).
     scenario = _scenario(tmp_path)
     trace = asyncio.run(_run(
-        scenario, ForecastBlindBaseline("at_deadline"),
+        scenario, _WidensOnDisjointnessRejection("at_deadline"),
         loaded_state_path, local_server_command, local_server_env))
+    assert trace.actions, "nothing to check the lead-time arithmetic against"
     for action in trace.actions:
         assert action.effective_at_index >= action.hour_index
 
@@ -995,13 +1053,29 @@ def test_menu_with_path_facts_does_not_mutate_the_input_menu():
         "new_lightpaths": []}
 
 
-# Measured, not computed, against SMOKE + ForecastBlindBaseline("immediate")
-# BEFORE task A4's recording changes landed (task-A4-brief.md, Step 1): run
-# the pre-change suite and read off the number it actually reports. Pinning
-# this is what test_recording_costs_no_extra_server_calls below is for --
-# recording the hour's observation/menu/geometry must add zero calls to the
-# already-counted call sites.
-EXPECTED_TOOL_CALLS_IMMEDIATE_BASELINE = 22
+# Pinning this is what test_recording_costs_no_extra_server_calls below is
+# for -- recording the hour's observation/menu/geometry must add zero calls
+# to the already-counted call sites.
+#
+# Originally 22, measured against SMOKE + ForecastBlindBaseline("immediate")
+# BEFORE task A4's recording changes landed (task-A4-brief.md, Step 1).
+# Re-measured 2026-09-01 for the hazard-footprint seam fix, which changed
+# both SMOKE's geometry and the decider this test can use: the property under
+# test is untouched, only the rollout it is measured over moved. Written out
+# so it is derivable rather than magic --
+#
+#   every hour:  4 (service_geometry's get_topology x2 / get_lightpaths /
+#                   get_services) + 1 (the hour's own get_services)
+#                + 1 (get_topology for the risk groups)          = 6
+#   t0:          + 1 define_risk_group (one issuance, one horizon)
+#                + 1 unconstrained probe route_service
+#                + 2 iteration 0 (route_service, validate_plan -> rejected)
+#                + 3 iteration 1 (route_service, validate_plan, commit_plan)
+#                                                                 = 13
+#   t1:          waits -- the t0 reroute put storm-svc-1 outside the cone   6
+#   episode end: + 1 simulate_ip_routing                                    1
+#                                                                    total 20
+EXPECTED_TOOL_CALLS_SMOKE_ROLLOUT = 20
 
 
 def _observation_with_exposure(exposure: dict, *, sut: str = "storm-svc-1",
@@ -1171,12 +1245,14 @@ def test_recording_costs_no_extra_server_calls(
     tmp_path, loaded_state_path, local_server_command, local_server_env,
 ):
     # Verification item 7 of the run-viewer design, and the one that would
-    # quietly invalidate a comparison if it failed.
+    # quietly invalidate a comparison if it failed. The widening decider so
+    # the counted rollout covers the commit path too, not just an hour that
+    # spins on rejections.
     trace = asyncio.run(_run_episode_with(
-        ForecastBlindBaseline("immediate"), scenario=_scenario(tmp_path),
+        _WidensOnDisjointnessRejection(), scenario=_scenario(tmp_path),
         state_path=loaded_state_path, server_command=local_server_command,
         server_env=local_server_env))
-    assert trace.tool_calls == EXPECTED_TOOL_CALLS_IMMEDIATE_BASELINE
+    assert trace.tool_calls == EXPECTED_TOOL_CALLS_SMOKE_ROLLOUT
 
 
 def test_the_risk_group_walk_names_fibers_of_filtered_edges_only():
