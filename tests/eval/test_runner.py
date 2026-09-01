@@ -788,6 +788,56 @@ def test_service_geometry_reports_no_cuttable_spans_without_local_edges(
     assert geo.cuttable_spans["storm-svc-1"] == ()
 
 
+def test_service_geometry_maps_lightpath_ids_to_their_oms_sequence(tmp_path):
+    # menu_with_path_facts resolves a candidate's `reused_lightpaths` ids
+    # through this map -- it is oms_seq_by_lp (already built and discarded
+    # every hour), just exposed rather than thrown away.
+    geo = asyncio.run(runner.service_geometry(
+        None, _write_geometry_topology(tmp_path),
+        call=_geometry_call([])))
+    assert geo.oms_sequences["lp_sr"] == ("oms_sr",)
+    assert geo.oms_sequences["lp_sj"] == ("oms_sj", "oms_gap")
+
+
+def test_service_geometry_maps_working_and_protection_paths_to_oms_ids(
+        tmp_path):
+    # Unlike `paths` (node ids, deduped, for the viewer's midpoint), this is
+    # the ordered OMS-id walk menu_with_path_facts diffs a candidate against
+    # -- one entry per leg, not deduped, since two legs never share an OMS.
+    geo = asyncio.run(runner.service_geometry(
+        None, _write_geometry_topology(tmp_path),
+        call=_geometry_call([])))
+    assert geo.path_oms["storm-svc-1"]["working"] == ("oms_sr", "oms_ra")
+    assert geo.path_oms["storm-svc-1"]["protection"] == ("oms_sj", "oms_gap")
+
+
+def test_service_geometry_reports_no_cuttable_span_by_oms_without_local_edges(
+        tmp_path):
+    # Same rule as cuttable_spans above, keyed by OMS instead of by service.
+    geo = asyncio.run(runner.service_geometry(
+        None, _write_geometry_topology(tmp_path),
+        call=_geometry_call([])))
+    assert geo.cuttable_span_by_oms == {}
+
+
+def test_service_geometry_indexes_cuttable_spans_by_oms_id(
+        loaded_state_path, local_server_command, local_server_env):
+    # storm-svc-1's working path is oms_satna_rewa (AERIAL) then
+    # oms_rewa_allahabad (buried) -- the same fact
+    # test_service_geometry_keeps_only_the_storm_cuttable_spans establishes
+    # per-service. This is the SAME edge_mount/filter_fn walk, keyed by OMS
+    # id instead, so a span menu_with_path_facts scores for a candidate and
+    # a span the exposure row scores for the service can never disagree.
+    geometry = asyncio.run(_geometry(
+        loaded_state_path, local_server_command, local_server_env))
+    working_oms = geometry.path_oms["storm-svc-1"]["working"]
+    assert len(working_oms) == 2
+    assert working_oms[0] in geometry.cuttable_span_by_oms
+    assert working_oms[1] not in geometry.cuttable_span_by_oms
+    assert geometry.cuttable_span_by_oms[working_oms[0]] == (
+        geometry.cuttable_spans["storm-svc-1"][0])
+
+
 def test_service_points_is_unchanged_and_still_costs_four_calls(tmp_path):
     path = _write_geometry_topology(tmp_path)
     calls = []
@@ -825,6 +875,124 @@ def test_menu_for_prompt_adds_the_label_and_the_spare_cost_and_keeps_the_rest():
         "lever": "ip_reroute", "reused_lightpaths": ["lp_1"],
         "new_lightpaths": [], "restored_gbps": 300.0, "shortfall_gbps": 0.0,
         "cost_vector": {"transponders": 418.0}}     # no mutation
+
+
+# T1 inert-reroute finding (2026-08-31-t1-inert-reroute-finding.md): a
+# candidate reusing storm-svc-1's OWN working lightpath survived `avoid` and
+# out-scored a genuinely different corridor by a 1-count services_at_risk
+# margin, because nothing in the menu said the two candidates differed in
+# whether they moved the service at all. `_path_fact_geometry` mirrors that
+# exact shape -- one cuttable leg (satna<->rewa) on the working path, one
+# buried leg beyond it, and a protection path riding a disjoint corridor
+# entirely (satna<->jhansi<->allahabad) -- so candidate_0 (reuse working) and
+# candidate_2 (reuse protection) in the real trace map onto the two
+# candidates these tests build.
+def _path_fact_geometry():
+    return runner.ServiceGeometry(
+        points={}, paths={}, oms_nodes={}, unmapped_nodes={},
+        cuttable_spans={}, endpoint_sites={},
+        oms_sequences={
+            "lp-cand-storm-svc-1-0": ("oms_satna_rewa", "oms_rewa_allahabad"),
+            "lp-prot-storm-svc-1-0": ("oms_satna_jhansi",
+                                     "oms_jhansi_allahabad")},
+        cuttable_span_by_oms={
+            "oms_satna_rewa": ((24.6, 80.8), (24.5, 81.3))},
+        path_oms={"storm-svc-1": {
+            "working": ("oms_satna_rewa", "oms_rewa_allahabad"),
+            "protection": ("oms_satna_jhansi", "oms_jhansi_allahabad")}})
+
+
+def _path_fact_issuance():
+    # Cone centred exactly on the cuttable span's own endpoint (offset 0) at
+    # a width/damage-radius generous enough that p_cut is unambiguously
+    # large -- the test only needs "clearly exposed" vs "clearly not",
+    # not a pinned scalar (that contract belongs to test_exposure_model.py).
+    return Issuance(issued_at="t0", horizons={"t1": ConeAtHorizon(
+        cone={"type": "Polygon", "coordinates": []}, width_km=90.0,
+        center={"lat": 24.6, "lon": 80.8})})
+
+
+def test_reusing_the_own_working_lightpath_reports_an_unchanged_path():
+    menu = {"status": "solution", "candidates": [
+        {"lever": "ip_reroute",
+         "reused_lightpaths": ["lp-cand-storm-svc-1-0"], "new_lightpaths": []}]}
+    out = runner.menu_with_path_facts(
+        menu, _path_fact_geometry(), "storm-svc-1",
+        issuance=_path_fact_issuance(), damage_radius_km=50.0,
+        demand_gbps=300.0)
+    candidate = out["candidates"][0]
+    assert candidate["path_delta"] == {
+        "changes_working_path": False, "oms_added": [], "oms_removed": [],
+        "oms_retained_cuttable": ["oms_satna_rewa"]}
+    assert candidate["residual_exposure"]["t1"]["p_cut"] > 0.5
+    assert candidate["collides_with_protection"] == {
+        "collides": False, "oms_shared_with_protection": []}
+
+
+def test_reusing_the_protection_lightpath_reports_a_changed_path_and_a_collision():
+    menu = {"status": "solution", "candidates": [
+        {"lever": "ip_reroute",
+         "reused_lightpaths": ["lp-prot-storm-svc-1-0"], "new_lightpaths": []}]}
+    out = runner.menu_with_path_facts(
+        menu, _path_fact_geometry(), "storm-svc-1",
+        issuance=_path_fact_issuance(), damage_radius_km=50.0,
+        demand_gbps=300.0)
+    candidate = out["candidates"][0]
+    assert candidate["path_delta"] == {
+        "changes_working_path": True,
+        "oms_added": ["oms_jhansi_allahabad", "oms_satna_jhansi"],
+        "oms_removed": ["oms_rewa_allahabad", "oms_satna_rewa"],
+        "oms_retained_cuttable": []}
+    assert candidate["residual_exposure"]["t1"]["p_cut"] == 0.0
+    assert candidate["collides_with_protection"] == {
+        "collides": True,
+        "oms_shared_with_protection": ["oms_jhansi_allahabad",
+                                      "oms_satna_jhansi"]}
+
+
+def test_a_reused_lightpath_with_no_known_oms_sequence_surfaces_unresolved():
+    # An id menu_with_path_facts cannot look up must be reported, not
+    # silently treated as zero exposure -- same policy as
+    # ServiceGeometry.unmapped_nodes.
+    menu = {"status": "solution", "candidates": [
+        {"lever": "ip_reroute", "reused_lightpaths": ["lp-unknown"],
+         "new_lightpaths": []}]}
+    out = runner.menu_with_path_facts(
+        menu, _path_fact_geometry(), "storm-svc-1",
+        issuance=_path_fact_issuance(), damage_radius_km=50.0,
+        demand_gbps=300.0)
+    candidate = out["candidates"][0]
+    assert candidate["residual_exposure_unresolved"] == ["lp-unknown"]
+    assert candidate["residual_exposure"]["t1"]["p_cut"] == 0.0
+
+
+def test_a_new_lightpath_only_candidate_resolves_from_its_own_oms_sequence():
+    menu = {"status": "solution", "candidates": [
+        {"lever": "optical_reroute", "reused_lightpaths": [],
+         "new_lightpaths": [{"oms_sequence": ["oms_satna_rewa"], "lam": 0,
+                             "mode_id": "m", "gsnr_db": 1.0,
+                             "bitrate_gbps": 1.0}]}]}
+    out = runner.menu_with_path_facts(
+        menu, _path_fact_geometry(), "storm-svc-1",
+        issuance=_path_fact_issuance(), damage_radius_km=50.0,
+        demand_gbps=300.0)
+    candidate = out["candidates"][0]
+    assert candidate["path_delta"]["oms_retained_cuttable"] == [
+        "oms_satna_rewa"]
+    assert candidate["residual_exposure"]["t1"]["p_cut"] > 0.5
+
+
+def test_menu_with_path_facts_does_not_mutate_the_input_menu():
+    menu = {"status": "solution", "candidates": [
+        {"lever": "ip_reroute", "reused_lightpaths": ["lp-cand-storm-svc-1-0"],
+         "new_lightpaths": []}]}
+    runner.menu_with_path_facts(
+        menu, _path_fact_geometry(), "storm-svc-1",
+        issuance=_path_fact_issuance(), damage_radius_km=50.0,
+        demand_gbps=300.0)
+    assert menu["candidates"][0] == {
+        "lever": "ip_reroute", "reused_lightpaths": ["lp-cand-storm-svc-1-0"],
+        "new_lightpaths": []}
 
 
 # Measured, not computed, against SMOKE + ForecastBlindBaseline("immediate")
@@ -965,6 +1133,27 @@ def test_the_trace_records_the_full_menu_decision_three_weighed(
     # unconstrained_menu still strips it -- the two projections are different
     # on purpose.
     assert "cost_vector" not in acting["unconstrained_menu"]["candidates"][0]
+
+
+def test_the_trace_records_path_facts_on_every_candidate_decision_3_sees(
+    tmp_path, loaded_state_path, local_server_command, local_server_env,
+):
+    # menu_with_path_facts must run against the SAME menu the decider's own
+    # objective() call and the trace's recorded menu are built from -- one
+    # annotation, both readers, per the T1 inert-reroute finding.
+    trace = asyncio.run(_run_episode_with(
+        _scripted_acting_decider(), scenario=_scenario(tmp_path),
+        state_path=loaded_state_path, server_command=local_server_command,
+        server_env=local_server_env))
+    acting = next(h for h in trace.hours if h.get("committed") is not None)
+    candidate = acting["iterations"][0]["menu"]["candidates"][0]
+    assert "path_delta" in candidate
+    assert "residual_exposure" in candidate
+    assert "collides_with_protection" in candidate
+    # unconstrained_menu is decision 2's deliberately cost-blind projection --
+    # these facts are exactly the kind of judgement-relevant content F3 kept
+    # out of it, so they must not leak in.
+    assert "path_delta" not in acting["unconstrained_menu"]["candidates"][0]
 
 
 def test_the_trace_root_carries_the_oms_endpoint_map(

@@ -41,12 +41,15 @@ from mcp.client import Client
 from ..events.filters import get_filter
 from ..geo_mapper import Edge, load_edges, map_geo_event_to_assets
 from ..mcp_client import call_tool_json
-from .cone import Segment
+from .cone import (
+    Segment, expected_capacity_at_risk_gbps, nearest_span_offset_km,
+    p_cut_region,
+)
 from .decisions import ConstraintDecision, Decider, candidate_index
 from .ledger import SpareLedger, spares_needed
 from .observation import build_observation, latest_issuance, lead_time_hours_for
 from .plans import PlanTranslationError, build_topology_index, plan_from_candidate
-from .scenario_file import ScenarioFile
+from .scenario_file import Issuance, ScenarioFile
 
 MAX_ITERATIONS = 5
 
@@ -156,6 +159,144 @@ def menu_for_prompt(menu: dict, oms_nodes: dict | None = None) -> dict:
          "spares_needed": spares_needed(candidate, oms_nodes)}
         for i, candidate in enumerate(menu.get("candidates") or [])]
     return projected
+
+
+def _candidate_oms(candidate: dict, oms_sequences: dict[str, tuple[str, ...]]
+                   ) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """The OMS ids a candidate would put the service on -- the union of its
+    reused lightpaths' known sequences and its new lightpaths' own sequences
+    -- and separately, any reused lightpath id `oms_sequences` cannot
+    resolve. Deduped (order-preserving): a candidate's own two legs never
+    collide, but a reused leg and a new leg both touching the same OMS is
+    possible and must not double-count."""
+    oms_ids: list[str] = []
+    unresolved: list[str] = []
+    for lp_id in candidate.get("reused_lightpaths") or []:
+        seq = oms_sequences.get(lp_id)
+        if seq is None:
+            unresolved.append(lp_id)
+            continue
+        oms_ids.extend(seq)
+    for run in candidate.get("new_lightpaths") or []:
+        oms_ids.extend(run["oms_sequence"])
+    return tuple(dict.fromkeys(oms_ids)), tuple(unresolved)
+
+
+def _path_delta(candidate_oms: tuple[str, ...], working_oms: tuple[str, ...],
+                cuttable_span_by_oms: dict[str, Segment]) -> dict:
+    """Whether a candidate moves the service AT ALL, stated in the harness's
+    own OMS vocabulary rather than left for the decider to infer from cost
+    figures or from p_cut similarity -- both of which the T1 inert-reroute
+    finding (2026-08-31) shows are unreliable proxies for this categorical
+    fact. `oms_retained_cuttable` is the one that names the finding's own
+    defect directly: these storm-cuttable spans you are on now, you would
+    still be on."""
+    candidate_set, working_set = set(candidate_oms), set(working_oms)
+    return {
+        "changes_working_path": candidate_set != working_set,
+        "oms_added": sorted(candidate_set - working_set),
+        "oms_removed": sorted(working_set - candidate_set),
+        "oms_retained_cuttable": sorted(
+            (candidate_set & working_set) & cuttable_span_by_oms.keys()),
+    }
+
+
+def _protection_collision(candidate_oms: tuple[str, ...],
+                          protection_oms: tuple[str, ...]) -> dict:
+    """Whether committing this candidate would ride the service's OWN
+    protection corridor -- invisible to `exposure` (working-path-only by
+    construction) and to `path_delta` above (which only compares against the
+    working path). The automatic 1:1 protection switchover that saved
+    storm-svc-1 in the finding's T1b rollout depends on protection staying a
+    DIFFERENT corridor from working; a candidate that collapses the two
+    trades one invisible no-op for a different invisible cost."""
+    shared = sorted(set(candidate_oms) & set(protection_oms))
+    return {"collides": bool(shared), "oms_shared_with_protection": shared}
+
+
+def _residual_exposure(candidate_oms: tuple[str, ...],
+                       cuttable_span_by_oms: dict[str, Segment],
+                       issuance: Issuance, damage_radius_km: float,
+                       demand_gbps: float) -> dict[str, dict]:
+    """Per horizon of the current issuance, the SAME p_cut_region call
+    observation.py's own exposure row makes (build_observation, "the single
+    quantity every gold rationale is arithmetic over"), but over the spans a
+    CANDIDATE would ride rather than the spans the service rides now. This is
+    the continuous half of the finding's fix; `_path_delta` above is the
+    categorical half -- neither substitutes for the other, since a candidate
+    can score near-equal p_cut to the status quo at a completely different
+    corridor, and the same unchanged corridor's p_cut shifts every hour as
+    the cone advances (both observed directly in the finding's own trace)."""
+    spans = tuple(cuttable_span_by_oms[oms_id] for oms_id in candidate_oms
+                  if oms_id in cuttable_span_by_oms)
+    per_horizon: dict[str, dict] = {}
+    for horizon, cone in issuance.horizons.items():
+        lat, lon = cone.center["lat"], cone.center["lon"]
+        p_cut = round(p_cut_region(spans, lat, lon, cone.width_km,
+                                   damage_radius_km), 4)
+        per_horizon[horizon] = {
+            "offset_km": (round(nearest_span_offset_km(spans, lat, lon), 1)
+                         if spans else None),
+            "p_cut": p_cut,
+            "ecar_gbps": round(
+                expected_capacity_at_risk_gbps(p_cut, demand_gbps), 2),
+        }
+    return per_horizon
+
+
+def menu_with_path_facts(menu: dict, geometry: ServiceGeometry,
+                         service_id: str, *, issuance: Issuance,
+                         damage_radius_km: float, demand_gbps: float) -> dict:
+    """The routing menu with three deterministic, per-candidate facts about
+    what committing it would actually do to `service_id`'s OWN path -- the
+    fix for the T1 inert-reroute finding (2026-08-31-t1-inert-reroute-
+    finding.md). Before this, the menu carried only cost figures, so a
+    zero-cost candidate that leaves the service on the exact fibre the
+    episode is about protecting strictly dominated a genuinely different,
+    slightly costlier one -- not because the model misjudged, but because
+    nothing in the payload could distinguish the two cases.
+
+    `path_delta` and `collides_with_protection` are categorical (does this
+    move the service, does it eat its own standby); `residual_exposure` is
+    continuous (how exposed is where it lands), computed with the identical
+    model and inputs observation.py's own exposure row uses so the two are
+    directly comparable. Deliberately three separate fields rather than one
+    blended score -- blending two question-shapes into one ranking is
+    exactly what produced the 277-vs-278 collapse the finding documents.
+
+    Called once, on the raw menu route_service returns, BEFORE both
+    decider.objective() and the trace's own menu_for_prompt recording -- so
+    both readers see it without either needing a signature change.
+
+    A `reused_lightpaths` id with no resolvable OMS sequence is reported in
+    `residual_exposure_unresolved` rather than silently contributing zero
+    exposure, mirroring ServiceGeometry.unmapped_nodes' policy: a gap is
+    shown, never quietly absorbed.
+
+    Builds a new dict; `menu` itself is never mutated, matching
+    menu_for_prompt's own contract."""
+    working_oms = geometry.path_oms.get(service_id, {}).get("working", ())
+    protection_oms = geometry.path_oms.get(service_id, {}).get(
+        "protection", ())
+    annotated = dict(menu)
+    candidates = []
+    for candidate in menu.get("candidates") or []:
+        candidate_oms, unresolved = _candidate_oms(
+            candidate, geometry.oms_sequences)
+        facts = {
+            "residual_exposure": _residual_exposure(
+                candidate_oms, geometry.cuttable_span_by_oms, issuance,
+                damage_radius_km, demand_gbps),
+            "path_delta": _path_delta(
+                candidate_oms, working_oms, geometry.cuttable_span_by_oms),
+            "collides_with_protection": _protection_collision(
+                candidate_oms, protection_oms),
+        }
+        if unresolved:
+            facts["residual_exposure_unresolved"] = list(unresolved)
+        candidates.append({**candidate, **facts})
+    annotated["candidates"] = candidates
+    return annotated
 
 
 def _visible_services(obs) -> list[str]:
@@ -295,6 +436,27 @@ class ServiceGeometry:
     # this service would charge a transponder to, and the key the
     # co-terminating grouping in observation.py buckets on.
     endpoint_sites: dict[str, tuple[str, str]]
+    # lightpath_id -> its OMS sequence. oms_seq_by_lp, computed and discarded
+    # every hour before this field existed -- exposed so menu_with_path_facts
+    # can resolve a candidate's `reused_lightpaths` ids to the OMS it would
+    # actually ride, which is what the T1 inert-reroute finding
+    # (2026-08-31) shows the menu never told the decider. Defaulted so the
+    # hand-built ServiceGeometry in test_runner.py's totals test keeps
+    # constructing.
+    oms_sequences: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    # oms_id -> its span, for every OMS the event's own filter admits --
+    # the SAME edge_mount/filter_fn walk `cuttable` above already makes,
+    # keyed by OMS instead of by service, so a span this scores and a span
+    # `cuttable_spans` scores for a service can never disagree. What
+    # menu_with_path_facts sums a candidate's residual exposure over.
+    cuttable_span_by_oms: dict[str, Segment] = field(default_factory=dict)
+    # service_id -> {"working": (oms_id, ...), "protection": (oms_id, ...)},
+    # ordered and NOT deduped (unlike `paths`, which is node ids for the
+    # viewer's midpoint) -- the OMS-id walk menu_with_path_facts diffs a
+    # candidate's own OMS set against, to say whether a commit actually
+    # moves the service or collides with its own protection corridor.
+    path_oms: dict[str, dict[str, tuple[str, ...]]] = field(
+        default_factory=dict)
 
 
 async def service_geometry(client: Client, topology_path: str | Path, *,
@@ -368,8 +530,32 @@ async def service_geometry(client: Client, topology_path: str | Path, *,
                 legs.append((oms["src_node_id"], oms["dst_node_id"]))
         return legs
 
+    def walk_oms(link_ids) -> tuple[str, ...]:
+        """The ordered OMS ids a path rides -- what path_oms stores, and what
+        menu_with_path_facts diffs a candidate's own OMS set against. NOT
+        deduped: two legs of one path never share an OMS, unlike the nodes
+        `walk` collapses at a shared junction."""
+        oms_ids: list[str] = []
+        for link_id in link_ids or ():
+            lp_id = lp_by_link.get(link_id)
+            oms_ids.extend(oms_seq_by_lp.get(lp_id, []))
+        return tuple(oms_ids)
+
+    # Every OMS the event's own filter admits, keyed by id -- the SAME
+    # edge_mount/filter_fn condition `cuttable` below applies per service, so
+    # a span menu_with_path_facts scores for a CANDIDATE and a span scored
+    # here for the SERVICE it would replace can never disagree.
+    cuttable_span_by_oms: dict[str, Segment] = {}
+    for oms_id, oms in oms_by_id.items():
+        a, b = oms["src_node_id"], oms["dst_node_id"]
+        edge = edge_mount.get((a, b))
+        if edge is None or not filter_fn(edge) or a not in coords or b not in coords:
+            continue
+        cuttable_span_by_oms[oms_id] = (coords[a], coords[b])
+
     points: dict[str, tuple[float, float]] = {}
     paths: dict[str, dict[str, list[str]]] = {}
+    path_oms: dict[str, dict[str, tuple[str, ...]]] = {}
     unmapped: dict[str, list[str]] = {}
     cuttable: dict[str, tuple[Segment, ...]] = {}
     endpoints: dict[str, tuple[str, str]] = {}
@@ -377,6 +563,9 @@ async def service_geometry(client: Client, topology_path: str | Path, *,
         working = walk(svc["working_path"])
         protection = walk(svc.get("protection_path"))
         paths[svc["id"]] = {"working": working, "protection": protection}
+        path_oms[svc["id"]] = {
+            "working": walk_oms(svc["working_path"]),
+            "protection": walk_oms(svc.get("protection_path"))}
         missing = [n for n in dict.fromkeys(working + protection)
                    if n not in coords]
         if missing:
@@ -397,7 +586,11 @@ async def service_geometry(client: Client, topology_path: str | Path, *,
                                 svc["dst_router"].removeprefix("router_"))
     return ServiceGeometry(points=points, paths=paths, oms_nodes=oms_nodes,
                            unmapped_nodes=unmapped, cuttable_spans=cuttable,
-                           endpoint_sites=endpoints)
+                           endpoint_sites=endpoints,
+                           oms_sequences={lp_id: tuple(seq) for lp_id, seq
+                                         in oms_seq_by_lp.items()},
+                           cuttable_span_by_oms=cuttable_span_by_oms,
+                           path_oms=path_oms)
 
 
 async def service_points(client: Client, topology_path: str | Path, *,
@@ -501,6 +694,11 @@ async def run_episode(
         if hasattr(decider, "oms_nodes"):
             decider.oms_nodes = geometry.oms_nodes
         services = tuple((await counting.call("get_services"))["services"])
+        # For menu_with_path_facts' residual_exposure -- the SUT's own
+        # demand, already on this hour's roster fetch, so no extra call.
+        sut_demand_gbps = next(
+            s["demand_gbps"] for s in services
+            if s["id"] == scenario.service_under_test)
         # The roster scoring reads to know who could have survived -- the
         # final simulate_ip_routing reports links, not services.
         record["services"] = [s["id"] for s in services]
@@ -561,6 +759,14 @@ async def run_episode(
                 menu = await counting.call(
                     "route_service",
                     constraints.route_service_args(scenario.service_under_test))
+                # T1 inert-reroute finding (2026-08-31): annotate BEFORE
+                # decider.objective() sees it, so both the decider's own
+                # prompt (via its internal menu_for_prompt) and the trace's
+                # recorded menu below pick up the same facts for free.
+                menu = menu_with_path_facts(
+                    menu, geometry, scenario.service_under_test,
+                    issuance=issuance, damage_radius_km=scenario.damage_radius_km,
+                    demand_gbps=sut_demand_gbps)
                 choice = decider.objective(obs, menu)
                 step = {"iteration": iteration,
                         "constraints": constraints.to_dict(),

@@ -726,6 +726,37 @@ def test_the_prompt_never_states_the_comparison_or_its_answer():
         assert banned not in lowered
 
 
+def test_the_prompt_names_the_new_path_fact_fields():
+    # T1 inert-reroute finding (2026-08-31): the menu now carries these three
+    # fields (runner.menu_with_path_facts); an undocumented JSON key is a
+    # worse failure mode than a described one, same rule as the risk field.
+    for field in ("path_delta", "residual_exposure", "collides_with_protection"):
+        assert field in SYSTEM_PROMPT
+
+
+def test_the_prompt_states_avoid_survival_is_not_exposure_reduction():
+    # The finding's own root cause: a candidate can survive `avoid` (hard
+    # polygon containment) while carrying the SAME continuous p_cut as the
+    # status quo, because the two tests disagree at exactly the offset band
+    # some episodes are built at. The prompt must say so in the terms the
+    # payload actually uses, not leave it to be inferred from candidate
+    # numbers alone.
+    lowered = SYSTEM_PROMPT.lower()
+    assert "changes_working_path" in lowered
+    assert "not the same claim as" in lowered or \
+        "is not the same as" in lowered
+
+
+def test_the_prompt_never_recommends_a_candidate_over_another():
+    # Facts about the world, never the answer key -- same discipline as the
+    # depot-claim comparison above. The fix hands over deterministic facts;
+    # which candidate to pick stays the model's judgement.
+    lowered = SYSTEM_PROMPT.lower()
+    for banned in ("prefer the candidate", "always choose", "never choose",
+                   "candidate_0 is usually", "pick the one that"):
+        assert banned not in lowered
+
+
 def test_the_reasoning_instruction_fires_in_both_directions():
     assert "say what claim you preferred over the claims you did not " \
            "serve" in SYSTEM_PROMPT

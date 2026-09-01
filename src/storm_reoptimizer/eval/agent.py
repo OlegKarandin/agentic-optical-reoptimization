@@ -411,6 +411,25 @@ is better, and it is subtracted where the others are added.
 The terms are in incommensurate units, which is why you order them rather \
 than weight them.
 
+Each candidate also carries three facts about what committing it would \
+actually do to the actionable service's OWN path, computed against the \
+current working and protection corridors: `path_delta.changes_working_path` \
+-- whether the service ends up on a different set of OMS at all; \
+`path_delta.oms_retained_cuttable` -- which storm-cuttable spans you are on \
+now you would STILL be on; `residual_exposure` -- this candidate's own \
+`p_cut`/`offset_km`/`ecar_gbps` per horizon, computed the same way `exposure` \
+above is; and `collides_with_protection` -- whether this candidate would put \
+the service on its own protection corridor, which would remove the \
+automatic 1:1 switchover that protects it today. Surviving `avoid` is not \
+the same claim as reducing this service's exposure: `avoid` prunes on hard \
+polygon containment, while `p_cut` falls off smoothly, and the two \
+disagree exactly at the offset band some episodes are built at -- a \
+candidate can clear `avoid` while leaving `changes_working_path` false and \
+`residual_exposure` identical to what you already carry. Committing that is \
+sometimes the right call when spares are scarce and the exposure is \
+tolerable; make it because you decided so, not because nothing told you the \
+service never moved.
+
 ## Your reasoning
 
 `reasoning` is mandatory on all three decisions and it is read. Write the \
