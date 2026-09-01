@@ -32,7 +32,7 @@ MENU = {
 }
 
 
-def _obs(*, offset_km, width_km, hours_ahead, spares=1):
+def _obs(*, offset_km, width_km, hours_ahead, spares=1, damage_radius_km=0.0):
     horizon = "t3"
     return Observation(
         scenario_id="X", service_under_test="storm-svc-1", hour="t1",
@@ -49,6 +49,7 @@ def _obs(*, offset_km, width_km, hours_ahead, spares=1):
                    "dst_router": "router_allahabad",
                    "working_path": [], "protection_path": []},),
         spares_on_hand=spares, lead_time_hours=1,
+        damage_radius_km=damage_radius_km,
         risk_group_ids={horizon: "rg_X_t1_t3"})
 
 
@@ -100,6 +101,33 @@ def test_an_empty_menu_yields_infeasible():
         _obs(offset_km=10.0, width_km=90.0, hours_ahead=1),
         {"status": "no_solution", "candidates": [], "pairs": []})
     assert d.choice == "infeasible"
+
+
+def test_the_baseline_acts_outside_the_track_cone_but_inside_the_damage_footprint():
+    """The exact configuration that made the baseline inert (hazard-footprint
+    spec §3.2b). These are D1's real numbers: its SUT sits at offset 58.4 km
+    against a 7.5 km cone width -- outside the containment polygon -- with
+    p_cut 0.976 (agent.py's P_CUT_ENUMERATION_THRESHOLD note). Against the
+    damage footprint, 3.75 + 74 = 77.75 km, it is comfortably inside.
+
+    The baseline is meant to be FORECAST-BLIND, not INERT: a fixed
+    operational policy keys on the published hazard area, and after the seam
+    fix that area is the damage footprint."""
+    b = ForecastBlindBaseline("immediate")
+    outside_cone_inside_footprint = dict(
+        offset_km=58.4, width_km=7.5, hours_ahead=1, damage_radius_km=74.0)
+    assert b.timing(_obs(**outside_cone_inside_footprint)).action == "act"
+    # The same geometry with no damage radius is the OLD test, and waits.
+    assert b.timing(_obs(**{**outside_cone_inside_footprint,
+                           "damage_radius_km": 0.0})).action == "wait"
+
+
+def test_the_baseline_still_waits_outside_the_damage_footprint_too():
+    """Widening is not the same as always firing: 45 + 74 = 119 km still
+    does not reach 200 km."""
+    b = ForecastBlindBaseline("immediate")
+    assert b.timing(_obs(offset_km=200.0, width_km=90.0, hours_ahead=3,
+                         damage_radius_km=74.0)).action == "wait"
 
 
 def test_scripted_decider_replays_what_it_was_given():

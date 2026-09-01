@@ -41,12 +41,29 @@ def service_class(demand_gbps: float) -> str:
 
 
 def _nearest_exposed_horizon(obs: Observation) -> tuple[str, dict] | None:
-    """The soonest horizon at which the service under test lies INSIDE the
-    cone -- offset within the cone's own half-width. A purely geometric test,
-    with no probability reasoning, which is the whole point."""
+    """The soonest horizon at which the service under test lies INSIDE THE
+    DAMAGE FOOTPRINT -- offset within the cone's own half-width PLUS the
+    episode's damage radius. A purely geometric test, with no probability
+    reasoning, which is the whole point.
+
+    The half-width alone would be the TRACK-CONTAINMENT circle: where the
+    storm centre probably goes, not what it breaks. Testing against that
+    while `runner._define_horizon_risk_groups` builds its risk group from the
+    damage footprint would leave the two inconsistent for no stated reason,
+    and would preserve a baseline that never acts on any shipped episode
+    (2026-08-31 hazard-footprint spec §3.2b).
+
+    This makes the baseline STRONGER, and may shrink the measured agent
+    advantage. That is the honest direction of the change: CLAUDE.md requires
+    the baseline be "deliberately reasonable, not hobbled", and a fixed
+    operational policy keys on the published hazard area.
+
+    `obs.damage_radius_km` defaults to 0.0 on a hand-built Observation, which
+    degrades to exactly the old containment test rather than to a wrong
+    one."""
     per_horizon = obs.exposure.get(obs.service_under_test, {})
     inside = [(h, e) for h, e in per_horizon.items()
-              if e["offset_km"] <= e["width_km"] / 2.0]
+              if e["offset_km"] <= e["width_km"] / 2.0 + obs.damage_radius_km]
     if not inside:
         return None
     return min(inside, key=lambda item: item[1]["hours_ahead"])
