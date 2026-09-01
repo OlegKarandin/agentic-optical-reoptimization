@@ -1209,5 +1209,5 @@ def test_the_risk_group_walk_names_fibers_of_filtered_edges_only():
                          width_km=60.0, center={"lat": 25.0, "lon": 81.05})
 
     assert horizon_risk_group_asset_ids(
-        cone, edges=[inside, buried, far], oms=oms,
+        cone, 0.1, edges=[inside, buried, far], oms=oms,
         filter_fn=lambda e: e.mount_type == "aerial") == ["fiber_a_b_0"]

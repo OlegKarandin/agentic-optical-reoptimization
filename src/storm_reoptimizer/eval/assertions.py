@@ -36,13 +36,17 @@ from mcp.client import Client
 from ..events.filters import get_filter
 from ..geo_mapper import load_edges
 from ..mcp_client import call_tool_json
+from .agent import P_CUT_ENUMERATION_THRESHOLD
 from .baseline import BASELINE_VARIANTS, ForecastBlindBaseline, ScriptedDecider
 from .decisions import ConstraintDecision, ObjectiveDecision, TimingDecision
 from .derived import (
     DERIVED_TOLERANCE, FLIP_VARS, DerivedGeometry, FlipScalars,
     derived_geometry,
 )
-from .runner import EVENT_TYPE, run_episode, service_geometry
+from .observation import build_observation
+from .runner import (
+    EVENT_TYPE, horizon_risk_group_asset_ids, run_episode, service_geometry,
+)
 from .scenario_file import ScenarioFile
 from .scoring import decision_label, episode_metrics
 
@@ -996,6 +1000,89 @@ async def assert_claimants_have_filterable_exposure(
             f"{violations!r}, which have NO storm-cuttable span on their "
             f"working path -- a service the event's own filter can never "
             f"touch cannot honestly compete for the depot's spare")
+
+
+# Invariant 9 (hazard-footprint plan, 2026-09-01).
+def _risk_group_coverage_violations(
+    exposure: dict[str, dict[str, dict[str, float]]],
+    group_assets_by_horizon: dict[str, list[str]], *, threshold: float,
+) -> list[tuple[str, str, float]]:
+    """`(horizon, service_id, p_cut)` for every horizon whose risk group
+    names NOTHING while some service's cut probability there reaches
+    `threshold`.
+
+    Deliberately ONE-DIRECTIONAL. A horizon at which nothing is measurably
+    at risk is entitled to an empty group -- that is an honest statement
+    about a quiet forecast hour. The failure this catches is the reverse:
+    the agent handed a risk-group id for a horizon at which something IS
+    measurably at risk, and the group names nothing, so `avoid` on it prunes
+    nothing and the whole synthesized-risk-group story is inert.
+
+    Every existing suite assertion tests a QUANTITY (p_cut values, flip
+    margins, gold rationales) on one side of the seam or the other. Nothing
+    tested the RELATIONSHIP between the two hazard geometries, which is
+    exactly why a suite that asserts hard on both sides never saw the
+    defect."""
+    out: list[tuple[str, str, float]] = []
+    for horizon, assets in group_assets_by_horizon.items():
+        if assets:
+            continue
+        at_risk = [(sid, float(per[horizon]["p_cut"]))
+                   for sid, per in exposure.items()
+                   if horizon in per
+                   and float(per[horizon]["p_cut"]) >= threshold]
+        out.extend((horizon, sid, p_cut) for sid, p_cut
+                   in sorted(at_risk, key=lambda item: -item[1]))
+    return out
+
+
+async def assert_risk_group_covers_measurable_exposure(
+    client: Client, scenario: ScenarioFile, *, topology_path: str | Path,
+    oms: list[dict],
+) -> None:
+    """For every issuance and every horizon of `scenario`: if any service's
+    `p_cut` there reaches `P_CUT_ENUMERATION_THRESHOLD`, the risk group the
+    runner would define for that horizon must name at least one asset.
+
+    Exposure comes from `build_observation` -- the SAME function the real
+    rollout calls -- and the group contents from
+    `runner.horizon_risk_group_asset_ids` -- the SAME function
+    `_define_horizon_risk_groups` calls. Neither side is reimplemented here,
+    so this check and the payload the agent is actually handed cannot
+    disagree.
+
+    Every issuance is covered by walking `scenario.forecast`'s own issue
+    hours: an issuance IS the latest issuance at its own issue hour, which is
+    what `build_observation` selects.
+
+    `oms` is `get_topology(layer="optical")["oms"]`, read once by the caller
+    and reused across the episodes sharing a state file."""
+    geometry = await service_geometry(client, topology_path)
+    services = tuple(
+        (await call_tool_json(client, "get_services"))["services"])
+    edges = load_edges(topology_path)
+    filter_fn = get_filter(EVENT_TYPE)
+
+    for issue_hour in scenario.forecast:
+        obs = build_observation(
+            scenario, issue_hour, service_spans=geometry.cuttable_spans,
+            services=services, spares_on_hand=scenario.spares_on_hand)
+        groups = {
+            horizon: horizon_risk_group_asset_ids(
+                cone, scenario.damage_radius_km, edges=edges, oms=oms,
+                filter_fn=filter_fn)
+            for horizon, cone in obs.issuance.horizons.items()}
+        violations = _risk_group_coverage_violations(
+            obs.exposure, groups, threshold=P_CUT_ENUMERATION_THRESHOLD)
+        if violations:
+            worst = violations[0]
+            raise PairInvalid(
+                f"{scenario.id}: the {issue_hour} issuance defines an EMPTY "
+                f"risk group at horizon {worst[0]!r}, but {len(violations)} "
+                f"service-horizon pair(s) there reach p_cut "
+                f"{P_CUT_ENUMERATION_THRESHOLD} -- worst is {worst[1]} at "
+                f"p_cut {worst[2]}. The agent is being handed a risk-group id "
+                f"that names nothing, so avoiding it prunes nothing.")
 
 
 # Invariant 3.

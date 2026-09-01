@@ -30,6 +30,7 @@ from .assertions import (assert_claim_is_one_lightpath,
                          assert_no_global_policy_solves_the_suite,
                          assert_no_single_variable_rule_solves,
                          assert_realized_cuts_pass_the_event_filter,
+                         assert_risk_group_covers_measurable_exposure,
                          assert_sampling_error_within_margin)
 from .baseline import ForecastBlindBaseline
 from .runner import run_episode, service_geometry
@@ -246,10 +247,9 @@ async def _run_dimensional_coherence_invariants(
     same data a second time."""
     async with connect() as client:
         from ..mcp_client import call_tool_json
-        oms_by_id = {
-            o["id"]: o
-            for o in (await call_tool_json(
-                client, "get_topology", {"layer": "optical"}))["oms"]}
+        oms_by_id_list = (await call_tool_json(
+            client, "get_topology", {"layer": "optical"}))["oms"]
+        oms_by_id = {o["id"]: o for o in oms_by_id_list}
 
     for scenario in episodes.values():
         # Sync, no client -- checked first and separately so a violation
@@ -284,6 +284,8 @@ async def _run_dimensional_coherence_invariants(
                 client, scenario, topology_path=topology_path)
             await assert_claimants_depot_eligible(
                 client, scenario, topology_path=topology_path)
+            await assert_risk_group_covers_measurable_exposure(
+                client, scenario, topology_path=topology_path, oms=oms_by_id_list)
             groups = await _groups_for(
                 client, scenario, topology_path=topology_path)
             await assert_depot_is_the_binding_site(

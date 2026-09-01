@@ -13,7 +13,8 @@ from storm_reoptimizer.eval.assertions import (
     assert_each_baseline_variant_ties, assert_gold_choices_differ,
     assert_gold_spare_action_is_grounded, assert_issuance_prefix_shared,
     assert_menus_identical, assert_no_global_policy_solves_the_suite,
-    assert_non_flip_decisions_non_binding, assert_shared_scalars_equal,
+    assert_non_flip_decisions_non_binding,
+    assert_risk_group_covers_measurable_exposure, assert_shared_scalars_equal,
     assert_wait_gold_has_no_free_escape,
 )
 from storm_reoptimizer.eval.baseline import ForecastBlindBaseline
@@ -858,3 +859,29 @@ def test_the_probability_model_scalars_are_unmoved(
     derived, flip = asyncio.run(_run())
     assert derived == frozen["derived"]
     assert flip == frozen["flip"]
+
+
+@pytest.mark.parametrize("scenario_id", sorted(load_all_scenarios()))
+def test_no_episode_defines_an_empty_risk_group_where_something_is_at_risk(
+    scenario_id, loaded_state_path, local_server_command, local_server_env,
+):
+    """The hazard-footprint invariant (spec 2026-08-31 §3.3). This FAILED on
+    T1a before the seam fix: both its issuances' cones contain no aerial span
+    at all -- the t0 issuance's t3 cone holds two BURIED edges and the t1
+    revision's holds no edge whatsoever, nearest aerial span 66.9 km away --
+    while the SUT's own p_cut at that horizon is 0.1349."""
+    scenario = load_all_scenarios()[scenario_id]
+
+    async def _run():
+        async with connect_server(
+            TOPOLOGY_PATH, server_command=local_server_command,
+            env=local_server_env,
+            extra_args=["--state", str(loaded_state_path)],
+        ) as client:
+            from storm_reoptimizer.mcp_client import call_tool_json
+            oms = (await call_tool_json(
+                client, "get_topology", {"layer": "optical"}))["oms"]
+            await assert_risk_group_covers_measurable_exposure(
+                client, scenario, topology_path=TOPOLOGY_PATH, oms=oms)
+
+    asyncio.run(_run())

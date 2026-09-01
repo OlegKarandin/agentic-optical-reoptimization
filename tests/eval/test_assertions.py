@@ -870,3 +870,40 @@ def test_a_flip_margin_10x_the_sampling_error_passes():
 
 def test_the_sampling_error_check_is_a_noop_with_no_flip_values():
     assert_sampling_error_within_margin({}, measured_error=2.56e-4)
+
+
+# Invariant 9 (hazard-footprint plan, 2026-09-01).
+def test_an_empty_group_at_a_horizon_with_measurable_exposure_is_a_violation():
+    from storm_reoptimizer.eval.assertions import (
+        _risk_group_coverage_violations,
+    )
+
+    exposure = {
+        "storm-svc-1": {"t3": {"p_cut": 0.1349}},
+        "quiet-svc": {"t3": {"p_cut": 0.0001}},
+    }
+    assert _risk_group_coverage_violations(
+        exposure, {"t3": []}, threshold=0.005) == [
+            ("t3", "storm-svc-1", 0.1349)]
+
+
+def test_a_nonempty_group_is_never_a_violation_however_exposed():
+    from storm_reoptimizer.eval.assertions import (
+        _risk_group_coverage_violations,
+    )
+
+    exposure = {"storm-svc-1": {"t3": {"p_cut": 0.99}}}
+    assert _risk_group_coverage_violations(
+        exposure, {"t3": ["fiber_x_0"]}, threshold=0.005) == []
+
+
+def test_an_empty_group_with_nothing_measurably_at_risk_is_fine():
+    """The invariant is one-directional on purpose: a horizon at which
+    nothing is at risk is ENTITLED to an empty group."""
+    from storm_reoptimizer.eval.assertions import (
+        _risk_group_coverage_violations,
+    )
+
+    exposure = {"storm-svc-1": {"t3": {"p_cut": 0.001}}}
+    assert _risk_group_coverage_violations(
+        exposure, {"t3": []}, threshold=0.005) == []

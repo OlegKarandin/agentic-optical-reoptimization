@@ -39,6 +39,7 @@ from pathlib import Path
 from mcp.client import Client
 
 from ..events.filters import get_filter
+from ..events.geo import damage_footprint
 from ..geo_mapper import Edge, load_edges, map_geo_event_to_assets
 from ..mcp_client import call_tool_json
 from .cone import (
@@ -614,11 +615,14 @@ async def service_points(client: Client, topology_path: str | Path, *,
     return (await service_geometry(client, topology_path, call=call)).points
 
 
-def horizon_risk_group_asset_ids(cone: ConeAtHorizon, *, edges: list[Edge],
-                                 oms: list[dict], filter_fn) -> list[str]:
+def horizon_risk_group_asset_ids(cone: ConeAtHorizon, damage_radius_km: float,
+                                 *, edges: list[Edge], oms: list[dict],
+                                 filter_fn) -> list[str]:
     """The fiber asset ids one horizon's risk group names: every `fiber_*`
     element of every OMS whose two endpoints are a local-topology edge that
-    the hazard geometry touches AND the event's own filter admits.
+    the DAMAGE FOOTPRINT (`events.geo.damage_footprint` of this cone's
+    centre, width and `damage_radius_km`) touches AND the event's own filter
+    admits.
 
     Extracted from `_define_horizon_risk_groups` so `assertions.
     assert_risk_group_covers_measurable_exposure` can ask what a horizon's
@@ -634,7 +638,16 @@ def horizon_risk_group_asset_ids(cone: ConeAtHorizon, *, edges: list[Edge],
     Both node orders are matched: the local topology's edge direction and the
     server's OMS direction are independent facts and do agree only by
     accident."""
-    exposed = map_geo_event_to_assets(cone.cone, edges, filter_fn)
+    # NOT `cone.cone`. That polygon is the track-containment circle -- where
+    # the storm CENTRE probably goes -- and intersecting it alone is the
+    # 2026-08-31 seam defect: it produced an EMPTY group at every horizon of
+    # both T1a issuances while the probability side, which buffers by
+    # damage_radius_km in `cone._region_in_sigmas`, read p_cut 0.13 on the
+    # same spans. `ConeAtHorizon.cone` stays untouched -- it is scenario-file
+    # data and still the right thing for the viewer to draw as the cone.
+    footprint = damage_footprint(cone.center["lat"], cone.center["lon"],
+                                 cone.width_km, damage_radius_km)
+    exposed = map_geo_event_to_assets(footprint, edges, filter_fn)
     pairs = ({(e.src, e.dst) for e in exposed}
              | {(e.dst, e.src) for e in exposed})
     return [a for o in oms
@@ -661,7 +674,8 @@ async def _define_horizon_risk_groups(
         if rg_id in defined:
             continue
         fiber_ids = horizon_risk_group_asset_ids(
-            cone, edges=edges, oms=topo["oms"], filter_fn=filter_fn)
+            cone, scenario.damage_radius_km, edges=edges, oms=topo["oms"],
+            filter_fn=filter_fn)
         await counting.call("define_risk_group", {
             "rg_id": rg_id, "asset_ids": fiber_ids,
             "metadata": {"event_type": EVENT_TYPE, "scenario": scenario.id,
