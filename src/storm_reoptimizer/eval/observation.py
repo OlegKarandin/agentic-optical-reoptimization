@@ -172,6 +172,17 @@ class Observation:
     services: tuple[dict, ...]
     spares_on_hand: int              # transponder PAIRS
     lead_time_hours: int             # the optical_reroute value
+    # The episode's own damage radius, so a reader of this payload can
+    # reconstruct the DAMAGE FOOTPRINT (width_km/2 + damage_radius_km) and
+    # not merely the track-containment circle. Without it,
+    # baseline._nearest_exposed_horizon could only test containment against
+    # `width_km`, which is where the storm CENTRE goes rather than what it
+    # breaks -- the 2026-08-31 seam defect, in the baseline's copy of it.
+    # Defaulted to 0.0 so the hand-built Observations in
+    # tests/eval/test_agent.py and tests/eval/test_baseline.py keep
+    # constructing, and so that a caller who supplies none gets the strictly
+    # narrower (old) containment test rather than a silently wrong one.
+    damage_radius_km: float = 0.0
     # horizon hour -> the risk-group id the runner defined for that cone.
     # Decision 2's output is a risk-group id list, so the ids have to be in
     # the observation for the decider to be able to name one.
@@ -230,6 +241,7 @@ class Observation:
             "lead_time_hours": {
                 lever: lead_time_hours_for(lever, self.lead_time_hours)
                 for lever in LEAD_TIME_BY_LEVER},
+            "damage_radius_km": self.damage_radius_km,
             "risk_group_ids": self.risk_group_ids,
             "iteration": self.iteration,
             "last_rejection": self.last_rejection,
@@ -329,6 +341,7 @@ def build_observation(
         services=services,
         spares_on_hand=spares_on_hand,
         lead_time_hours=scenario.lead_time_hours,
+        damage_radius_km=scenario.damage_radius_km,
         risk_group_ids=dict(risk_group_ids or {}),
         iteration=iteration,
         last_rejection=last_rejection,

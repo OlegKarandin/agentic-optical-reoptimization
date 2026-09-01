@@ -304,3 +304,16 @@ def test_the_actionable_service_is_not_its_own_competing_claim(scenario):
                             endpoint_sites=ENDPOINT_SITES, depot_site="satna")
     members = {m for g in obs.restorable_groups["t3"] for m in g["members"]}
     assert "storm-svc-1" not in members
+
+
+def test_the_observation_carries_the_episodes_damage_radius(
+    write_scenario, example_scenario_yaml,
+):
+    """The baseline's containment test and the agent's prompt both need it,
+    and it is scenario data the decider is entitled to see -- an operator
+    reading a published hazard area knows how far the damage reaches."""
+    scenario = load_scenario(write_scenario(example_scenario_yaml))
+    obs = build_observation(
+        scenario, "t1", service_spans={}, services=(), spares_on_hand=1)
+    assert obs.damage_radius_km == 74.0
+    assert obs.to_dict()["damage_radius_km"] == 74.0
