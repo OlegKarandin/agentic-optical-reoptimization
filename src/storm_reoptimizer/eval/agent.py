@@ -306,6 +306,10 @@ being effective, per lever. An `ip_reroute` is a config change and lands \
 immediately. Lighting a new optical path is provisioning and takes the \
 scenario's lead time. Acting later than (exposure hour - lead time) means \
 the action lands after the cut.
+- `damage_radius_km` -- how far damage can reach beyond the storm track \
+itself. A risk group's avoid-radius is `width_km/2 + damage_radius_km`, not \
+just the track's own half-width -- do not judge how much room a reroute has \
+to clear by `width_km` alone.
 - `risk_group_ids` -- horizon hour -> the id of the risk group defined for \
 that cone. These ids are what you name when you constrain routing.
 - `unconstrained_menu` -- present on the constraints request only. The \

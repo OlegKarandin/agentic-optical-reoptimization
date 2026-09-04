@@ -17,6 +17,7 @@ both halves of a twin pair whose enumerated scalars are held equal, which is
 in turn what makes the exactly-50% property arithmetic rather than tuning."""
 from __future__ import annotations
 
+from ..events.geo import damage_footprint_radius_km
 from .decisions import (
     ConstraintDecision, ObjectiveDecision, TimingDecision, rank_by_priority,
 )
@@ -63,7 +64,8 @@ def _nearest_exposed_horizon(obs: Observation) -> tuple[str, dict] | None:
     one."""
     per_horizon = obs.exposure.get(obs.service_under_test, {})
     inside = [(h, e) for h, e in per_horizon.items()
-              if e["offset_km"] <= e["width_km"] / 2.0 + obs.damage_radius_km]
+              if e["offset_km"] <= damage_footprint_radius_km(
+                  e["width_km"], obs.damage_radius_km)]
     if not inside:
         return None
     return min(inside, key=lambda item: item[1]["hours_ahead"])

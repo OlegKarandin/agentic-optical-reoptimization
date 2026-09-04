@@ -29,6 +29,16 @@ def circle_polygon(lat: float, lon: float, radius_km: float, n_points: int = 24)
     return {"type": "Polygon", "coordinates": [coords]}
 
 
+def damage_footprint_radius_km(width_km: float, damage_radius_km: float) -> float:
+    """The single source of truth for the hazard-footprint radius: the
+    Minkowski-sum radius of the track-containment disc (`width_km / 2`) and
+    the damage disc (`damage_radius_km`). Shared by `damage_footprint` below
+    and by `eval.baseline._nearest_exposed_horizon`, which must test
+    exposure against the SAME radius `damage_footprint` builds its polygon
+    from -- see `damage_footprint`'s docstring for why the two must agree."""
+    return width_km / 2.0 + damage_radius_km
+
+
 def damage_footprint(center_lat: float, center_lon: float, width_km: float,
                      damage_radius_km: float, n_points: int = 24) -> dict:
     """The assets this storm can cut IF ITS TRACK VERIFIES ANYWHERE INSIDE
@@ -74,4 +84,5 @@ def damage_footprint(center_lat: float, center_lon: float, width_km: float,
         raise ValueError(
             f"damage_radius_km must be > 0, got {damage_radius_km!r}")
     return circle_polygon(center_lat, center_lon,
-                          width_km / 2.0 + damage_radius_km, n_points)
+                          damage_footprint_radius_km(width_km, damage_radius_km),
+                          n_points)
