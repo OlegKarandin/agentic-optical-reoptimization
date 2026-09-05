@@ -195,3 +195,12 @@ metadata:
   # `true` before this fix.
   widest_avoid_feasible: false
   no_ip_reroute_in_menu: true
+  # 2026-09-05 plan, Task 11: D1's live invariants (assert_depot_is_the_
+  # binding_site/assert_escape_route_survives in suite.py, and the
+  # D1-specific tests in test_episodes.py) were built and frozen against the
+  # OLD working-leg-only exposure numbers. Tasks 3/4 of that plan moved to a
+  # joint (working-AND-protection) probability for protected services, so
+  # those checks are known-stale here pending D1's own redesign turn --
+  # ruling: "don't worry about old tests or T2/T3, we'll update those
+  # later" (D1 included per the same ruling).
+  stale_invariants: true

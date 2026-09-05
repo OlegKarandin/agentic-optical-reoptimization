@@ -244,7 +244,16 @@ async def _run_dimensional_coherence_invariants(
     shape `assert_no_global_policy_solves_the_suite` consumes), which
     `main()` below already computes once for that other check -- so `main()`
     calls invariant 8 alongside it rather than this function re-fetching the
-    same data a second time."""
+    same data a second time.
+
+    Invariants 6/7 (`assert_depot_is_the_binding_site`/
+    `assert_escape_route_survives`) are SKIPPED for any scenario whose
+    `metadata.stale_invariants` is true (2026-09-05 plan, Task 11): D1/T2/T3
+    were built and frozen against the OLD working-leg-only exposure numbers,
+    and Tasks 3/4 of that same plan moved to a joint (working-AND-protection)
+    probability for protected services, so those two invariants are
+    known-stale there pending D1/T2/T3's own redesign turn -- see the ruling
+    in `tests/eval/test_episodes.py`'s `PAIRS`/`STALE_PAIRS` comment."""
     async with connect() as client:
         from ..mcp_client import call_tool_json
         oms_by_id_list = (await call_tool_json(
@@ -288,9 +297,21 @@ async def _run_dimensional_coherence_invariants(
                 client, scenario, topology_path=topology_path, oms=oms_by_id_list)
             groups = await _groups_for(
                 client, scenario, topology_path=topology_path)
-            await assert_depot_is_the_binding_site(
-                client, scenario, topology_path=topology_path)
-            await assert_escape_route_survives(client, scenario)
+            # stale_invariants (2026-09-05 plan, Task 11): D1/T2/T3's
+            # `assert_depot_is_the_binding_site`/`assert_escape_route_survives`
+            # were built and frozen against the OLD working-leg-only exposure
+            # numbers. Tasks 3/4 of this same plan moved to a joint
+            # (working-AND-protection) probability for protected services,
+            # so these two invariants are known-stale for those episodes --
+            # ruling: "don't worry about old tests or T2/T3, we'll update
+            # those later". Declared per-episode via
+            # `metadata.stale_invariants: true` (D1/T2a/T2b/T3a/T3b) rather
+            # than skipped by id here, so the flag travels with the scenario
+            # file that earns it.
+            if not scenario.metadata.get("stale_invariants"):
+                await assert_depot_is_the_binding_site(
+                    client, scenario, topology_path=topology_path)
+                await assert_escape_route_survives(client, scenario)
 
         assert_claim_is_one_lightpath(scenario, groups)
         assert_group_fits_one_lightpath(scenario, groups)

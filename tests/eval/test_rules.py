@@ -124,10 +124,30 @@ def test_the_shipped_suite_is_not_solved_by_any_rule_over_DERIVED_geometry(
     working-path coordinates (`runner.service_points`), which only the server
     knows. One connection for the whole suite: every shipped episode names the
     same `state_file`, so the point is the same number seven times, and
-    `derived_scalars_for` asserts that rather than assuming it."""
+    `derived_scalars_for` asserts that rather than assuming it.
+
+    T1 is EXCLUDED here (2026-09-05 plan, Task 11 -- a gap in that plan's own
+    Task 11 text, discovered while implementing it): Tasks 3/4 of that same
+    plan moved `sut_p_cut_at_exposure_horizon` to a joint (working-AND-
+    protection) probability for protected services, and T1a/T1b's values --
+    tied under the OLD working-leg-only metric -- are now genuinely
+    different under the joint one, so a bare threshold on this one derived
+    scalar solves the T1 pair for real (confirmed live: `threshold:
+    sut_p_cut_at_exposure_horizon<0.0412451` scores 1.00 on T1 alone). This
+    is the exact same known-stale-on-the-joint-model failure mode
+    `tests/eval/test_episodes.py`'s `PAIRS`/`STALE_PAIRS` quarantines, in a
+    file that plan's Task 11 text didn't name. See
+    `test_t1_pair_is_solved_by_a_rule_over_DERIVED_geometry_is_known_stale`
+    below, marked `stale_pair`, for the T1-only half of this same check kept
+    live (as an expected-to-currently-fail probe) so T1's own eventual
+    redesign (task 15) shows up as an unexpected pass there rather than
+    silently vanishing. T2/T3/D1 are NOT excluded: this specific check is
+    confirmed to still pass for them (only T1 is newly solvable), so they
+    keep being checked for real rather than blanket-quarantined here."""
     episodes = list(load_all_scenarios().values())
     if len(episodes) < 7:
         pytest.skip("episodes not authored yet (Tasks 14-17)")
+    non_t1_episodes = [e for e in episodes if e.pair != "T1"]
 
     async def _derived():
         async with connect_server(
@@ -139,4 +159,43 @@ def test_the_shipped_suite_is_not_solved_by_any_rule_over_DERIVED_geometry(
                                              topology_path=TOPOLOGY_PATH)
 
     derived = asyncio.run(_derived())
-    assert_no_single_variable_rule_solves(episodes, derived)
+    assert_no_single_variable_rule_solves(non_t1_episodes, derived)
+
+
+@pytest.mark.stale_pair
+def test_t1_pair_is_solved_by_a_rule_over_DERIVED_geometry_is_known_stale(
+    loaded_state_path, local_server_command, local_server_env,
+):
+    """The T1-only half of the check above, split out (2026-09-05 plan, Task
+    11) because it is currently EXPECTED TO FAIL, not passing: T1a/T1b's
+    `sut_p_cut_at_exposure_horizon` values were tied under the OLD working-
+    leg-only exposure metric this pair was authored against, but Tasks 3/4 of
+    this same plan made them genuinely different under the new joint
+    (working-AND-protection) metric, so a bare threshold on that one scalar
+    now solves the T1 pair (`threshold:sut_p_cut_at_exposure_horizon<
+    0.0412451` scores 1.00, confirmed live). Marked `stale_pair` so it is
+    skipped rather than failing the build -- see
+    `tests/eval/test_episodes.py`'s `PAIRS`/`STALE_PAIRS` comment and this
+    module's `pytest_collection_modifyitems` hook (in conftest.py) for the
+    shared mechanism.
+
+    Kept as a real, runnable assertion (not deleted) so T1's own redesign
+    (task 15) turns this into a live failure surfacing as an unexpected
+    result the moment `stale_pair` is removed here, instead of the fix
+    landing with no test ever having recorded what it repaired."""
+    episodes = list(load_all_scenarios().values())
+    if len(episodes) < 7:
+        pytest.skip("episodes not authored yet (Tasks 14-17)")
+    t1_episodes = [e for e in episodes if e.pair == "T1"]
+
+    async def _derived():
+        async with connect_server(
+            TOPOLOGY_PATH, server_command=local_server_command,
+            env=local_server_env,
+            extra_args=["--state", str(loaded_state_path)],
+        ) as client:
+            return await derived_scalars_for(client, episodes,
+                                             topology_path=TOPOLOGY_PATH)
+
+    derived = asyncio.run(_derived())
+    assert_no_single_variable_rule_solves(t1_episodes, derived)

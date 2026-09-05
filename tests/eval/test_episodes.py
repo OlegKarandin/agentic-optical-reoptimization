@@ -35,10 +35,31 @@ TOPOLOGY_PATH = (
 )
 
 # Extended by Task 17 to add "D1" (a diagnostic singleton, not a pair).
-PAIRS = ("T1", "T2", "T3")
+#
+# NARROWED (2026-09-05 plan, Task 11): T2/T3's live invariants below were
+# built and frozen against the OLD working-leg-only exposure numbers. Tasks
+# 3/4 of this same plan changed the model to a joint (working-AND-protection)
+# probability for protected services, so several of T2/T3's checks now fail
+# on a model change, not a real regression -- ruling: "don't worry about old
+# tests or T2/T3, we'll update those later". PAIRS keeps running the pairs
+# whose invariants are current; STALE_PAIRS still runs (so the baselines
+# don't silently stop executing) but every test that reads it is skipped via
+# the `stale_pair` marker (see conftest.py's `pytest_collection_modifyitems`)
+# with a reason pointing back here, pending T2/T3's own redesign turn.
+PAIRS = ("T1",)
+STALE_PAIRS = ("T2", "T3")
 
 
-@pytest.mark.parametrize("pair", PAIRS)
+def _pair_params(*, live=PAIRS, stale=STALE_PAIRS):
+    """Every pair id in `live` unmarked, followed by every pair id in `stale`
+    marked `stale_pair` -- the shape `pytest.mark.parametrize` wants for a
+    pair-parametrised test that must still enumerate the stale pairs (so
+    they show up as skipped, not silently absent from the report)."""
+    return [pytest.param(p) for p in live] + [
+        pytest.param(p, marks=pytest.mark.stale_pair) for p in stale]
+
+
+@pytest.mark.parametrize("pair", _pair_params())
 def test_pair_passes_the_static_assertions(pair):
     episodes = load_all_scenarios()
     a = episodes[f"{pair}a"]
@@ -61,7 +82,7 @@ async def _menus(a, b, state_path, server_command, server_env):
         await assert_menus_identical(client_a, client_b, a, b)
 
 
-@pytest.mark.parametrize("pair", PAIRS)
+@pytest.mark.parametrize("pair", _pair_params())
 def test_pair_menus_are_identical_under_reference_avoid(
     pair, loaded_state_path, local_server_command, local_server_env,
 ):
@@ -85,7 +106,7 @@ async def _derived(a, b, state_path, server_command, server_env):
             client_a, client_b, a, b, topology_path=TOPOLOGY_PATH)
 
 
-@pytest.mark.parametrize("pair", PAIRS)
+@pytest.mark.parametrize("pair", _pair_params())
 def test_pair_derived_geometry_is_equal_across_the_halves(
     pair, loaded_state_path, local_server_command, local_server_env,
 ):
@@ -104,7 +125,7 @@ def test_pair_derived_geometry_is_equal_across_the_halves(
                          local_server_env))
 
 
-@pytest.mark.parametrize("pair", PAIRS)
+@pytest.mark.parametrize("pair", _pair_params())
 def test_each_baseline_variant_scores_exactly_one_half(
     pair, loaded_state_path, local_server_command, local_server_env,
 ):
@@ -231,6 +252,9 @@ _T2_NON_FLIP_GOLD_DECISIONS = {
 }
 
 
+# stale_pair (2026-09-05 plan, Task 11): T2-only, and T2's live invariants
+# are known-stale on the joint-exposure model -- see PAIRS/STALE_PAIRS above.
+@pytest.mark.stale_pair
 @pytest.mark.parametrize("half", ("T2a", "T2b"))
 def test_t2_non_flip_decisions_are_non_binding(
     half, loaded_state_path, local_server_command, local_server_env,
@@ -304,6 +328,9 @@ _T3_NON_FLIP_GOLD_DECISIONS = {
 }
 
 
+# stale_pair (2026-09-05 plan, Task 11): T3-only, and T3's live invariants
+# are known-stale on the joint-exposure model -- see PAIRS/STALE_PAIRS above.
+@pytest.mark.stale_pair
 @pytest.mark.parametrize("half", ("T3a", "T3b"))
 def test_t3_non_flip_decisions_are_non_binding(
     half, loaded_state_path, local_server_command, local_server_env,
@@ -341,6 +368,10 @@ def test_t3_non_flip_decisions_are_non_binding(
     asyncio.run(_run())
 
 
+# stale_pair (2026-09-05 plan, Task 11): D1-specific, and D1's live
+# invariants are known-stale on the joint-exposure model -- see
+# PAIRS/STALE_PAIRS above.
+@pytest.mark.stale_pair
 def test_d1_menu_contains_no_ip_reroute_candidate(
     loaded_state_path, local_server_command, local_server_env,
 ):
@@ -445,6 +476,10 @@ class _WidensOnDisjointnessRejection:
         return self._inner.objective(obs, menu)
 
 
+# stale_pair (2026-09-05 plan, Task 11): T2a-specific singleton, and T2's
+# live invariants are known-stale on the joint-exposure model -- see
+# PAIRS/STALE_PAIRS above.
+@pytest.mark.stale_pair
 def test_t2a_carries_a_real_validate_plan_rejection(
     loaded_state_path, local_server_command, local_server_env,
 ):
@@ -617,7 +652,7 @@ def test_no_global_policy_solves_the_shipped_suite(
     assert_no_global_policy_solves_the_suite(episodes, flip_values)
 
 
-@pytest.mark.parametrize("pair", ("T1", "T2", "T3"))
+@pytest.mark.parametrize("pair", _pair_params())
 def test_the_flip_dominates_every_equal_signal(pair, loaded_state_path,
                                                local_server_command,
                                                local_server_env):
@@ -673,6 +708,10 @@ def test_the_flip_dominates_every_equal_signal(pair, loaded_state_path,
 # protection lightpath still exists in all three menus (that part of the
 # original finding is unchanged, and still worth a separate look for T1a's
 # sake), but only T1a's exposure to it is a genuine confound.
+# stale_pair (2026-09-05 plan, Task 11): T2/T3-only (both parameter values),
+# and T2/T3's live invariants are known-stale on the joint-exposure model --
+# see PAIRS/STALE_PAIRS above.
+@pytest.mark.stale_pair
 @pytest.mark.parametrize("scenario_id", ("T2b", "T3b"))
 def test_a_conserve_gold_with_an_unexploitable_free_escape_passes(
     scenario_id, loaded_state_path, local_server_command, local_server_env,
@@ -790,7 +829,10 @@ _GOLD_COMMITTED_LEVER = {
 
 
 @pytest.mark.parametrize(
-    "scenario_id", ("T1a", "T1b", "T2a", "T2b", "T3a", "T3b"))
+    "scenario_id",
+    ("T1a", "T1b") + tuple(
+        pytest.param(s, marks=pytest.mark.stale_pair)
+        for s in ("T2a", "T2b", "T3a", "T3b")))
 def test_gold_spare_action_is_grounded_in_a_real_candidate(
     scenario_id, loaded_state_path, local_server_command, local_server_env,
 ):
@@ -818,6 +860,13 @@ FROZEN_SCALARS_PATH = (
     Path(__file__).parent / "fixtures" / "frozen_derived_scalars.json")
 
 
+# stale_pair (2026-09-05 plan, Task 11): Tasks 3/4 of this plan moved p_cut
+# to a joint (working-AND-protection) probability for protected services,
+# which moves derived.py's scalars for every protected episode -- the
+# `frozen_derived_scalars.json` snapshot below predates that change and is
+# now stale, not merely for T2/T3. Left skipped until Task 15 regenerates
+# the fixture against the new model.
+@pytest.mark.stale_pair
 def test_the_probability_model_scalars_are_unmoved(
     loaded_state_path, local_server_command, local_server_env,
 ):

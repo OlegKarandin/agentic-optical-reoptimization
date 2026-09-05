@@ -36,3 +36,6 @@ where = ["src"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-ra --strict-markers"
+markers = [
+    "stale_pair: invariant known-stale on the joint-exposure model; redesign pending (2026-09-05 plan)",
+]

@@ -5,6 +5,28 @@ import textwrap
 
 import pytest
 
+
+def pytest_collection_modifyitems(config, items):
+    """`stale_pair` (registered in pyproject.toml's `markers`) quarantines
+    invariants that are known-stale on the joint (working-AND-protection)
+    exposure model Tasks 3/4 of the 2026-09-05 plan introduced -- D1/T2/T3's
+    live invariants were built and frozen against the OLD working-leg-only
+    numbers, so several now fail on a model change, not a real regression.
+    D1/T2/T3 get their own redesign turn later, outside that plan's scope
+    (ruling: "don't worry about old tests or T2/T3, we'll update those
+    later").
+
+    A hook rather than a bare `@pytest.mark.skip` on each test so every
+    `stale_pair`-marked item -- whichever file it lives in, parametrised or
+    not -- gets the identical, greppable skip reason, and un-quarantining
+    later is a one-line marker removal rather than an edit to skip logic
+    scattered across files."""
+    reason = ("stale_pair: invariant known-stale on the joint-exposure model; "
+              "redesign pending (2026-09-05 plan, task 11)")
+    for item in items:
+        if item.get_closest_marker("stale_pair") is not None:
+            item.add_marker(pytest.mark.skip(reason=reason))
+
 EXAMPLE_SCENARIO_YAML = textwrap.dedent("""
     id: EXAMPLE_A
     pair: EXAMPLE
