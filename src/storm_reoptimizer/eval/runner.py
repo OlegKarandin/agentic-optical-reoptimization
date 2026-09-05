@@ -799,7 +799,8 @@ async def run_episode(
                               actions, hours=scenario.hours),
                           spares_spent=ledger.spent,
                           endpoint_sites=geometry.endpoint_sites,
-                          depot_site=scenario.depot_site)
+                          depot_site=scenario.depot_site,
+                          protection_spans=geometry.protection_cuttable_spans)
 
         issuance = latest_issuance(scenario, hour)
         rg_ids = await _define_horizon_risk_groups(

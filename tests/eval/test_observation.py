@@ -6,6 +6,7 @@ import json
 
 import pytest
 
+from storm_reoptimizer.eval.cone import p_cut_service
 from storm_reoptimizer.eval.observation import (
     build_observation, latest_issuance, lead_time_hours_for,
 )
@@ -30,6 +31,11 @@ SPANS = {
 @pytest.fixture
 def scenario(write_scenario, example_scenario_yaml):
     return load_scenario(write_scenario(example_scenario_yaml))
+
+
+@pytest.fixture
+def services():
+    return SERVICES
 
 
 # Task 10 fixtures: a roster wide enough to exercise co-terminating grouping.
@@ -317,3 +323,31 @@ def test_the_observation_carries_the_episodes_damage_radius(
         scenario, "t1", service_spans={}, services=(), spares_on_hand=1)
     assert obs.damage_radius_km == 74.0
     assert obs.to_dict()["damage_radius_km"] == 74.0
+
+
+def test_protected_service_p_cut_is_joint_and_legs_are_categorical(scenario, services):
+    working = {"storm-svc-1": (((24.6, 80.8), (24.5, 81.3)),)}
+    protection = {"storm-svc-1": (((24.6, 80.8), (24.9, 80.6)),)}
+    obs = build_observation(scenario, "t1", service_spans=working, services=services,
+                            spares_on_hand=1, protection_spans=protection)
+    row = obs.exposure["storm-svc-1"]["t3"]
+    cone = latest_issuance(scenario, "t1").horizons["t3"]
+    assert row["p_cut"] == round(p_cut_service(working["storm-svc-1"], protection["storm-svc-1"],
+                                               cone.center["lat"], cone.center["lon"],
+                                               cone.width_km, scenario.damage_radius_km), 4)
+    assert set(row["legs"]) == {"working", "protection"}
+    assert set(row["legs"]["working"]) == {"cuttable_spans", "in_footprint"}
+    assert "p_cut" not in row["legs"]["working"]
+
+
+def test_issuance_schedule_and_deadline(scenario, services):
+    obs = build_observation(scenario, "t0", service_spans={}, services=services, spares_on_hand=1)
+    assert obs.issuance_schedule == ("t0", "t1")
+    # lead_time_hours in the fixture is 1 and the only horizon is t3 -> deadline t2
+    assert obs.deadline_hour == {"ip_reroute": "t3", "hybrid": "t2", "optical_reroute": "t2"}
+    assert obs.to_dict()["deadline_hour"]["optical_reroute"] == "t2"
+
+
+def test_deadline_is_none_once_passed(scenario, services):
+    obs = build_observation(scenario, "t3", service_spans={}, services=services, spares_on_hand=1)
+    assert obs.deadline_hour["optical_reroute"] is None

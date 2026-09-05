@@ -14,7 +14,7 @@ import pytest
 
 from storm_reoptimizer.eval.cone import (
     expected_capacity_at_risk_gbps, nearest_span_offset_km, p_cut_region,
-    radial_offset_km,
+    p_cut_service, radial_offset_km,
 )
 from storm_reoptimizer.eval.derived import (
     DERIVED_VARS, FLIP_VARS, DerivedGeometryError, decision_issuance,
@@ -462,3 +462,52 @@ def test_the_group_total_is_computed_from_the_same_grouping_the_agent_sees(
         max(g["ecar_gbps"] for g in groups["t3"]), abs=1e-6)
     assert flip.largest_restorable_group_ecar_gbps < 900.0
     assert flip.largest_restorable_group_ecar_gbps > 0.0
+
+
+# Task 4 (protection-aware p_cut): a protection leg with no cuttable span
+# anywhere near the cone drives the JOINT (both-legs-cut) probability toward
+# zero, even though the working leg alone sits dead-centre on it -- the whole
+# architectural point of reading `p_cut_service` instead of `p_cut_region`
+# for a protected service. `far_protection` stands in for "a protection leg
+# this storm cannot touch."
+FAR_PROTECTION = (_span(40.0, 81.0),)
+
+
+def test_sut_p_cut_at_exposure_horizon_uses_the_joint_probability_when_protected(
+        tmp_path):
+    scenario = _episode(tmp_path, "A", t3_lat=25.0)   # SUT dead-centre
+    working_only = sut_p_cut_at_exposure_horizon(scenario, SUT_SPANS)[1]
+    joint = sut_p_cut_at_exposure_horizon(
+        scenario, SUT_SPANS, FAR_PROTECTION)[1]
+    assert working_only > 0.9
+    assert joint == pytest.approx(
+        p_cut_service(SUT_SPANS, FAR_PROTECTION, 25.0, 81.0, 90.0, 74.0))
+    assert joint < working_only
+
+
+def test_derived_geometry_from_spans_threads_sut_protection_spans(tmp_path):
+    scenario = _episode(tmp_path, "A", t3_lat=25.0)
+    derived = derived_geometry_from_spans(scenario, SUT_SPANS, FAR_PROTECTION)
+    assert derived.sut_p_cut_at_exposure_horizon == pytest.approx(
+        sut_p_cut_at_exposure_horizon(scenario, SUT_SPANS, FAR_PROTECTION)[1])
+
+
+def test_flip_scalars_from_spans_threads_protection_spans_for_the_claimant(
+        example_scenario_yaml, write_scenario):
+    scenario = load_scenario(write_scenario(example_scenario_yaml))
+    spans = {"storm-svc-1": (_span(25.2, 81.0),), "svc-b": (_span(25.2, 81.0),)}
+    demands = {"storm-svc-1": 300.0, "svc-b": 100.0}
+
+    unprotected = flip_scalars_from_spans(scenario, spans=spans,
+                                          demands_gbps=demands)
+    protected = flip_scalars_from_spans(
+        scenario, spans=spans, demands_gbps=demands,
+        protection_spans={"svc-b": FAR_PROTECTION})
+
+    # svc-b is the sole claimant (storm-svc-1 is excluded as the SUT), so
+    # giving it a protection leg the storm cannot touch collapses its own
+    # contribution to the claimant aggregate.
+    assert (protected.claimant_ecar_at_exposure_horizon
+            < unprotected.claimant_ecar_at_exposure_horizon)
+    assert protected.claimant_ecar_at_exposure_horizon == pytest.approx(
+        0.0, abs=1e-3)

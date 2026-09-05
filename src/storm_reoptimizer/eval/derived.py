@@ -196,7 +196,7 @@ from typing import TYPE_CHECKING
 from ..mcp_client import call_tool_json
 from .cone import (
     Segment, expected_capacity_at_risk_gbps, nearest_span_offset_km,
-    p_cut_region, radial_offset_km,
+    p_cut_region, p_cut_service, radial_offset_km,
 )
 from .observation import _restorable_groups, latest_issuance
 from .scenario_file import Issuance, ScenarioFile
@@ -328,25 +328,32 @@ def horizon_widths_km(scenario: ScenarioFile) -> dict[str, float]:
 
 
 def sut_p_cut_at_exposure_horizon(
-    scenario: ScenarioFile, sut_spans: tuple[Segment, ...]
+    scenario: ScenarioFile, sut_spans: tuple[Segment, ...],
+    sut_protection_spans: tuple[Segment, ...] | None = None,
 ) -> tuple[float, float]:
     """`(offset_km, p_cut)` for the service under test against the
     decision-hour issuance's cone at the exposure horizon.
 
     Exactly the arithmetic `build_observation` already puts in front of the
-    decider (`nearest_span_offset_km` -> `p_cut_region`), on exactly the same
-    storm-cuttable spans (`runner.service_geometry(...).cuttable_spans`) --
-    which is the point: this is a number the agent can read, so it is a
-    number a one-line rule can key on. Unrounded, unlike the observation's
-    4-decimal display copy, so the equality check across halves is not
-    papering over a real difference."""
+    decider (`nearest_span_offset_km` -> `p_cut_service`), on exactly the
+    same storm-cuttable spans (`runner.service_geometry(...).cuttable_spans`
+    and, when the service has one, `.protection_cuttable_spans`) -- which is
+    the point: this is a number the agent can read, so it is a number a
+    one-line rule can key on. Unrounded, unlike the observation's 4-decimal
+    display copy, so the equality check across halves is not papering over a
+    real difference.
+
+    `sut_protection_spans` defaults to None -- the unprotected reading
+    (`p_cut_service(..., None, ...)` is `p_cut_region(...)`) -- so every
+    existing caller with no protection geometry to offer keeps computing
+    exactly the same number as before."""
     horizon = exposure_horizon_hour(scenario)
     cone = decision_issuance(scenario).horizons[horizon]
     offset = nearest_span_offset_km(sut_spans, cone.center["lat"],
                                     cone.center["lon"])
-    return offset, p_cut_region(sut_spans, cone.center["lat"],
-                               cone.center["lon"], cone.width_km,
-                               scenario.damage_radius_km)
+    return offset, p_cut_service(sut_spans, sut_protection_spans,
+                                 cone.center["lat"], cone.center["lon"],
+                                 cone.width_km, scenario.damage_radius_km)
 
 
 def sut_exposure_by_horizon(
@@ -456,11 +463,20 @@ class FlipScalars:
 
 
 def _ecar_at_cone(scenario: ScenarioFile, cone, spans, demands_gbps, *,
-                  exclude: str | None) -> float:
+                  exclude: str | None,
+                  protection_spans: dict[str, tuple[Segment, ...]] | None = None
+                  ) -> float:
     """Summed `p_cut x demand_gbps` over every service with known spans and
     a known demand, optionally excluding one (the SUT). A service with no
-    storm-cuttable span contributes 0.0 -- `p_cut_region` of an empty span
-    tuple is exactly 0.0 -- which is what it physically is."""
+    storm-cuttable span contributes 0.0 -- `p_cut_service` of an empty span
+    tuple is exactly 0.0 -- which is what it physically is.
+
+    A service present in `protection_spans` (service id -> its protection
+    path's storm-cuttable spans) is scored on the JOINT both-legs-cut
+    probability instead of the working leg's alone -- the same switch
+    `build_observation` makes. Defaulted to None so every existing caller
+    with no protection geometry to offer keeps computing exactly the same
+    (working-only) number as before."""
     total = 0.0
     for service_id, service_spans in spans.items():
         if service_id == exclude:
@@ -468,9 +484,12 @@ def _ecar_at_cone(scenario: ScenarioFile, cone, spans, demands_gbps, *,
         demand = demands_gbps.get(service_id)
         if demand is None:
             continue
-        p_cut = p_cut_region(service_spans, cone.center["lat"],
-                             cone.center["lon"], cone.width_km,
-                             scenario.damage_radius_km)
+        protection = (protection_spans.get(service_id)
+                     if protection_spans is not None
+                     and service_id in protection_spans else None)
+        p_cut = p_cut_service(service_spans, protection, cone.center["lat"],
+                              cone.center["lon"], cone.width_km,
+                              scenario.damage_radius_km)
         total += expected_capacity_at_risk_gbps(p_cut, float(demand))
     return total
 
@@ -480,6 +499,7 @@ def flip_scalars_from_spans(
     spans: dict[str, tuple[Segment, ...]],
     demands_gbps: dict[str, float],
     endpoint_sites: dict[str, tuple[str, str]] | None = None,
+    protection_spans: dict[str, tuple[Segment, ...]] | None = None,
 ) -> FlipScalars:
     """The pure half of W1.1: the claimant aggregates, given every service's
     storm-cuttable spans and demand. Split out from `flip_scalars_for` for the
@@ -490,7 +510,15 @@ def flip_scalars_from_spans(
     `largest_restorable_group_ecar_gbps` exactly the way it drives
     `observation.build_observation`'s `restorable_groups` -- optional and
     defaulted to empty, like that function's own parameter, so every existing
-    caller with no depot context to offer keeps constructing."""
+    caller with no depot context to offer keeps constructing.
+
+    `protection_spans` (service id -> its protection path's storm-cuttable
+    spans) makes every p_cut computed here -- the claimant aggregate, the
+    SUT's own, and the per-service grouping input -- the JOINT both-legs-cut
+    probability for any service present in it, matching
+    `build_observation`'s own switch. Defaulted to None so every existing
+    caller with no protection geometry to offer keeps computing exactly the
+    same (working-only) numbers as before."""
     issuance = decision_issuance(scenario)
     exposure_horizon = exposure_horizon_hour(scenario)
     exposure_index = scenario.hours.index(exposure_horizon)
@@ -503,7 +531,7 @@ def flip_scalars_from_spans(
 
     per_horizon = {
         horizon: _ecar_at_cone(scenario, cone, spans, demands_gbps,
-                               exclude=sut)
+                               exclude=sut, protection_spans=protection_spans)
         for horizon, cone in issuance.horizons.items()}
 
     # Fail loud, exactly like `derived_geometry` does for the identical gap:
@@ -520,12 +548,15 @@ def flip_scalars_from_spans(
             f"for service_under_test {sut!r}; its own expected capacity at "
             f"risk cannot be derived")
 
+    sut_protection = (protection_spans.get(sut)
+                      if protection_spans is not None and sut in protection_spans
+                      else None)
     sut_demand = float(demands_gbps.get(sut, 0.0))
     sut_ecar = {}
     for horizon, cone in issuance.horizons.items():
-        p_cut = p_cut_region(sut_spans, cone.center["lat"],
-                             cone.center["lon"], cone.width_km,
-                             scenario.damage_radius_km)
+        p_cut = p_cut_service(sut_spans, sut_protection, cone.center["lat"],
+                              cone.center["lon"], cone.width_km,
+                              scenario.damage_radius_km)
         sut_ecar[horizon] = expected_capacity_at_risk_gbps(p_cut, sut_demand)
 
     # Per-service (not summed) exposure, in the exact shape
@@ -537,9 +568,13 @@ def flip_scalars_from_spans(
         svc_id: {
             horizon: {"expected_capacity_at_risk_gbps":
                      expected_capacity_at_risk_gbps(
-                         p_cut_region(svc_spans, cone.center["lat"],
-                                     cone.center["lon"], cone.width_km,
-                                     scenario.damage_radius_km),
+                         p_cut_service(
+                             svc_spans,
+                             protection_spans.get(svc_id)
+                             if protection_spans is not None
+                             and svc_id in protection_spans else None,
+                             cone.center["lat"], cone.center["lon"],
+                             cone.width_km, scenario.damage_radius_km),
                          float(demands_gbps.get(svc_id, 0.0)))}
             for horizon, cone in issuance.horizons.items()}
         for svc_id, svc_spans in spans.items()}
@@ -582,19 +617,27 @@ async def flip_scalars_for(client: "Client", scenarios: list[ScenarioFile],
     geometry = await service_geometry(client, topology_path)
     services = await call_tool_json(client, "get_services")
     demands = {s["id"]: float(s["demand_gbps"]) for s in services["services"]}
-    return {s.id: flip_scalars_from_spans(s, spans=geometry.cuttable_spans,
-                                          demands_gbps=demands,
-                                          endpoint_sites=geometry.endpoint_sites)
+    return {s.id: flip_scalars_from_spans(
+                s, spans=geometry.cuttable_spans, demands_gbps=demands,
+                endpoint_sites=geometry.endpoint_sites,
+                protection_spans=geometry.protection_cuttable_spans)
             for s in scenarios}
 
 
 def derived_geometry_from_spans(
-    scenario: ScenarioFile, sut_spans: tuple[Segment, ...]
+    scenario: ScenarioFile, sut_spans: tuple[Segment, ...],
+    sut_protection_spans: tuple[Segment, ...] | None = None,
 ) -> DerivedGeometry:
     """The pure half: everything above, given the service under test's
     storm-cuttable spans. Split out from `derived_geometry` so the geometry
-    is unit-testable without a server."""
-    offset, p_cut = sut_p_cut_at_exposure_horizon(scenario, sut_spans)
+    is unit-testable without a server.
+
+    `sut_protection_spans` defaults to None and is threaded only into
+    `sut_p_cut_at_exposure_horizon`, matching that function's own default --
+    every existing caller with no protection geometry keeps computing the
+    same unprotected `p_cut`."""
+    offset, p_cut = sut_p_cut_at_exposure_horizon(
+        scenario, sut_spans, sut_protection_spans)
     return DerivedGeometry(
         scenario_id=scenario.id,
         sut_spans=sut_spans,
@@ -628,7 +671,9 @@ async def derived_geometry(client: "Client", scenario: ScenarioFile, *,
             f"{scenario.id}: the server reports no working-path coordinates "
             f"for service_under_test {scenario.service_under_test!r}; its "
             f"exposure geometry cannot be derived")
-    return derived_geometry_from_spans(scenario, spans)
+    protection_spans = geometry.protection_cuttable_spans.get(
+        scenario.service_under_test)
+    return derived_geometry_from_spans(scenario, spans, protection_spans)
 
 
 async def derived_scalars_for(client: "Client", scenarios: list[ScenarioFile],
@@ -661,5 +706,8 @@ async def derived_scalars_for(client: "Client", scenarios: list[ScenarioFile],
                 f"{scenario.id}: the server reports no working-path "
                 f"coordinates for service_under_test "
                 f"{scenario.service_under_test!r}")
-        out[scenario.id] = derived_geometry_from_spans(scenario, spans).scalars()
+        protection_spans = geometry.protection_cuttable_spans.get(
+            scenario.service_under_test)
+        out[scenario.id] = derived_geometry_from_spans(
+            scenario, spans, protection_spans).scalars()
     return out

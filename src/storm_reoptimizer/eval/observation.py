@@ -22,9 +22,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..events.geo import damage_footprint_radius_km
 from .cone import (
     Segment, expected_capacity_at_risk_gbps, nearest_span_offset_km,
-    p_cut_region,
+    p_cut_service,
 )
 from .scenario_file import Issuance, ScenarioFile
 
@@ -215,6 +216,24 @@ class Observation:
     # WHICH services would share the restoring lightpath. Defaulted for the
     # same hand-built-Observation reason as `horizon_totals` above.
     restorable_groups: dict[str, tuple[dict, ...]] = field(default_factory=dict)
+    # The forecast's OWN issue hours, in hour-label order -- when a new
+    # advisory publishes, as against `issuance.issued_at`, which is only the
+    # one currently in force. Realistic: a real storm centre runs on a fixed
+    # advisory cadence, and knowing WHEN the next one lands is what makes
+    # "wait for more information" a reasoned bet rather than an open-ended
+    # stall. Defaulted for the same hand-built-Observation reason as
+    # `horizon_totals` above.
+    issuance_schedule: tuple[str, ...] = ()
+    # lever -> the LAST hour that lever can still be issued and still land
+    # (lead time included) at or before the latest horizon the CURRENT
+    # issuance publishes -- `None` once that hour has already passed, i.e.
+    # the lever can no longer act in time for anything this issuance has
+    # forecast. This is what turns "wait" into a bounded bet rather than a
+    # free option: a decider reading `hours_remaining` alone cannot tell
+    # whether a slower lever (`hybrid`/`optical_reroute`, whose lead time
+    # eats into the runway) has already run out of road. Defaulted for the
+    # same hand-built-Observation reason as `horizon_totals` above.
+    deadline_hour: dict[str, str | None] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-serializable form, for the trace and for step 6's prompt."""
@@ -249,6 +268,8 @@ class Observation:
             "spares_spent": self.spares_spent,
             "horizon_totals": self.horizon_totals,
             "restorable_groups": self.restorable_groups,
+            "issuance_schedule": list(self.issuance_schedule),
+            "deadline_hour": self.deadline_hour,
         }
 
 
@@ -264,6 +285,8 @@ def build_observation(
     spares_spent: int = 0,
     endpoint_sites: dict[str, tuple[str, str]] | None = None,
     depot_site: str | None = None,
+    protection_spans: dict[str, tuple[Segment, ...]] | None = None,
+    footprint_membership: dict[str, dict[str, dict[str, bool]]] | None = None,
 ) -> Observation:
     """The observation for one hour. `service_spans` maps a service id to the
     spans of its working path that the event's own filter admits -- the
@@ -279,9 +302,37 @@ def build_observation(
     non-SUT service falls into `non_sut_ineligible_ecar_gbps` and
     `restorable_groups`/`largest_restorable_group_ecar_gbps` come back
     empty/zero, which is the honest answer when the caller cannot say what
-    terminates where."""
+    terminates where.
+
+    `protection_spans` (service id -> storm-cuttable spans of that service's
+    PROTECTION path) is what makes a protected service's `p_cut` the JOINT
+    both-legs-cut probability (`cone.p_cut_service`) instead of the working
+    leg's alone -- the whole architectural point of this redesign. A service
+    present in this dict also gets a `"legs"` entry in its exposure row:
+    `{"working": {...}, "protection": {...}}`, each a per-leg CATEGORICAL
+    fact (`cuttable_spans` count, `in_footprint` bool), never a second
+    numeric probability -- an agent shown a second `p_cut` could substitute
+    a threshold rule on it for the comparison it is meant to reason through.
+    Defaulted to None so every existing caller with no protection geometry to
+    offer keeps constructing exactly as before (`p_cut_service(spans, None,
+    ...)` is `p_cut_region(spans, ...)`, unchanged).
+
+    `footprint_membership` (service id -> horizon -> leg name -> bool)
+    optionally OVERRIDES a leg's computed `in_footprint` fact -- for a caller
+    that already knows containment from its own geometry pass and wants the
+    observation to agree with it bit-for-bit rather than recompute it.
+    Defaulted to None, in which case every leg's `in_footprint` is computed
+    fresh from its own spans."""
     issuance = latest_issuance(scenario, hour)
     hour_index = scenario.hours.index(hour)
+
+    def _in_footprint(svc_id: str, horizon: str, leg: str, leg_spans, lat,
+                      lon, footprint_radius_km: float) -> bool:
+        override = (footprint_membership or {}).get(svc_id, {}).get(
+            horizon, {}).get(leg)
+        if override is not None:
+            return override
+        return nearest_span_offset_km(leg_spans, lat, lon) <= footprint_radius_km
 
     exposure: dict[str, dict[str, dict[str, float]]] = {}
     for svc in services:
@@ -292,18 +343,21 @@ def build_observation(
             # service is still counted in project_observation's
             # `omitted_services["count"]`, which is over the full roster.
             continue
+        protected = protection_spans is not None and svc["id"] in protection_spans
+        protection_leg = protection_spans.get(svc["id"]) if protected else None
         per_horizon: dict[str, dict[str, float]] = {}
         for horizon, cone in issuance.horizons.items():
             lat, lon = cone.center["lat"], cone.center["lon"]
             offset = nearest_span_offset_km(spans, lat, lon)
-            p_cut = round(p_cut_region(spans, lat, lon, cone.width_km,
-                                       scenario.damage_radius_km), 4)
-            per_horizon[horizon] = {
+            p_cut = round(p_cut_service(spans, protection_leg, lat, lon,
+                                        cone.width_km,
+                                        scenario.damage_radius_km), 4)
+            entry = {
                 "hours_ahead": scenario.hours.index(horizon) - hour_index,
-                # Distance from the cone centre to the NEAREST CUTTABLE SPAN,
-                # not to a representative midpoint -- so
-                # `offset_km <= width_km / 2` reads "a span this storm can cut
-                # is inside the footprint".
+                # Distance from the cone centre to the NEAREST CUTTABLE SPAN
+                # OF THE WORKING PATH, not to a representative midpoint and
+                # not to the joint region -- so `offset_km <= width_km / 2`
+                # reads "a span this storm can cut is inside the footprint".
                 "offset_km": round(offset, 1),
                 "width_km": cone.width_km,
                 "p_cut": p_cut,
@@ -324,11 +378,38 @@ def build_observation(
                     expected_capacity_at_risk_gbps(
                         p_cut, svc["demand_gbps"]), 3),
             }
+            if protected:
+                footprint_radius = damage_footprint_radius_km(
+                    cone.width_km, scenario.damage_radius_km)
+                entry["legs"] = {
+                    "working": {
+                        "cuttable_spans": len(spans),
+                        "in_footprint": _in_footprint(
+                            svc["id"], horizon, "working", spans, lat, lon,
+                            footprint_radius)},
+                    "protection": {
+                        "cuttable_spans": len(protection_leg),
+                        "in_footprint": _in_footprint(
+                            svc["id"], horizon, "protection", protection_leg,
+                            lat, lon, footprint_radius)},
+                }
+            per_horizon[horizon] = entry
         exposure[svc["id"]] = per_horizon
 
     groups = _restorable_groups(
         exposure, endpoint_sites or {}, depot_site=depot_site,
         service_under_test=scenario.service_under_test)
+
+    issuance_schedule = tuple(sorted(scenario.forecast, key=scenario.hours.index))
+    deadline_hour: dict[str, str | None] = {}
+    if issuance.horizons:
+        latest_horizon = max(issuance.horizons, key=scenario.hours.index)
+        latest_index = scenario.hours.index(latest_horizon)
+        for lever in LEAD_TIME_BY_LEVER:
+            d = latest_index - lead_time_hours_for(lever, scenario.lead_time_hours)
+            deadline_hour[lever] = scenario.hours[d] if d >= hour_index else None
+    else:
+        deadline_hour = {lever: None for lever in LEAD_TIME_BY_LEVER}
 
     return Observation(
         scenario_id=scenario.id,
@@ -351,4 +432,6 @@ def build_observation(
             exposure, endpoint_sites or {}, depot_site=depot_site,
             service_under_test=scenario.service_under_test, groups=groups),
         restorable_groups=groups,
+        issuance_schedule=issuance_schedule,
+        deadline_hour=deadline_hour,
     )
