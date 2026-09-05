@@ -3,7 +3,7 @@ Fixture-driven: no server, no state file."""
 import pytest
 
 from storm_reoptimizer.eval.scenario_file import (
-    ScenarioFileError, load_scenario,
+    ScenarioFileError, dump_scenario, load_all_scenarios, load_scenario,
 )
 
 
@@ -202,3 +202,30 @@ def test_gold_outcome_gbps_h_defaults_to_none_when_absent(
     s = load_scenario(write_scenario(example_scenario_yaml))
     assert s.gold.outcome_gbps_h is None
     assert s.gold.min_margin_gbps_h is None
+
+
+# Task 10 (T1 spend-or-hold redesign): dump_scenario is the reverse of
+# load_scenario -- tools/compute_gold.py needs it to rewrite a scenario's
+# gold: block without a human hand-editing YAML. Round-tripped over EVERY
+# shipped scenario, not just one fixture, so a field this writer forgets
+# shows up as a real mismatch on a real file rather than a fixture that
+# happens not to exercise it.
+def test_dump_load_round_trip(tmp_path):
+    scenarios = load_all_scenarios()
+    assert scenarios, "expected at least one shipped scenario to round-trip"
+    for scenario_id, scenario in scenarios.items():
+        path = tmp_path / f"{scenario_id}.yaml"
+        path.write_text(dump_scenario(scenario), encoding="utf-8")
+        assert load_scenario(path) == scenario
+
+
+def test_dump_scenario_omits_pair_for_a_singleton_episode(write_scenario,
+                                                           example_scenario_yaml):
+    # D1 (a singleton, no twin) omits `pair` entirely rather than writing
+    # `pair: null` -- dump_scenario must reproduce that, not merely round
+    # trip through a value load_scenario happens to tolerate either way.
+    without_pair = example_scenario_yaml.replace("pair: EXAMPLE\n", "")
+    scenario = load_scenario(write_scenario(without_pair))
+    assert scenario.pair is None
+    dumped = dump_scenario(scenario)
+    assert "pair:" not in dumped

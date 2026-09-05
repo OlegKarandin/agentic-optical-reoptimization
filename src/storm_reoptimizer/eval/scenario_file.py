@@ -18,6 +18,7 @@ flip-variable-citation check matches against the agent's reasoning),
 three pairs' gold answers are drawn from three different vocabularies)."""
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -276,6 +277,51 @@ def load_scenario(path: str | Path) -> ScenarioFile:
         reference_avoid=raw["reference_avoid"], forecast=forecast,
         realized=realized, gold=gold,
         flip_variable=tuple(raw["flip_variable"]), metadata=raw["metadata"])
+
+
+def dump_scenario(scenario: ScenarioFile) -> str:
+    """The reverse of `load_scenario`: serialize `scenario` back to the YAML
+    text the file format expects, such that `load_scenario(write(
+    dump_scenario(scenario))) == scenario`. Needed so `tools/compute_gold.py`
+    can rewrite a scenario file's `gold:` block with freshly computed
+    numbers without a human hand-editing YAML.
+
+    Built on `dataclasses.asdict(scenario)` -- `Gold`'s own dataclass fields
+    already match the file's `gold:` block key-for-key, and every tuple
+    field (`hours`, `flip_variable`, `gold.survived`, ...) naturally dumps as
+    a YAML list (PyYAML's safe representer maps `tuple` to `list`) -- with
+    `forecast` reshaped by hand: `Issuance`/`ConeAtHorizon` carry THEIR OWN
+    field names (`issued_at`, `horizons`), which do NOT match the file's
+    compact `{issued_at: {horizon: {cone, width_km, center}}}` nesting the
+    way `Gold`'s fields happen to coincide with `gold:`'s. `realized` is
+    rebuilt the same explicit way for symmetry and to guarantee plain
+    `list`s (not tuples-that-happen-to-render-as-lists) regardless of how
+    `dataclasses.asdict` treats it.
+
+    `pair` is OMITTED entirely (not written as `pair: null`) when `None` --
+    matching how a real singleton episode (D1) is authored today, since
+    `_OPTIONAL_TOP_LEVEL_KEYS` only ever tolerates a MISSING key, not a
+    key present with a null value written by a human.
+
+    5-decimal cone-coordinate floats are left exactly as loaded: no
+    rounding or reformatting is applied anywhere in this function, only
+    PyYAML's own default float rendering (which reproduces the shortest
+    string that round-trips to the same float -- the original text,
+    whenever that text was already minimal)."""
+    raw = dataclasses.asdict(scenario)
+    if raw.get("pair") is None:
+        raw.pop("pair", None)
+    raw["forecast"] = {
+        issued_at: {
+            horizon: {"cone": cone.cone, "width_km": cone.width_km,
+                      "center": cone.center}
+            for horizon, cone in issuance.horizons.items()
+        }
+        for issued_at, issuance in scenario.forecast.items()
+    }
+    raw["realized"] = {hour: list(assets)
+                       for hour, assets in scenario.realized.items()}
+    return yaml.safe_dump(raw, sort_keys=False)
 
 
 def load_all_scenarios(directory: str | Path | None = None
