@@ -554,10 +554,35 @@ def test_exposure_follows_the_service_after_it_reroutes(
     after = decider.observations[1].exposure["storm-svc-1"]["t1"]
     assert after["offset_km"] != before["offset_km"], (
         "the service moved but the harness re-used the pre-commit point")
-    # The baseline avoids the exposed risk group, so the committed path
-    # routes around the cone's assets and the representative point has to
-    # move AWAY from the cone centre.
-    assert after["p_cut"] < before["p_cut"]
+    # The baseline avoids the exposed risk group, so the committed path's
+    # WORKING leg genuinely moves away from the cone -- its own offset more
+    # than doubles (47.6 -> 95.1 km) and it exits the damage footprint
+    # outright. `in_footprint` (Task 4's per-leg categorical fact) is the
+    # cleanest way to see that: it flips True -> False on exactly the leg
+    # that moved.
+    assert after["offset_km"] > before["offset_km"]
+    assert before["legs"]["working"]["in_footprint"] is True
+    assert after["legs"]["working"]["in_footprint"] is False
+    # `p_cut` is the JOINT (both-legs-cut) probability (Task 4), not the
+    # working leg's own, and it does NOT reliably fall here -- verified NOT
+    # to be a fixture accident (Task 4 investigation, 2026-09-05): satna's
+    # three real aerial spans fan out from ONE shared node, with rewa at
+    # bearing 96.7 deg from satna, jhansi (protection, fixed) at 292.6 deg,
+    # and jabalpur (the only route disjoint from protection) at 209.6 deg --
+    # 83 deg from jhansi versus rewa's 164 deg. Moving the working leg off
+    # rewa and onto jabalpur therefore moves it CLOSER in bearing to the
+    # fixed protection leg, which can raise the Gaussian mass in the
+    # intersection of their two buffered regions even as the working leg's
+    # own far endpoint moves twice as far from the storm. A grid search over
+    # 9791 valid (cone centre x width x damage_radius) combinations that
+    # still expose rewa while excluding both jhansi and jabalpur from the
+    # risk group found no configuration with a real, unambiguous decrease --
+    # the best margin found was +6e-5, below this model's own ~2.56e-4
+    # sampling-noise floor. So this is a structural property of the joint
+    # metric under this real topology, not something a different
+    # EXPOSURE_SMOKE cone could fix. `p_cut` still changing at all (rather
+    # than being reused stale) is exactly what the offset/in_footprint
+    # assertions above already prove.
 
 
 def test_a_baseline_rollout_completes_and_records_every_hour(
