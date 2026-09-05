@@ -50,6 +50,7 @@ from .decisions import ConstraintDecision, Decider, candidate_index
 from .ledger import SpareLedger, spares_needed
 from .observation import build_observation, latest_issuance, lead_time_hours_for
 from .plans import PlanTranslationError, build_topology_index, plan_from_candidate
+from .replay import restore_after_cuts
 from .scenario_file import ConeAtHorizon, Issuance, ScenarioFile
 
 MAX_ITERATIONS = 5
@@ -385,6 +386,13 @@ class EpisodeTrace:
     # call service_geometry already makes. Defaulted so the positional
     # constructions in tests/eval/test_scoring.py keep working.
     oms_nodes: dict[str, list[str]] = field(default_factory=dict)
+    # One record per service `replay.restore_after_cuts` attempted this
+    # episode, across every hour with a realized cut -- the same records
+    # already folded into each hour's own `record["restorations"]`,
+    # flattened here so a reader does not have to walk every hour to see
+    # what the deterministic replay did. Defaulted for the same reason as
+    # `oms_nodes` above.
+    restorations: tuple[dict, ...] = ()
 
     def to_dict(self) -> dict:
         return {**asdict(self),
@@ -757,6 +765,7 @@ async def run_episode(
     hours: list[dict] = []
     actions: list[Action] = []
     affected_by_hour: dict[str, tuple[str, ...]] = {}
+    all_restorations: list[dict] = []
     terminal_status = "converged"
 
     for hour_index, hour in enumerate(scenario.hours):
@@ -977,6 +986,30 @@ async def run_episode(
             # PRE-mutation state and would silently score an unfailed network.
             record["snapshot_id"] = (
                 await counting.call("snapshot_create"))["id"]
+            # What the cut actually dropped, read from the SAME tool the
+            # episode's own final scoring call uses (simulate_ip_routing),
+            # right after inject_failure and before the replay below -- so
+            # "attempted only if actually dropped" (replay.py) is answered
+            # from ground truth, not from get_affected_services' asset-
+            # adjacency guess.
+            routing = await counting.call("simulate_ip_routing")
+            record["dropped_after_cut"] = sorted(
+                d["service_id"] for d in routing["dropped"]["services"])
+            # The deterministic post-cut restoration replay (T1 spend-or-
+            # hold redesign spec, 5.1): spend whatever spares remain on the
+            # services this cut actually dropped, in the DECIDER's own
+            # `claim_priority` order (last-stated `timing` this hour --
+            # `record["timing"]` is always set above, act or wait).
+            priority = tuple(record["timing"].get("claim_priority", ()))
+            restore_actions, restore_records = await restore_after_cuts(
+                counting, scenario=scenario, hour=hour, hour_index=hour_index,
+                affected=record["dropped_after_cut"], priority=priority,
+                ledger=ledger, geometry=geometry, issuance=issuance,
+                rg_for_cut_hour=rg_ids.get(hour),
+                index_factory=lambda: build_topology_index(client))
+            actions.extend(restore_actions)
+            record["restorations"] = restore_records
+            all_restorations.extend(restore_records)
         hours.append(record)
 
     final_routing = await counting.call("simulate_ip_routing")
@@ -987,7 +1020,7 @@ async def run_episode(
         terminal_status=terminal_status, final_routing=final_routing,
         affected_by_hour=affected_by_hour, tool_calls=counting.calls,
         wall_clock_s=round(time.monotonic() - started, 3),
-        oms_nodes=geometry.oms_nodes)
+        oms_nodes=geometry.oms_nodes, restorations=tuple(all_restorations))
 
     if trace_path is not None:
         path = Path(trace_path)

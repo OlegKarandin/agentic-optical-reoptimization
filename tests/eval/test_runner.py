@@ -26,7 +26,7 @@ from storm_reoptimizer.eval.runner import (
     unconstrained_menu_projection,
 )
 from storm_reoptimizer.eval.scenario_file import ConeAtHorizon, Issuance, load_scenario
-from storm_reoptimizer.mcp_client import connect_server
+from storm_reoptimizer.mcp_client import call_tool_json, connect_server
 
 TOPOLOGY_PATH = (
     Path(__file__).parent.parent.parent
@@ -1365,3 +1365,115 @@ def test_the_risk_group_walk_names_fibers_of_filtered_edges_only():
     assert horizon_risk_group_asset_ids(
         cone, 0.1, edges=[inside, buried, far], oms=oms,
         filter_fn=lambda e: e.mount_type == "aerial") == ["fiber_a_b_0"]
+
+
+# Same cone/geometry as EXPOSURE_SMOKE (see its own long comment above for
+# why this exact disc: it names risk group {satna<->rewa} alone, leaving
+# satna<->jabalpur -- and so the satna->jabalpur->...->fatehpur->allahabad
+# escape route -- open), stretched to four hours so a realized cut at t1
+# leaves t2/t3 to show nothing further happens. `claimant_services: []`:
+# this test is about the replay mechanism, not claimant contention.
+_REPLAY_SCENARIO_TEMPLATE = textwrap.dedent("""
+    id: {id}
+    seed: 17
+    state_file: eval/states/loaded-s17.json
+    service_under_test: storm-svc-1
+    track: hudhud
+    hours: [t0, t1, t2, t3]
+    decision_hour: t0
+    lead_time_hours: 1
+    spares_on_hand: 2
+    depot_site: satna
+    spare_inventory: {{satna: 2}}
+    damage_radius_km: 25
+    reference_avoid: {{}}
+    forecast:
+      t0:
+        t1: {{cone: {{type: Polygon, coordinates: [[[81.76667, 25.02292], [81.92013, 25.00454], [82.06312, 24.95063], [82.18592, 24.86488], [82.28014, 24.75313], [82.33937, 24.62299], [82.35958, 24.48333], [82.33937, 24.34367], [82.28014, 24.21353], [82.18592, 24.10178], [82.06312, 24.01603], [81.92013, 23.96212], [81.76667, 23.94374], [81.61321, 23.96212], [81.47022, 24.01603], [81.34742, 24.10178], [81.2532, 24.21353], [81.19397, 24.34367], [81.17376, 24.48333], [81.19397, 24.62299], [81.2532, 24.75313], [81.34742, 24.86488], [81.47022, 24.95063], [81.61321, 25.00454], [81.76667, 25.02292]]]}}, width_km: 120, center: {{lat: 24.48333, lon: 81.76667}}}}
+    realized:
+      t1: [{cuts}]
+    gold:
+      survived: [storm-svc-1]
+      max_spares_wasted: 2
+      decision_at_t0: wait
+      label: wait
+      rationale: replay live test fixture; not scored
+    flip_variable: [smoke]
+    metadata:
+      cone_width_km: 120
+      cone_motion_kmh: 20
+      n_future_claimants: 0
+      exposure_horizon_hours: 1
+      spares_on_hand: 2
+      claimant_services: []
+""")
+
+
+def _replay_scenario(tmp_path, scenario_id: str, cuts: list[str]):
+    path = tmp_path / f"{scenario_id}.yaml"
+    path.write_text(_REPLAY_SCENARIO_TEMPLATE.format(
+        id=scenario_id, cuts=", ".join(cuts)), encoding="utf-8")
+    return load_scenario(path)
+
+
+def test_post_cut_restoration_replay(
+    tmp_path, loaded_state_path, local_server_command, local_server_env,
+):
+    # Fiber ids are server-minted (per-state, deterministic for a given seed
+    # and topology, not typed by hand elsewhere) -- confirm both are real
+    # OMS elements on THIS state before trusting them in `realized` below.
+    async def _optical_topology():
+        async with connect_server(
+            TOPOLOGY_PATH, server_command=local_server_command,
+            env=local_server_env,
+            extra_args=["--state", str(loaded_state_path)],
+        ) as client:
+            return await call_tool_json(client, "get_topology", {"layer": "optical"})
+
+    optical = asyncio.run(_optical_topology())
+    elements = {e for o in optical["oms"] for e in o["elements"]}
+    assert "fiber_satna_rewa_0" in elements
+    assert "fiber_satna_jhansi_0" in elements
+
+    # Cutting only the WORKING leg: storm-svc-1's own 1:1 protection absorbs
+    # it, so simulate_ip_routing never reports IT dropped, and it is the only
+    # scope member this scenario has (claimant_services: []) -- so the
+    # replay is never attempted for anything, even though the SAME real
+    # fibre carries other, unrelated, unprotected services that DO go down
+    # collaterally (this fixture makes no claim about them; only storm-svc-1
+    # and the replay's own scope are this test's business).
+    working_only = _replay_scenario(
+        tmp_path, "REPLAY_WORKING_ONLY", ["fiber_satna_rewa_0"])
+    trace = asyncio.run(_run(
+        working_only, ScriptedDecider("hold"),
+        loaded_state_path, local_server_command, local_server_env))
+    assert isinstance(trace.hours[1]["dropped_after_cut"], list)
+    assert "storm-svc-1" not in trace.hours[1]["dropped_after_cut"]
+    assert trace.restorations == ()
+
+    # Cutting BOTH legs: the service actually goes down, and the harness's
+    # own deterministic replay -- not the decider, which only ever waits --
+    # is what gets a chance to restore it.
+    both_legs = _replay_scenario(
+        tmp_path, "REPLAY_BOTH_LEGS",
+        ["fiber_satna_rewa_0", "fiber_satna_jhansi_0"])
+    trace2 = asyncio.run(_run(
+        both_legs, ScriptedDecider("hold"),
+        loaded_state_path, local_server_command, local_server_env))
+    assert "storm-svc-1" in trace2.hours[1]["dropped_after_cut"]
+    assert trace2.restorations, "expected the replay to attempt storm-svc-1"
+    outcome = trace2.restorations[0]["outcome"]
+    # Measured live: the menu's first structurally-workable candidate
+    # (shortfall 0, real path change, affordable) is satna->jhansi->allahabad
+    # -- storm-svc-1's OWN now-degraded protection corridor, cheapest because
+    # it is already provisioned -- which validate_plan genuinely rejects
+    # (disjointness_collapse against storm-svc-1's own still-standing
+    # protection assets, and mode_infeasible on the dark leg). Unlike the
+    # hourly decision loop, this replay never retries a rejection with a
+    # widened avoid set (the spec states a single pick-and-commit, not a
+    # capped retry loop), so "rejected" is a real, expected outcome here --
+    # not a bug in either the candidate selection or try_commit.
+    assert outcome in {"restored", "no_candidate", "rejected"}, (
+        f"expected the live escape-route menu to restore storm-svc-1, "
+        f"report no workable candidate, or have its one pick rejected; "
+        f"got {outcome!r} (record: {trace2.restorations[0]!r})")
