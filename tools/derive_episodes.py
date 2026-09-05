@@ -92,6 +92,7 @@ import statistics
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
@@ -161,6 +162,7 @@ def solve_radius_for_target_pcut(
     target_pcut: float, spans: tuple[Segment, ...], width_km: float,
     damage_radius_km: float, *, lo_km: float = 1.0, hi_km: float = 500.0,
     coarse_step_km: float = 1.0,
+    pcut_fn: Callable[[float, float], float] | None = None,
 ) -> float:
     """Grid-then-refine search (NOT a Newton loop absorbing a wrong
     constant -- this only searches the free radius parameter along an
@@ -170,9 +172,26 @@ def solve_radius_for_target_pcut(
     radius in general (radial_offset_km to the segment can wobble slightly
     off-axis), so this does a coarse linear scan for the sign change nearest
     the target, then bisects that bracket -- robust without assuming
-    monotonicity globally."""
+    monotonicity globally.
+
+    `pcut_fn`, when given (Task 14, T1 spend-or-hold redesign plan), REPLACES
+    the internal `cone.p_cut_region(spans, ...)` computation entirely:
+    `pcut_at(d)` still converts the search radius `d` to (lat, lon) via
+    `place_centre` (the frame stays the one thing this function never lets a
+    caller override), but then calls `pcut_fn(lat, lon)` instead of scoring
+    `spans` itself -- so a caller can target ANY p_cut-shaped quantity, e.g.
+    `cone.p_cut_service`'s JOINT (working-AND-protection) probability, which
+    is not a function of one `spans` tuple alone. `spans`/`width_km`/
+    `damage_radius_km` are then unused for the p_cut computation (the caller's
+    closure captures whatever it needs), but stay required positionally so
+    every EXISTING call site (this module's own `build_t1b_spec`, and any
+    caller that does not pass `pcut_fn`) is completely unaffected -- additive,
+    not a rewrite. Defaults to `None`, in which case behaviour is bit-for-bit
+    identical to before this parameter existed."""
     def pcut_at(d: float) -> float:
         lat, lon = place_centre(origin_lat, origin_lon, bearing_deg, d)
+        if pcut_fn is not None:
+            return pcut_fn(lat, lon)
         return p_cut_region(spans, lat, lon, width_km, damage_radius_km)
 
     n_steps = int((hi_km - lo_km) / coarse_step_km)
