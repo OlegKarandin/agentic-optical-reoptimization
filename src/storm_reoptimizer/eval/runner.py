@@ -465,6 +465,15 @@ class ServiceGeometry:
     # moves the service or collides with its own protection corridor.
     path_oms: dict[str, dict[str, tuple[str, ...]]] = field(
         default_factory=dict)
+    # service_id -> the PROTECTION path's spans that this event's filter
+    # admits, keyed only for services WITH a protection path (value may be
+    # `()` when that path has no cuttable span). This is what makes a
+    # protected service's storm exposure a JOINT both-legs-cut probability
+    # (cone.p_cut_service) rather than the working leg's alone -- the
+    # protection leg's own geometry was invisible to the model before this
+    # field existed.
+    protection_cuttable_spans: dict[str, tuple[Segment, ...]] = field(
+        default_factory=dict)
 
 
 async def service_geometry(client: Client, topology_path: str | Path, *,
@@ -592,13 +601,25 @@ async def service_geometry(client: Client, topology_path: str | Path, *,
         cuttable[svc["id"]] = spans
         endpoints[svc["id"]] = (svc["src_router"].removeprefix("router_"),
                                 svc["dst_router"].removeprefix("router_"))
+    # Same OMS-keyed cuttable-span index `cuttable_span_by_oms` above builds,
+    # just resolved through each service's PROTECTION leg instead of its
+    # working one -- so a span this scores for a service's protection and a
+    # span the service-keyed exposure walk scores for its working leg can
+    # never disagree. Keyed only for services with a protection path at all.
+    protection_cuttable = {
+        svc_id: tuple(cuttable_span_by_oms[o]
+                      for o in path_oms[svc_id]["protection"]
+                      if o in cuttable_span_by_oms)
+        for svc_id in path_oms if path_oms[svc_id].get("protection")}
+
     return ServiceGeometry(points=points, paths=paths, oms_nodes=oms_nodes,
                            unmapped_nodes=unmapped, cuttable_spans=cuttable,
                            endpoint_sites=endpoints,
                            oms_sequences={lp_id: tuple(seq) for lp_id, seq
                                          in oms_seq_by_lp.items()},
                            cuttable_span_by_oms=cuttable_span_by_oms,
-                           path_oms=path_oms)
+                           path_oms=path_oms,
+                           protection_cuttable_spans=protection_cuttable)
 
 
 async def service_points(client: Client, topology_path: str | Path, *,

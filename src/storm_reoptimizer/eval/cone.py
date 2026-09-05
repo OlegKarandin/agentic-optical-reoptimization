@@ -245,6 +245,40 @@ def p_cut_region(spans, center_lat: float, center_lon: float,
                                     damage_radius_km)
 
 
+def p_cut_region_joint(spans_a, spans_b, center_lat: float, center_lon: float,
+                       width_km: float, damage_radius_km: float) -> float:
+    """P(at least one span of `spans_a` AND at least one of `spans_b` are cut)
+    by ONE storm centre: the Gaussian mass in the INTERSECTION of the two
+    buffered regions. For a protected service this is P(service down)."""
+    if not spans_a or not spans_b:
+        return 0.0
+    sigma = cross_track_sigma_km(width_km)
+    reach = damage_radius_km + NEGLIGIBLE_SIGMAS * sigma
+    if (nearest_span_offset_km(spans_a, center_lat, center_lon) > reach
+            or nearest_span_offset_km(spans_b, center_lat, center_lon) > reach):
+        return 0.0
+    region = _region_in_sigmas(spans_a, center_lat, center_lon, damage_radius_km, sigma)\
+        .intersection(_region_in_sigmas(spans_b, center_lat, center_lon,
+                                        damage_radius_km, sigma))
+    if region.is_empty:
+        return 0.0
+    prepare(region)
+    return float(contains(region, _STANDARD_NORMAL_POINTS).mean())
+
+
+def p_cut_service(working_spans, protection_spans, center_lat: float,
+                  center_lon: float, width_km: float,
+                  damage_radius_km: float) -> float:
+    """P(the service goes down). Unprotected (`protection_spans is None`):
+    the working path's own cut probability. Protected: both legs must be
+    cut; a protection leg with no cuttable span (`()`) cannot be cut, so 0."""
+    if protection_spans is None:
+        return p_cut_region(working_spans, center_lat, center_lon, width_km,
+                            damage_radius_km)
+    return p_cut_region_joint(working_spans, protection_spans, center_lat,
+                              center_lon, width_km, damage_radius_km)
+
+
 def nearest_span_offset_km(spans, center_lat: float,
                            center_lon: float) -> float:
     """Distance from the cone centre to the nearest point of any span, 0.0

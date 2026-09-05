@@ -38,7 +38,11 @@ GEOMETRY_TOPOLOGY = {"graph": {"nodes": [
     {"id": "rewa", "lat": 24.5, "lon": 81.3},
     {"id": "allahabad", "lat": 25.4, "lon": 81.8},
     {"id": "jhansi", "lat": 25.4, "lon": 78.6},
-], "edges": []}, "srlgs": []}
+], "edges": [
+    {"src": "satna", "dst": "rewa", "mount_type": "aerial"},
+    {"src": "rewa", "dst": "allahabad", "mount_type": "buried"},
+    {"src": "satna", "dst": "jhansi", "mount_type": "aerial"},
+]}, "srlgs": []}
 
 GEOMETRY_REPLIES = {
     ("get_topology", "ip"): {"ip_links": [
@@ -76,6 +80,17 @@ def _geometry_call(counter):
 def _write_geometry_topology(tmp_path):
     path = tmp_path / "topo.json"
     path.write_text(json.dumps(GEOMETRY_TOPOLOGY), encoding="utf-8")
+    return path
+
+
+def _write_geometry_topology_without_edges(tmp_path):
+    # Same nodes as GEOMETRY_TOPOLOGY, but with the edges list emptied -- for
+    # the two tests below whose whole point is "no local edges means no
+    # mount_type is known for any leg".
+    topo = {"graph": {"nodes": GEOMETRY_TOPOLOGY["graph"]["nodes"],
+                      "edges": []}, "srlgs": []}
+    path = tmp_path / "topo_no_edges.json"
+    path.write_text(json.dumps(topo), encoding="utf-8")
     return path
 
 PROBE_MENU = {
@@ -845,11 +860,11 @@ def test_service_geometry_strips_the_router_prefix_for_endpoint_sites(tmp_path):
 
 def test_service_geometry_reports_no_cuttable_spans_without_local_edges(
         tmp_path):
-    # GEOMETRY_TOPOLOGY declares no edges at all, so no mount_type is known
-    # for any leg -- cuttable_spans must come back empty rather than raise,
-    # and every service still gets a (possibly empty) entry.
+    # A topology with no edges at all means no mount_type is known for any
+    # leg -- cuttable_spans must come back empty rather than raise, and every
+    # service still gets a (possibly empty) entry.
     geo = asyncio.run(runner.service_geometry(
-        None, _write_geometry_topology(tmp_path),
+        None, _write_geometry_topology_without_edges(tmp_path),
         call=_geometry_call([])))
     assert geo.cuttable_spans["storm-svc-1"] == ()
 
@@ -881,9 +896,19 @@ def test_service_geometry_reports_no_cuttable_span_by_oms_without_local_edges(
         tmp_path):
     # Same rule as cuttable_spans above, keyed by OMS instead of by service.
     geo = asyncio.run(runner.service_geometry(
-        None, _write_geometry_topology(tmp_path),
+        None, _write_geometry_topology_without_edges(tmp_path),
         call=_geometry_call([])))
     assert geo.cuttable_span_by_oms == {}
+
+
+def test_service_geometry_exposes_protection_cuttable_spans(tmp_path):
+    # storm-svc-1's protection path (satna -> jhansi -> nowhere) rides
+    # oms_sj (satna<->jhansi, AERIAL) then oms_gap (satna<->nowhere,
+    # unmappable) -- exactly one protection-leg span is storm-cuttable.
+    geo = asyncio.run(runner.service_geometry(
+        None, _write_geometry_topology(tmp_path), call=_geometry_call([])))
+    assert "storm-svc-1" in geo.protection_cuttable_spans
+    assert len(geo.protection_cuttable_spans["storm-svc-1"]) == 1
 
 
 def test_service_geometry_indexes_cuttable_spans_by_oms_id(
