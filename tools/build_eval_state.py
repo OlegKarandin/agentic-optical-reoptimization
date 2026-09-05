@@ -54,7 +54,9 @@ from multilayer_optical_network.model.scenario import (
 )
 from multilayer_optical_network.model.solvers import SolverStatus
 from multilayer_optical_network.model.whatif import loading_from_model
-from multilayer_optical_network.state_file import dump_state, topology_fingerprint
+from multilayer_optical_network.state_file import (
+    dump_state, load_model_from_state_file, topology_fingerprint,
+)
 from multilayer_optical_network.topology_loader import load_model_from_topology_file
 
 SERVICE_UNDER_TEST = {
@@ -87,6 +89,11 @@ CLAIMANT_SERVICES = [
 # stage-2 pin for want of inventory would be a setup artifact. Widened to
 # cover jabalpur alongside satna/allahabad for the claimant pair above.
 PIN_SPARE_INVENTORY = {"satna": 4, "allahabad": 4, "jabalpur": 4}
+# Task 15 fills this in: a later T1 SUT/pair pinned via --base-state onto the
+# existing loaded-s17.json instead of a full rebuild. Empty for now so the
+# no-argument default (SERVICE_UNDER_TEST + CLAIMANT_SERVICES + T1_PINS)
+# reproduces today's build exactly.
+T1_PINS: list[dict] = []
 # NOT "srlg": the toy topology has zero static SRLGs (confirmed:
 # toy_india_topology.json's "srlgs" is 0), and generate_demands'/
 # solve_allocation_model's own docs say srlg-basis disjointness is a NO-OP
@@ -208,10 +215,25 @@ NODE_POPULATION = {
 DEMAND_SCALE_GBPS = 102400.0
 
 
+def _default_pin_inventory(pins: list[dict]) -> dict:
+    """PIN_SPARE_INVENTORY, widened with 4 at every pin's endpoints not
+    already covered -- generous and local to the pins' own sites, per
+    PIN_SPARE_INVENTORY's own docstring (scarcity is the harness ledger's
+    concern, not the builder's)."""
+    inventory = dict(PIN_SPARE_INVENTORY)
+    for pin in pins:
+        inventory.setdefault(pin["src"], 4)
+        inventory.setdefault(pin["dst"], 4)
+    return inventory
+
+
 def build(topology_path: str, out_path: str, *, seed: int,
           target_mean_util: float = 0.6, max_util_cap: float = 0.95,
           protected_fraction: float = 0.0,
-          scale_gbps: float = DEMAND_SCALE_GBPS) -> None:
+          scale_gbps: float = DEMAND_SCALE_GBPS,
+          pins: list[dict] | None = None,
+          pin_inventory: dict | None = None,
+          base_state: str | None = None) -> None:
     """`target_mean_util` no longer calibrates the offered scale (that's now
     the fixed, pre-calibrated `scale_gbps` -- see DEMAND_SCALE_GBPS's
     docstring for why); it only sets the +/-0.2 acceptance tolerance below.
@@ -263,8 +285,53 @@ def build(topology_path: str, out_path: str, *, seed: int,
     revisiting; per the eval design spec ("spare_inventory is not in the
     model"), scored spare scarcity is synthesized by the harness's own
     ledger, decoupled from the network model's real reservations, so no
-    task in the current plan appears to need this."""
+    task in the current plan appears to need this.
+
+    `pins` defaults to SERVICE_UNDER_TEST + CLAIMANT_SERVICES + T1_PINS (the
+    original hardcoded stage-2 pin set, unchanged); passing an explicit list
+    replaces it wholesale rather than extending it. `pin_inventory` defaults
+    to PIN_SPARE_INVENTORY widened with 4 at every pin endpoint not already
+    covered (see _default_pin_inventory).
+
+    `base_state`, when given, skips stages 1 and 2 (the gravity-load build)
+    entirely: it loads `base_state` as the starting model via
+    `load_model_from_state_file` (same pattern as
+    `tools/probe_claimants.py`) and pins only `pins` onto it as a new stage,
+    reusing the identical stage-2 code path (make_adapter_evaluator /
+    solve_allocation_model / dump_state). This is what makes authoring a new
+    T1 SUT/pair cheap: pin it onto the already-built loaded-s17.json instead
+    of paying for a full rebuild. `seed`, `target_mean_util`, `max_util_cap`,
+    `protected_fraction` and `scale_gbps` are unused in this mode."""
+    if pins is None:
+        pins = [SERVICE_UNDER_TEST, *CLAIMANT_SERVICES, *T1_PINS]
+    if pin_inventory is None:
+        pin_inventory = _default_pin_inventory(pins)
     modes = default_modes()
+
+    if base_state is not None:
+        model = load_model_from_state_file(topology_path, base_state, modes=modes)
+        store = QoTResultStore()
+        base_meta = json.loads(Path(base_state).read_text(encoding="utf-8"))["meta"]
+        pin_qot = make_adapter_evaluator(model, store, cache=QoTCache())
+        pin_result, work = solve_allocation_model(
+            model, pin_qot, pins, pin_inventory)
+        if pin_result.status is not SolverStatus.SOLUTION or pin_result.unplaced:
+            raise SystemExit(
+                f"build_eval_state: could not pin all of "
+                f"{[p['id'] for p in pins]} onto base_state={base_state} "
+                f"(status={pin_result.status}, unplaced={pin_result.unplaced})")
+
+        raw = json.loads(Path(topology_path).read_text(encoding="utf-8-sig"))
+        doc = dump_state(work, fingerprint=topology_fingerprint(raw), meta={
+            **base_meta, "pins": [p["id"] for p in pins]})
+        out = Path(out_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+        print(f"wrote {out_path}: {len(doc['services'])} services "
+              f"(base-state mode, base={base_state}, "
+              f"pins={[p['id'] for p in pins]})", flush=True)
+        return
+
     model = load_model_from_topology_file(topology_path, modes=modes)
     store = QoTResultStore()
     qot = make_adapter_evaluator(model, store, cache=QoTCache())
@@ -306,10 +373,9 @@ def build(topology_path: str, out_path: str, *, seed: int,
               f"subscribed; not treated as fatal (see build()'s docstring)",
               flush=True)
 
-    pins = [SERVICE_UNDER_TEST, *CLAIMANT_SERVICES]
     pin_qot = make_adapter_evaluator(loaded, store, cache=QoTCache())
     pin_result, work = solve_allocation_model(
-        loaded, pin_qot, pins, PIN_SPARE_INVENTORY)
+        loaded, pin_qot, pins, pin_inventory)
     if pin_result.status is not SolverStatus.SOLUTION or pin_result.unplaced:
         raise SystemExit(
             f"build_eval_state: could not pin all of "
@@ -347,10 +413,31 @@ def main() -> None:
         "--max-util-cap", type=float, default=0.95,
         help="Advisory only: prints a warning (not fatal) if the achieved "
              "max utilization exceeds this.")
+    parser.add_argument(
+        "--pin", action="append", default=None, metavar="JSON",
+        help='One pin, as JSON: {"id","src","dst","demand_gbps","protected"}. '
+             "Repeatable. Replaces the default pin set (SERVICE_UNDER_TEST + "
+             "CLAIMANT_SERVICES + T1_PINS) wholesale, rather than extending "
+             "it.")
+    parser.add_argument(
+        "--pin-inventory", default=None, metavar="JSON",
+        help="Spare inventory for the pin stage, as a JSON object of "
+             "site -> count. Defaults to PIN_SPARE_INVENTORY widened with 4 "
+             "at every pin endpoint not already covered.")
+    parser.add_argument(
+        "--base-state", default=None, metavar="PATH",
+        help="Skip stages 1-2 (the gravity-load build) and instead load "
+             "this existing state file as the starting model, pinning only "
+             "--pin(s) onto it as a new stage. Makes adding a new SUT/pair "
+             "cheap: no full rebuild needed.")
     args = parser.parse_args()
+    pins = [json.loads(p) for p in args.pin] if args.pin is not None else None
+    pin_inventory = (json.loads(args.pin_inventory)
+                      if args.pin_inventory is not None else None)
     build(args.topology, args.out, seed=args.seed,
           target_mean_util=args.target_mean_util,
-          max_util_cap=args.max_util_cap)
+          max_util_cap=args.max_util_cap,
+          pins=pins, pin_inventory=pin_inventory, base_state=args.base_state)
 
 
 if __name__ == "__main__":

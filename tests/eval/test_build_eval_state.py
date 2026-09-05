@@ -52,6 +52,33 @@ def test_build_is_reproducible_at_the_same_seed(
                - first["meta"]["achieved_mean_util"]) < 0.02
 
 
+def test_base_state_mode_pins_a_new_service_onto_an_existing_state(
+        tmp_path, loaded_state_path, local_server_command, local_server_env):
+    """Task 12: `--base-state` skips stages 1-2 entirely and pins only the
+    given `--pin`(s) onto the already-built loaded-s17.json, so a later task
+    can add a brand-new SUT/pair without paying for a full network rebuild.
+    tirupati<->nellore is a real adjacent (single-hop) aerial span in the toy
+    topology (confirmed against toy_india_topology.json's edge list), chosen
+    so the pin has an obvious feasible placement and the test exercises the
+    base-state mechanism rather than routing feasibility."""
+    base = json.loads(loaded_state_path.read_text(encoding="utf-8"))
+    base_ids = {s["id"] for s in base["services"]}
+    out = tmp_path / "pinned.json"
+    pin = json.dumps({"id": "probe-x", "src": "tirupati", "dst": "nellore",
+                       "demand_gbps": 100.0, "protected": False})
+    proc = subprocess.run(
+        [local_server_command[0], str(BUILDER),
+         "--topology", str(TOPOLOGY_PATH), "--out", str(out), "--seed", "17",
+         "--base-state", str(loaded_state_path), "--pin", pin],
+        env=local_server_env, capture_output=True, text=True, timeout=120,
+        check=False)
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    doc = json.loads(out.read_text(encoding="utf-8"))
+    service_ids = {s["id"] for s in doc["services"]}
+    assert "probe-x" in service_ids
+    assert base_ids <= service_ids
+
+
 def test_satna_has_three_independent_aerial_directions():
     """The claimant family's precondition, asserted rather than assumed
     (exposure-and-depot design, §3.2 Option B).
