@@ -227,6 +227,34 @@ def _default_pin_inventory(pins: list[dict]) -> dict:
     return inventory
 
 
+def _pin_and_dump(model, store: QoTResultStore, pins: list[dict],
+                   pin_inventory: dict, topology_path: str, out_path: str,
+                   meta: dict, err_context: str, log_note: str) -> dict:
+    """The one shared pin/solve/fatal-check/dump/write/print tail for BOTH
+    the default two-stage build and --base-state mode -- kept as a single
+    copy so a later change to solve_allocation_model's call shape or the
+    fatal-check condition can't silently drift between the two call sites.
+    `err_context` names what's being pinned onto, for the fatal message;
+    `log_note` is appended verbatim to the "wrote <out>: N services" line.
+    Returns the written doc."""
+    pin_qot = make_adapter_evaluator(model, store, cache=QoTCache())
+    pin_result, work = solve_allocation_model(model, pin_qot, pins, pin_inventory)
+    if pin_result.status is not SolverStatus.SOLUTION or pin_result.unplaced:
+        raise SystemExit(
+            f"build_eval_state: could not pin all of "
+            f"{[p['id'] for p in pins]} onto {err_context} "
+            f"(status={pin_result.status}, unplaced={pin_result.unplaced})")
+
+    raw = json.loads(Path(topology_path).read_text(encoding="utf-8-sig"))
+    doc = dump_state(work, fingerprint=topology_fingerprint(raw), meta=meta)
+    out = Path(out_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+    print(f"wrote {out_path}: {len(doc['services'])} services{log_note}",
+          flush=True)
+    return doc
+
+
 def build(topology_path: str, out_path: str, *, seed: int,
           target_mean_util: float = 0.6, max_util_cap: float = 0.95,
           protected_fraction: float = 0.0,
@@ -297,11 +325,16 @@ def build(topology_path: str, out_path: str, *, seed: int,
     entirely: it loads `base_state` as the starting model via
     `load_model_from_state_file` (same pattern as
     `tools/probe_claimants.py`) and pins only `pins` onto it as a new stage,
-    reusing the identical stage-2 code path (make_adapter_evaluator /
-    solve_allocation_model / dump_state). This is what makes authoring a new
-    T1 SUT/pair cheap: pin it onto the already-built loaded-s17.json instead
+    reusing the identical stage-2 tail (`_pin_and_dump`, also used by the
+    default two-stage build below). This is what makes authoring a new T1
+    SUT/pair cheap: pin it onto the already-built loaded-s17.json instead
     of paying for a full rebuild. `seed`, `target_mean_util`, `max_util_cap`,
-    `protected_fraction` and `scale_gbps` are unused in this mode."""
+    `protected_fraction` and `scale_gbps` are unused in this mode.
+    `--base-state` is designed to always pair with at least one `--pin`:
+    used alone it falls through to the default pin set
+    (SERVICE_UNDER_TEST + CLAIMANT_SERVICES + T1_PINS), which would likely
+    collide with services the base state already contains (storm-svc-1 and
+    the claimant pair are already pinned into loaded-s17.json)."""
     if pins is None:
         pins = [SERVICE_UNDER_TEST, *CLAIMANT_SERVICES, *T1_PINS]
     if pin_inventory is None:
@@ -311,25 +344,14 @@ def build(topology_path: str, out_path: str, *, seed: int,
     if base_state is not None:
         model = load_model_from_state_file(topology_path, base_state, modes=modes)
         store = QoTResultStore()
-        base_meta = json.loads(Path(base_state).read_text(encoding="utf-8"))["meta"]
-        pin_qot = make_adapter_evaluator(model, store, cache=QoTCache())
-        pin_result, work = solve_allocation_model(
-            model, pin_qot, pins, pin_inventory)
-        if pin_result.status is not SolverStatus.SOLUTION or pin_result.unplaced:
-            raise SystemExit(
-                f"build_eval_state: could not pin all of "
-                f"{[p['id'] for p in pins]} onto base_state={base_state} "
-                f"(status={pin_result.status}, unplaced={pin_result.unplaced})")
-
-        raw = json.loads(Path(topology_path).read_text(encoding="utf-8-sig"))
-        doc = dump_state(work, fingerprint=topology_fingerprint(raw), meta={
-            **base_meta, "pins": [p["id"] for p in pins]})
-        out = Path(out_path)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(doc, indent=2), encoding="utf-8")
-        print(f"wrote {out_path}: {len(doc['services'])} services "
-              f"(base-state mode, base={base_state}, "
-              f"pins={[p['id'] for p in pins]})", flush=True)
+        base_meta = json.loads(
+            Path(base_state).read_text(encoding="utf-8-sig"))["meta"]
+        _pin_and_dump(
+            model, store, pins, pin_inventory, topology_path, out_path,
+            meta={**base_meta, "pins": [p["id"] for p in pins]},
+            err_context=f"base_state={base_state}",
+            log_note=(f" (base-state mode, base={base_state}, "
+                       f"pins={[p['id'] for p in pins]})"))
         return
 
     model = load_model_from_topology_file(topology_path, modes=modes)
@@ -373,30 +395,19 @@ def build(topology_path: str, out_path: str, *, seed: int,
               f"subscribed; not treated as fatal (see build()'s docstring)",
               flush=True)
 
-    pin_qot = make_adapter_evaluator(loaded, store, cache=QoTCache())
-    pin_result, work = solve_allocation_model(
-        loaded, pin_qot, pins, pin_inventory)
-    if pin_result.status is not SolverStatus.SOLUTION or pin_result.unplaced:
-        raise SystemExit(
-            f"build_eval_state: could not pin all of "
-            f"{[p['id'] for p in pins]} onto the loaded network "
-            f"(status={pin_result.status}, unplaced={pin_result.unplaced})")
-
-    raw = json.loads(Path(topology_path).read_text(encoding="utf-8-sig"))
-    doc = dump_state(work, fingerprint=topology_fingerprint(raw), meta={
-        "note": "storm-reoptimizer eval loaded operating network",
-        "seed": seed,
-        "target_mean_util": target_mean_util,
-        "achieved_mean_util": achieved_mean_util,
-        "achieved_max_util": achieved_max_util,
-        "n_background_demands": len(demands),
-        "service_under_test": SERVICE_UNDER_TEST["id"],
-    })
-    out = Path(out_path)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(doc, indent=2), encoding="utf-8")
-    print(f"wrote {out_path}: {len(doc['services'])} services, "
-          f"mean_util={achieved_mean_util:.3f}", flush=True)
+    _pin_and_dump(
+        loaded, store, pins, pin_inventory, topology_path, out_path,
+        meta={
+            "note": "storm-reoptimizer eval loaded operating network",
+            "seed": seed,
+            "target_mean_util": target_mean_util,
+            "achieved_mean_util": achieved_mean_util,
+            "achieved_max_util": achieved_max_util,
+            "n_background_demands": len(demands),
+            "service_under_test": SERVICE_UNDER_TEST["id"],
+        },
+        err_context="the loaded network",
+        log_note=f", mean_util={achieved_mean_util:.3f}")
 
 
 def main() -> None:
