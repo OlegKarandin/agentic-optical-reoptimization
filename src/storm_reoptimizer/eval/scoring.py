@@ -124,12 +124,16 @@ def episode_metrics(scenario: ScenarioFile, trace: EpisodeTrace) -> dict:
         "acted_too_late": acted_too_late,
         "reexposed": reexposed,
         "first_shot_correct":
-            t0.get("timing", {}).get("action") == scenario.gold.decision_at_t0,
+            t0.get("timing_effective", t0.get("timing", {}).get("action"))
+            == scenario.gold.decision_at_t0,
         "recovered_from_rejection": recovered,
         "spares_remaining": trace.spares_remaining,
         "lever_mix": dict(Counter(a.lever for a in trace.actions)),
         "terminal_status": trace.terminal_status,
         "iterations": sum(len(h.get("iterations", [])) for h in trace.hours),
+        "inert_commits": sum(1 for h in trace.hours
+                             for s in h.get("iterations", [])
+                             if s.get("inert")),
         "tool_calls": trace.tool_calls,
         "wall_clock_s": trace.wall_clock_s,
         "cites_flip_variable": cites_flip_variable(trace, scenario.flip_variable),

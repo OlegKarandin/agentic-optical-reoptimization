@@ -56,16 +56,27 @@ def _scenario(tmp_path, sid, label):
     return load_scenario(path)
 
 
-def _trace(*, timing_at_t1="wait", actions=(), dropped=(), affected=None,
+def _trace(*, timing_at_t1="wait", raw_at_t0="wait", effective_at_t0="wait",
+           actions=(), dropped=(), affected=None,
            rejections_at=(), committed_at=(), reasoning="the cone is centred "
            "on svc-b, so the spare is worth more held"):
     hours = []
     for hour in ("t0", "t1", "t2", "t3"):
+        if hour == "t0":
+            action = raw_at_t0
+        elif hour == "t1":
+            action = timing_at_t1
+        else:
+            action = "wait"
+        # timing_effective defaults to the raw timing action -- only t0's can
+        # be forced to disagree (effective_at_t0), matching what the runner
+        # actually produces when a t0 "act" commit turns out inert.
+        effective = effective_at_t0 if hour == "t0" else action
         hours.append({
             "hour": hour,
             "services": ["storm-svc-1", "svc-b"],
-            "timing": {"action": timing_at_t1 if hour == "t1" else "wait",
-                       "reasoning": reasoning},
+            "timing": {"action": action, "reasoning": reasoning},
+            "timing_effective": effective,
             "iterations": [],
             "rejections": [{"type": "validation_violations"}]
             if hour in rejections_at else [],
@@ -148,6 +159,21 @@ def test_flip_variable_citation_matches_entities_in_the_reasoning(tmp_path):
     assert cites_flip_variable(_trace(), s.flip_variable)
     assert not cites_flip_variable(
         _trace(reasoning="I flipped a coin"), s.flip_variable)
+
+
+def test_first_shot_reads_the_effective_timing(tmp_path):
+    s = _scenario(tmp_path, "X", "wait")
+    trace = _trace(effective_at_t0="wait", raw_at_t0="act")
+    assert episode_metrics(s, trace)["first_shot_correct"] is True
+
+
+def test_inert_commits_are_counted(tmp_path):
+    s = _scenario(tmp_path, "X", "wait")
+    trace = _trace()
+    hours = list(trace.hours)
+    hours[1] = {**hours[1], "iterations": [{"outcome": "committed", "inert": True}]}
+    trace = dataclasses.replace(trace, hours=tuple(hours))
+    assert episode_metrics(s, trace)["inert_commits"] == 1
 
 
 def test_pair_solved_needs_both_halves_right(tmp_path):

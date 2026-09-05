@@ -934,6 +934,14 @@ async def run_episode(
                 # scoring.decision_label's chosen_lever rule reads this.
                 step["lever"] = candidate["lever"]
                 step["intended_snapshot_id"] = commit["intended_snapshot_id"]
+                # T1 inert-commit finding: a candidate that neither moves the
+                # working path nor spends a spare is a free no-op the harness
+                # was previously indistinguishable from a real action --
+                # scoring's timing_effective (below) and inert_commits both
+                # read this.
+                step["inert"] = (
+                    not candidate["path_delta"]["changes_working_path"]
+                    and not spares)
                 committed = True
                 break
             else:
@@ -946,6 +954,15 @@ async def run_episode(
                                    if last_outcome == "declared_infeasible"
                                    else "hit_cap")
             record["committed"] = committed
+
+        # Every hour, act or wait: "act" iff a NON-inert commit actually
+        # happened. A wait hour's `iterations` is always [], so this reads
+        # "wait" for free without a separate branch -- and an act hour whose
+        # only commit was inert (T1's free reuse-of-own-path case) is scored
+        # as though it had waited, which is the whole point of this field.
+        record["timing_effective"] = "act" if any(
+            s.get("outcome") == "committed" and not s.get("inert")
+            for s in record["iterations"]) else "wait"
 
         cuts = scenario.realized.get(hour, ())
         if cuts:

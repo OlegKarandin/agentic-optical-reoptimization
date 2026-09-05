@@ -603,6 +603,26 @@ def test_a_baseline_rollout_completes_and_records_every_hour(
     assert all("timing" in h for h in trace.hours)
 
 
+def test_committed_steps_and_hours_carry_inert_and_timing_effective(
+    tmp_path, loaded_state_path, local_server_command, local_server_env,
+):
+    # Task 6: the harness could not previously tell a real commit (one that
+    # moves the working path or spends a spare) from a hollow one (a
+    # candidate validated and committed that changes neither) -- a free
+    # inert reroute must never count as "the agent acted". Every committed
+    # step now carries `inert`, and every hour (act or wait) carries
+    # `timing_effective` derived from whether any NON-inert commit landed.
+    trace = asyncio.run(_run(
+        _scenario(tmp_path), _WidensOnDisjointnessRejection(),
+        loaded_state_path, local_server_command, local_server_env))
+    assert trace.hours, "nothing to check the new fields against"
+    for hour_record in trace.hours:
+        assert hour_record["timing_effective"] in {"act", "wait"}
+        for step in hour_record.get("iterations", []):
+            if step.get("outcome") == "committed":
+                assert "inert" in step
+
+
 def test_the_next_hour_is_told_what_was_committed_in_the_previous_one(
     tmp_path, loaded_state_path, local_server_command, local_server_env,
 ):
