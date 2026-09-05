@@ -169,10 +169,19 @@ async def restore_after_cuts(
             records.append(_empty_record(hour, service, "unaffordable"))
             continue
 
+        # `split_transient_outage=True` is what makes this replay able to
+        # restore anything at all against the real server: every service
+        # reaching this line is ALREADY DOWN, and a two-op restoration plan
+        # for a down service is refused wholesale for the outage it is
+        # repairing. See `runner.try_commit`'s docstring for the full
+        # mechanism and the live evidence. The hourly decision loop keeps
+        # the default (False): a decider acting PRE-EMPTIVELY is not
+        # repairing an outage, so a transient drop there would be damage
+        # its own plan introduced.
         commit, rejection = await try_commit(
             counting, index, candidate, service,
             prefix=f"restore-{hour}-{service}", basis="physical",
-            level="link")
+            level="link", split_transient_outage=True)
         if rejection is not None:
             records.append({**_empty_record(hour, service, "rejected"),
                             "lever": candidate["lever"],

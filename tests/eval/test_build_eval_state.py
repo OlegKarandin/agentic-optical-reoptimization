@@ -34,6 +34,51 @@ def test_loaded_state_has_the_service_under_test_and_a_real_background_load(
     assert 0.4 <= doc["meta"]["achieved_mean_util"] <= 0.8
 
 
+def test_loaded_state_carries_the_t1_pins(loaded_state_path):
+    """Task 15 (T1 spend-or-hold redesign): the redesigned T1 pair's own SUT
+    and claimant corridor are stage-2 pins in `build_eval_state.T1_PINS`, so
+    the shipped `eval/states/loaded-s17.json` must actually carry all three.
+    Named here rather than read back from T1_PINS on purpose -- this is the
+    check that a rebuild really placed them, not a restatement of the
+    constant."""
+    doc = json.loads(loaded_state_path.read_text(encoding="utf-8"))
+    service_ids = {s["id"] for s in doc["services"]}
+    assert {"t1-svc-jalgaon-indore",
+            "t1-claimant-jalgaon-dhulia-fwd",
+            "t1-claimant-jalgaon-dhulia-rev"} <= service_ids
+    # The old SUT and the old (satna-homed) claimant family stay: D1/T2/T3
+    # are still authored against them.
+    assert {"storm-svc-1", "claimant-satna-jabalpur-fwd",
+            "claimant-satna-jabalpur-rev"} <= service_ids
+
+
+def test_jalgaon_hosts_the_t1_pair_without_a_mount_type_change():
+    """The T1 site's own precondition, asserted rather than assumed (Task 15;
+    same discipline as `test_satna_has_three_independent_aerial_directions`
+    above).
+
+    `jalgaon` was chosen because it needs NO topology edit: it already has
+    four aerial neighbours and two buried ones, so the SUT's two legs
+    (`khandwa` working, `buldhana` protection), the claimant corridor
+    (`dhulia`) and the buried escape (`surat`/`aurangabad`) are four
+    independent directions out of one site. `dhulia` in particular is the
+    claimant far end because its OTHER link is BURIED (`dhulia <-> nasik`) --
+    a storm filter never admits it, so the harness's post-cut restoration
+    replay always has a route home. The first candidate tried, `khandwa`, has
+    only aerial links (`dhar <-> khandwa`), the storm avoid disconnected it,
+    and both gold rollouts tied at identical loss."""
+    edges = load_edges(TOY_INDIA_TOPOLOGY_PATH)
+    by_site = {}
+    for edge in edges:
+        for near, far in ((edge.src, edge.dst), (edge.dst, edge.src)):
+            by_site.setdefault(near, {}).setdefault(edge.mount_type, set()).add(far)
+    jalgaon = by_site["jalgaon"]
+    assert jalgaon["aerial"] == {"akola", "buldhana", "dhulia", "khandwa"}
+    assert jalgaon["buried"] == {"aurangabad", "surat"}
+    assert by_site["dhulia"]["buried"] == {"nasik"}
+    assert by_site["khandwa"].get("buried", set()) == set()
+
+
 def test_build_is_reproducible_at_the_same_seed(
     tmp_path, loaded_state_path, local_server_command, local_server_env,
 ):

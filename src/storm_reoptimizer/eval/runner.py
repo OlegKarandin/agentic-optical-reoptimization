@@ -720,28 +720,94 @@ async def _define_horizon_risk_groups(
     return rg_ids
 
 
+def _only_transient_findings_about(violations, service_id: str) -> bool:
+    """Every reported violation is `transient` AND names `service_id` itself.
+
+    `transient` is the server's own word for "present in an INTERMEDIATE
+    state of the plan and gone by its final state" (multilayer_optical_
+    network's `validate.Violation.transient`). A violation of that shape,
+    about the very service being restored, is not damage the plan causes: it
+    is the outage the plan is repairing, still visible in the window between
+    the plan's `provision_lightpath` op and its closing `reroute_service`
+    op."""
+    return bool(violations) and all(
+        v.get("transient") and v.get("asset_id") == service_id
+        for v in violations)
+
+
 async def try_commit(counting, index, candidate: dict, service_id: str, *,
-                     prefix: str, basis: str, level: str
+                     prefix: str, basis: str, level: str,
+                     split_transient_outage: bool = False,
                      ) -> tuple[dict | None, dict | None]:
     """validate_plan + commit_plan for one candidate under baseline="standing".
     Returns (commit_result, None) on success or (None, rejection) -- the same
-    rejection dicts run_episode has always recorded."""
+    rejection dicts run_episode has always recorded.
+
+    `split_transient_outage` (default False -- the hourly decision loop's
+    behaviour is unchanged) commits the plan as TWO plans, provisioning
+    first and the closing `reroute_service` second, when and only when the
+    single combined plan is refused solely for `_only_transient_findings_
+    about(…, service_id)`.
+
+    **Why this exists** (found live, 2026-09-05, Task 15). `baseline=
+    "standing"` moves a violation the standing state already carries into
+    `pre_existing` -- but only a NON-transient one (`validate.py`: `if not
+    v.transient and (v.type, v.asset_id) in standing_keys`). A plan that
+    restores an ALREADY-DROPPED service is always at least two ops
+    (`plans.plan_from_candidate`: one or more `provision_lightpath`, then
+    `reroute_service`), so the outage is still present after op 0 and gone
+    at the final state -- i.e. tagged transient, kept out of `pre_existing`,
+    and `ValidationReport.ok` is `not self.violations`, so the plan is
+    refused. `commit_plan` re-validates and refuses for the same reason, so
+    there is no "commit anyway". The consequence is structural, not
+    scenario-specific: WITHOUT this split, `replay.restore_after_cuts` can
+    never restore anything, in any episode -- confirmed against the real
+    server, where the T1 pair's two gold rollouts came back at a byte-equal
+    7800.0 Gbps-h and the enumerator could not separate spend from hold at
+    all. Splitting the same ops into two commits validates and commits
+    cleanly (also confirmed live): part 1 leaves the outage present at its
+    own final state, so it IS non-transient there and IS `pre_existing`;
+    part 2 is a single op after which the service is up, so it reports
+    nothing.
+
+    The split is not free of risk and is deliberately opt-in: if part 1
+    commits and part 2 is then refused, the network keeps a provisioned but
+    unused lightpath (spectrum consumed) and the caller sees a rejection
+    with no ledger debit. That is reported as an ordinary rejection."""
     try:
         plan = plan_from_candidate(index, candidate, service_id, prefix=prefix)
     except PlanTranslationError as exc:
         return None, {"type": "plan_translation_failed", "message": str(exc)}
-    report = await counting.call("validate_plan", {
-        "plan": plan, "basis": basis, "level": level, "baseline": "standing"})
-    if not report["ok"]:
-        return None, {"type": "validation_violations",
-                      "violations": report["violations"]}
-    commit = await counting.call("commit_plan", {
-        "plan": plan, "dry_run": False, "confirm": True,
-        "basis": basis, "level": level, "baseline": "standing"})
-    if commit["status"] != "committed":
-        return None, {"type": "commit_" + commit["status"],
-                      "validation": commit.get("validation")}
-    return commit, None
+
+    async def _validate_and_commit(one_plan: dict) -> tuple[dict | None, dict | None]:
+        report = await counting.call("validate_plan", {
+            "plan": one_plan, "basis": basis, "level": level,
+            "baseline": "standing"})
+        if not report["ok"]:
+            return None, {"type": "validation_violations",
+                          "violations": report["violations"]}
+        commit = await counting.call("commit_plan", {
+            "plan": one_plan, "dry_run": False, "confirm": True,
+            "basis": basis, "level": level, "baseline": "standing"})
+        if commit["status"] != "committed":
+            return None, {"type": "commit_" + commit["status"],
+                          "validation": commit.get("validation")}
+        return commit, None
+
+    commit, rejection = await _validate_and_commit(plan)
+    if rejection is None:
+        return commit, None
+    if not (split_transient_outage
+            and rejection["type"] == "validation_violations"
+            and len(plan["ops"]) > 1
+            and _only_transient_findings_about(rejection["violations"],
+                                               service_id)):
+        return None, rejection
+
+    _head, head_rejection = await _validate_and_commit({"ops": plan["ops"][:-1]})
+    if head_rejection is not None:
+        return None, head_rejection
+    return await _validate_and_commit({"ops": plan["ops"][-1:]})
 
 
 async def run_episode(

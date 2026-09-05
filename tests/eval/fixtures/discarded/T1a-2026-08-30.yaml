@@ -1,0 +1,207 @@
+id: T1a
+pair: T1
+seed: 17
+state_file: eval/states/loaded-s17.json
+service_under_test: storm-svc-1
+track: hudhud
+hours: [t0, t1, t2, t3]
+decision_hour: t1
+lead_time_hours: 1
+spares_on_hand: 1            # transponder PAIRS: one new lightpath each
+depot_site: satna            # the site whose depot is scarce in this episode
+# Spare transponders held PER SITE. Only depot_site binds; every other site is
+# stocked well enough that a candidate is never limited by it, which
+# assert_depot_is_the_binding_site checks. Lighting a new lightpath consumes
+# one transponder at EACH of its two endpoint sites.
+spare_inventory: {satna: 1}
+damage_radius_km: 74
+reference_avoid: {}          # neutral third value: current exposure only
+# GEOMETRY FROZEN 2026-08-30 (Task 14, exposure-and-depot plan), against the
+# REAL satna-homed claimant `claimant-satna-jabalpur-fwd`/`-rev`
+# (satna<->jabalpur, 100 Gbps each direction, co-terminating onto one new
+# lightpath). The OLD placeholder claimants (d0029/d0348, allahabad<->kanpur)
+# had `cuttable_spans == ()` -- provably unexposable by ANY storm -- so the
+# pre-2026-08-30 flip never existed; this rebuild replaces it with the real
+# corridor's own exposure. Derived and triple-verified by
+# `tools/derive_episodes.py` against a live server
+# (docs/superpowers/plans/notes/2026-08-30-joint-tuning.md is the full
+# record -- re-run the tool to reproduce every number below digit for digit).
+#
+# THE CONSTRUCTION, so it can be RE-DERIVED rather than trusted. Both halves'
+# t+3 centres are placed by the closed form `lat = origin.lat +
+# degrees(d*cos(b)/R)`, `lon = origin.lon + degrees(d*sin(b)/(R*cos(radians(
+# lat))))`, `R = events.geo.EARTH_RADIUS_KM = 6371.0`, from storm-svc-1's own
+# averaged working-path point `(24.855553333333333, 81.32777666666667)`:
+#   * T1a (this file): bearing 195.0 deg (toward the real claimant corridor),
+#     radius 150.000000 km -- CHOSEN first.
+#   * T1b: bearing 40.0 deg (away from the corridor), radius 77.522705 km --
+#     SOLVED (not chosen), by `derive_episodes.solve_radius_for_target_pcut`
+#     (grid-then-bisect on the REAL, server-derived `p_cut_region` against
+#     storm-svc-1's own span), so storm-svc-1's own p_cut at T1b's cone
+#     matches T1a's to below 1e-9. NOT hardcoded as a literal in
+#     derive_episodes.py -- it is a function of T1a's own bearing/radius, so
+#     re-run the tool (or call `build_t1b_spec`) if either ever changes.
+#   * "Same radius, either bearing" (T2/T3's own trick, see those files) does
+#     NOT transfer here: at a FIXED radius from storm-svc-1's own averaged
+#     point, `nearest_span_offset_km` against its REAL span
+#     (satna<->rewa, ~47 km) varies by up to ~90 km across bearing alone,
+#     because the averaged point folds in allahabad (on the buried leg),
+#     which sits well off the real aerial span's own line. Equal RADIUS is
+#     NOT equal EXPOSURE for T1 the way it is for T2/T3's near horizon, which
+#     is why T1b's radius had to be SOLVED against the real span instead of
+#     merely mirrored.
+#
+# Confirmed live: storm-svc-1's own p_cut at t+3 is 0.09692530708781567 --
+# the SAME FLOAT in T1a and T1b (`assertions._derived_mismatches`,
+# DERIVED_TOLERANCE=1e-6) -- even though the two halves' OFFSETS from the
+# real span differ (112.500 km here vs 108.789 km in T1b): `p_cut_region`
+# integrates a 2-D Gaussian over the storm-svc-1's real span geometry (a
+# line, not a point), so two different offset PROFILES along that line can
+# still integrate to the identical probability. SUT ecar (300G demand):
+# 0.09692530708781567 * 300 = 29.078 G, equal in both halves.
+#
+# The claimant corridor's own exposure is where the two halves genuinely
+# differ: at t+3, `claimant-satna-jabalpur-fwd`/`-rev` each read p_cut
+# 0.5910429541466392 here (0.017425803006027314 in T1b) -> group ecar
+# (2 * p_cut * 100 G, the co-terminating fwd+rev pair restored by ONE
+# lightpath) = 118.20859082932785 G here (3.485160601205463 G in T1b).
+forecast:
+  t0:                        # UNCHANGED from the shipped file -- t0 was never
+                              # part of this retune, only the t1 issuance's
+                              # own t+3 revision moved.
+    t3: {cone: {type: Polygon, coordinates: [[[81.32778, 25.8475], [81.44377, 25.83371], [81.55186, 25.79328], [81.64467, 25.72896], [81.71589, 25.64515], [81.76067, 25.54754], [81.77594, 25.4428], [81.76067, 25.33806], [81.71589, 25.24045], [81.64467, 25.15664], [81.55186, 25.09232], [81.44377, 25.0519], [81.32778, 25.03811], [81.21178, 25.0519], [81.1037, 25.09232], [81.01088, 25.15664], [80.93966, 25.24045], [80.89489, 25.33806], [80.87962, 25.4428], [80.89489, 25.54754], [80.93966, 25.64515], [81.01088, 25.72896], [81.1037, 25.79328], [81.21178, 25.83371], [81.32778, 25.8475]]]},
+         width_km: 90, center: {lat: 25.442800716819043, lon: 81.32777666666667}}
+  t1:                        # the revision -- FROZEN t+3 cone (bearing
+                              # 195.0 deg, radius 150.000000 km, width 90;
+                              # see the header comment for the full
+                              # derivation and the real numbers).
+    t3: {cone: {type: Polygon, coordinates: [[[80.94691, 23.95723], [81.06117, 23.94344], [81.16764, 23.90301], [81.25907, 23.8387], [81.32923, 23.75488], [81.37333, 23.65728], [81.38838, 23.55254], [81.37333, 23.44779], [81.32923, 23.35019], [81.25907, 23.26637], [81.16764, 23.20206], [81.06117, 23.16163], [80.94691, 23.14784], [80.83264, 23.16163], [80.72617, 23.20206], [80.63474, 23.26637], [80.56458, 23.35019], [80.52048, 23.44779], [80.50543, 23.55254], [80.52048, 23.65728], [80.56458, 23.75488], [80.63474, 23.8387], [80.72617, 23.90301], [80.83264, 23.94344], [80.94691, 23.95723]]]},
+         width_km: 90, center: {lat: 23.55253638538834, lon: 80.94690549808125}}
+realized:
+  # Both real claimant directions go down at t3: fiber_satna_jabalpur_0/_1
+  # carries claimant-satna-jabalpur-fwd's working path and
+  # fiber_jabalpur_satna_0/_1 carries claimant-satna-jabalpur-rev's (the SAME
+  # physical corridor, opposite-direction OMS elements) -- confirmed live
+  # against the real server (get_affected_services on each of the four
+  # fiber ids names exactly that claimant, alongside incidental background
+  # traffic riding the same span). This span is AERIAL (Task 5's
+  # satna<->jabalpur mount-type change; confirmed against
+  # geo_mapper.load_edges), so the storm's own filter genuinely admits this
+  # cut (assert_realized_cuts_pass_the_event_filter). storm-svc-1 is NOT cut
+  # in this half (its own working span, fiber_satna_rewa_0, is untouched),
+  # which is what makes "wait" cost nothing here -- the higher-probability
+  # outcome (p_cut_claim=0.591 vs p_cut_sut=0.097) is exactly what is
+  # scripted as realized.
+  t3: [fiber_satna_jabalpur_0, fiber_satna_jabalpur_1,
+       fiber_jabalpur_satna_0, fiber_jabalpur_satna_1]
+gold:
+  # NOT [storm-svc-1, claimant-satna-jabalpur-fwd, claimant-satna-jabalpur-rev]:
+  # the claimants are never service_under_test in this pair, and run_episode
+  # only ever acts on service_under_test (runner.py's route_service/
+  # validate_plan/commit_plan calls are all scoped to
+  # scenario.service_under_test) -- there is no mechanism anywhere in this
+  # harness that reroutes or restores a service other than the SUT. The
+  # claimants ARE realized-cut at t3 above and stay down regardless of what
+  # storm-svc-1's decider does. "Hold the spare for them" is the
+  # expected-value reasoning that makes waiting the correct call for
+  # storm-svc-1's OWN decision, not a claim that the harness actually
+  # restores them -- it doesn't, and can't.
+  survived: [storm-svc-1]
+  max_spares_wasted: 0
+  decision_at_t0: wait
+  label: wait
+  rationale: |
+    storm-svc-1's OWN exposure at the t+3 horizon is IDENTICAL in both halves
+    of this pair, by construction: p_cut = 0.09692530708781567, the SAME
+    float in T1a and T1b (offsets differ -- 112.500 km here, 108.789 km in
+    T1b -- because p_cut_region integrates the real span's whole geometry,
+    not the scalar offset alone; see the header comment). Nothing about
+    storm-svc-1 separates the halves; only what ELSE the storm is about to
+    hit does.
+      storm-svc-1 (300G)                       p_cut 0.0969 -> 29.078 G expected loss
+      claimant-satna-jabalpur-fwd (100G)       p_cut 0.5910 -> 59.104 G
+      claimant-satna-jabalpur-rev (100G)       p_cut 0.5910 -> 59.104 G
+      the two claimants together (one lightpath restores both) -> 118.2 G
+    One spare pair between them. storm-svc-1 is the only service this
+    episode's decider can act on, so the real question is whether committing
+    the spare to storm-svc-1 now is worth it. The comparison is 29.078 G
+    (storm-svc-1's own expected loss) against 118.2 G (the claimant
+    corridor's own, honest, one-lightpath expected loss -- the LARGEST
+    restorable group at this horizon, not a network-wide sum): the claim
+    wins by 89.131 G (306.5% of storm-svc-1's own ecar, 75.4% of the claim's
+    own ecar), so committing storm-svc-1's own spare to a 9.7%-odds threat
+    would be spending scarce capacity where it is least needed.
+    Correct: wait on storm-svc-1, hold the spare.
+    At t0 nothing yet distinguishes them -- storm-svc-1 and both claimants
+    sit at the same offset (65.299 km) and the same p_cut (0.5716) of the
+    shared t0 cone -- and the t+3 exposure is 3 hours out against a 1 h lead
+    time, so waiting into t1 is free and buys the revision:
+    gold.decision_at_t0 = wait.
+    Realized: storm-svc-1 is never cut in this half (only the two claimants
+    are, at t3 via fiber_satna_jabalpur_0/_1 and fiber_jabalpur_satna_0/_1)
+    -- confirming "wait" cost nothing. Neither claimant is restored by
+    anything in this harness (no cross-service restoration exists); the
+    episode is scored only on storm-svc-1's survival and on storm-svc-1's
+    own spare not being wasted.
+    The t1 issuance publishes a single horizon (t+3) in both halves -- no
+    nearer nowcast exists to read a raw containment flag off, so the only
+    signal available at t1 is this expected-value comparison.
+    (The tightest margin in the WHOLE joint construction across all three
+    pairs is 31.798 G, T2a's `claimant_ecar_peak_over_horizons`/
+    `claimant_ecar_at_earliest_horizon` against THIS half's own 655.4772 G
+    network-wide sum at t3 -- T1a is the binder that keeps the whole-suite
+    anti-threshold check genuinely blocked; see the joint-tuning notes.)
+flip_variable: [svc-b, cone, centre, spare]
+metadata:
+  # The two REAL named claimants (Task 14, exposure-and-depot plan) --
+  # gold.rationale's arithmetic actually weighs these two, restored jointly
+  # by one lightpath.
+  claimant_services: [claimant-satna-jabalpur-fwd, claimant-satna-jabalpur-rev]
+  # "the two claimants together (one lightpath restores both) -> 118.2 G"
+  # (gold.rationale, verbatim) -- the honest LARGEST RESTORABLE GROUP figure
+  # at this half's only horizon (t3), not a network-wide sum. 118.2, not the
+  # header comment's more precise 118.20859082932785: invariant 4
+  # (assert_claim_is_one_lightpath) checks this against the AGENT-FACING
+  # `observation._restorable_groups` figure, which rounds each service's own
+  # p_cut before summing (derived.py's own module docstring: "two readers,
+  # two roundings, one quantity") -- confirmed live, 118.2 is what that path
+  # actually returns. Task 14, 2026-08-30.
+  claimed_competing_ecar_gbps: 118.2
+  claimed_competing_ecar_at: t3
+  # For the record (Task 14): FlipScalars.largest_restorable_group_ecar_gbps
+  # at THIS half's own exposure horizon (t3, the only horizon this pair
+  # publishes) -- the UNROUNDED derived.py figure (see the header comment),
+  # not the observation-rounded one claimed_competing_ecar_gbps is checked
+  # against above. Equal in spirit to claimed_competing_ecar_gbps because
+  # T1's claim horizon and exposure horizon coincide (unlike T2/T3, which
+  # bill their claim at the NEAR horizon while the SUT's own exposure is
+  # graded at the FAR one) -- only the rounding differs.
+  largest_restorable_group_ecar_gbps: 118.209
+  label_rule: timing_at_decision_hour
+  cone_width_km: 90          # EQUAL in T1b -- and EVERY horizon of the
+                              # decision-hour issuance is 90 in both halves,
+                              # which derived.horizon_widths_km now checks
+  cone_motion_kmh: 95.0      # EQUAL in T1b -- offset(t0 centre, t1's t+3
+                              # centre) / 1h. Recorded here as the pre-Task-14
+                              # declared value; NOT re-derived by this task
+                              # (t0 is unchanged, and this is the t0->d
+                              # REVISION distance, a different quantity from
+                              # derived.within_issuance_cone_motion_kmh, which
+                              # is checked live and is 0.0 in both halves
+                              # since the t1 issuance publishes a single
+                              # horizon).
+  n_future_claimants: 2      # EQUAL in T1b -- claimant-satna-jabalpur-fwd and
+                              # -rev: the same two services in both halves,
+                              # and the only two non-SUT services materially
+                              # exposed at t+3 in either half. Only their
+                              # exposure differs (0.5910 in T1a, 0.0174 in
+                              # T1b).
+  exposure_horizon_hours: 2  # EQUAL in T1b
+  spares_on_hand: 1          # EQUAL in T1b
+  widest_avoid_feasible: true
+  # W1.2's whole-suite check needs ONE global orientation, but the three pairs
+  # draw gold labels from three vocabularies (act/wait, wide/narrow, A/B).
+  # This is the common axis. Deliberately NOT in rules.OBSERVABLE_VARS or
+  # assertions.SHARED_SCALARS: it is categorical and it IS the label, so
+  # enumerating it would trivially solve every pair.
+  gold_spare_action: conserve   # gold label "wait": hold the pair for the claimants

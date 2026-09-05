@@ -87,13 +87,50 @@ CLAIMANT_SERVICES = [
 # eval is the HARNESS ledger's concern (eval design spec, "spare_inventory is
 # not in the model"), not the builder's. A build that failed to place a
 # stage-2 pin for want of inventory would be a setup artifact. Widened to
-# cover jabalpur alongside satna/allahabad for the claimant pair above.
-PIN_SPARE_INVENTORY = {"satna": 4, "allahabad": 4, "jabalpur": 4}
-# Task 15 fills this in: a later T1 SUT/pair pinned via --base-state onto the
-# existing loaded-s17.json instead of a full rebuild. Empty for now so the
-# no-argument default (SERVICE_UNDER_TEST + CLAIMANT_SERVICES + T1_PINS)
-# reproduces today's build exactly.
-T1_PINS: list[dict] = []
+# cover jabalpur alongside satna/allahabad for the claimant pair above, and
+# (2026-09-05, Task 15) jalgaon/indore/dhulia for the T1 pins below.
+PIN_SPARE_INVENTORY = {"satna": 4, "allahabad": 4, "jabalpur": 4,
+                       "jalgaon": 4, "indore": 4, "dhulia": 4}
+# The REDESIGNED T1 pair's own service under test and claimant corridor
+# (T1 spend-or-hold redesign spec 2026-09-05 §4.1-4.2; plan Task 15). The old
+# T1 graded storm-svc-1, whose protection leg (satna<->jhansi) sat outside
+# every T1 cone -- so "the storm threatens this service" was true only on a
+# technicality and the spend/hold comparison tested nothing. This SUT is
+# CLAUDE.md's canonical case for real: both legs leave jalgaon on AERIAL
+# spans (working via khandwa, protection via buldhana -- confirmed live), so
+# 1:1 switchover does not save it, and its only way out is a new lightpath
+# over one of jalgaon's BURIED spurs (aurangabad/surat).
+#
+# Chosen by tools/find_sut.py (--prefilter shortlist, then live --evaluate
+# runs against this very state); every acceptance number is recorded in
+# docs/superpowers/plans/notes/2026-09-05-t1-authoring.md. NO mount-type
+# change was needed: jalgaon already has four aerial neighbours (akola,
+# buldhana, dhulia, khandwa) plus two buried ones (aurangabad, surat), so the
+# claimant corridor below shares no aerial span with either SUT leg.
+#
+# `dhulia` is the claimant's far end for a reason the first candidate
+# (jalgaon<->khandwa) failed on: the harness's post-cut restoration replay
+# (replay.py) has to be able to REACH the far end after the corridor is cut
+# AND the whole storm risk group is avoided, or "hold the spare for the
+# claimant" buys nothing and the two halves tie at identical loss (measured:
+# both rollouts 20100.0 Gbps-h, margin 0.000). khandwa's only other link is
+# aerial (dhar<->khandwa) and sits inside the same cone, so the avoid set
+# disconnects it; dhulia's is BURIED (dhulia<->nasik), which a storm filter
+# can never admit, so the replay always has a route home.
+#
+# D1/T2/T3 still name storm-svc-1 and are untouched by these three extra
+# stage-2 pins: stage 1 (the gravity load) runs before any pin and is not
+# re-routed by them, and the pin list is solved in order, so storm-svc-1 and
+# the satna claimants are placed exactly as before (asserted by
+# test_the_rebuild_preserves_every_background_service_geometry).
+T1_PINS: list[dict] = [
+    {"id": "t1-svc-jalgaon-indore", "src": "jalgaon", "dst": "indore",
+     "demand_gbps": 300.0, "protected": True},
+    {"id": "t1-claimant-jalgaon-dhulia-fwd", "src": "jalgaon",
+     "dst": "dhulia", "demand_gbps": 100.0, "protected": False},
+    {"id": "t1-claimant-jalgaon-dhulia-rev", "src": "dhulia",
+     "dst": "jalgaon", "demand_gbps": 100.0, "protected": False},
+]
 # NOT "srlg": the toy topology has zero static SRLGs (confirmed:
 # toy_india_topology.json's "srlgs" is 0), and generate_demands'/
 # solve_allocation_model's own docs say srlg-basis disjointness is a NO-OP

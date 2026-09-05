@@ -2,128 +2,186 @@ id: T1b
 pair: T1
 seed: 17
 state_file: eval/states/loaded-s17.json
-service_under_test: storm-svc-1
+service_under_test: t1-svc-jalgaon-indore
 track: hudhud
-hours: [t0, t1, t2, t3]
+hours:
+- t0
+- t1
+- t2
+- t3
+- t4
+- t5
+- t6
+- t7
 decision_hour: t1
-lead_time_hours: 1
-spares_on_hand: 1            # transponder PAIRS: one new lightpath each
-depot_site: satna            # the site whose depot is scarce in this episode
-# Spare transponders held PER SITE. Only depot_site binds; every other site is
-# stocked well enough that a candidate is never limited by it, which
-# assert_depot_is_the_binding_site checks. Lighting a new lightpath consumes
-# one transponder at EACH of its two endpoint sites.
-spare_inventory: {satna: 1}
-damage_radius_km: 74
-reference_avoid: {}          # neutral third value: current exposure only
-# GEOMETRY FROZEN 2026-08-30 (Task 14, exposure-and-depot plan) -- see
-# T1a.yaml's header comment for the full statement of the construction (the
-# real satna-homed claimant identity, the closed-form placement, and why T1
-# needed a SOLVED radius rather than T2/T3's "same radius, either bearing"
-# trick). The one-line version: this half's t+3 cone sits at bearing 40.0
-# deg (roughly opposite the real claimant corridor's own bearing), radius
-# 77.522705 km -- SOLVED by `derive_episodes.solve_radius_for_target_pcut`
-# so storm-svc-1's own p_cut here matches T1a's to below 1e-9, NOT a
-# hardcoded literal (it is a function of T1a's own bearing/radius; re-run
-# `tools/derive_episodes.py` if either ever changes). Confirmed live:
-# storm-svc-1's own p_cut at t+3 is 0.09692530708781567 -- the SAME FLOAT
-# T1a's cone gives it (`assertions._derived_mismatches`,
-# DERIVED_TOLERANCE=1e-6) -- even though this half's own offset (108.789 km)
-# differs from T1a's (112.500 km); see T1a.yaml's comment on why equal p_cut
-# does not require equal offset here. SUT ecar (300G demand): 29.078 G,
-# equal to T1a.
-#
-# The claimant corridor's own exposure is where the two halves genuinely
-# differ: at t+3, `claimant-satna-jabalpur-fwd`/`-rev` each read p_cut
-# 0.017425803006027314 here (0.5910429541466392 in T1a) -> group ecar
-# (2 * p_cut * 100 G, the co-terminating fwd+rev pair restored by ONE
-# lightpath) = 3.485160601205463 G here (118.20859082932785 G in T1a).
+lead_time_hours: 2
+spares_on_hand: 1
+depot_site: jalgaon
+spare_inventory:
+  jalgaon: 1
+damage_radius_km: 74.0
+reference_avoid: {}
 forecast:
-  t0:                        # BYTE-IDENTICAL to T1a -- both services ambiguous,
-                              # UNCHANGED from the shipped file (t0 was never
-                              # part of this retune).
-    t3: {cone: {type: Polygon, coordinates: [[[81.32778, 25.8475], [81.44377, 25.83371], [81.55186, 25.79328], [81.64467, 25.72896], [81.71589, 25.64515], [81.76067, 25.54754], [81.77594, 25.4428], [81.76067, 25.33806], [81.71589, 25.24045], [81.64467, 25.15664], [81.55186, 25.09232], [81.44377, 25.0519], [81.32778, 25.03811], [81.21178, 25.0519], [81.1037, 25.09232], [81.01088, 25.15664], [80.93966, 25.24045], [80.89489, 25.33806], [80.87962, 25.4428], [80.89489, 25.54754], [80.93966, 25.64515], [81.01088, 25.72896], [81.1037, 25.79328], [81.21178, 25.83371], [81.32778, 25.8475]]]},
-         width_km: 90, center: {lat: 25.442800716819043, lon: 81.32777666666667}}
-  t1:                        # the revision -- FROZEN t+3 cone (bearing
-                              # 40.0 deg, radius 77.522705 km SOLVED, width
-                              # 90; see the header comment for the full
-                              # derivation and the real numbers).
-    t3: {cone: {type: Polygon, coordinates: [[[81.82383, 25.79432], [81.93977, 25.78053], [82.04781, 25.7401], [82.14058, 25.67579], [82.21177, 25.59197], [82.25652, 25.49437], [82.27179, 25.38962], [82.25652, 25.28488], [82.21177, 25.18728], [82.14058, 25.10346], [82.04781, 25.03915], [81.93977, 24.99872], [81.82383, 24.98493], [81.70789, 24.99872], [81.59985, 25.03915], [81.50707, 25.10346], [81.43588, 25.18728], [81.39113, 25.28488], [81.37586, 25.38962], [81.39113, 25.49437], [81.43588, 25.59197], [81.50707, 25.67579], [81.59985, 25.7401], [81.70789, 25.78053], [81.82383, 25.79432]]]},
-         width_km: 90, center: {lat: 25.389623000292865, lon: 81.82382629023604}}
+  t0:
+    t3:
+      cone:
+        type: Polygon
+        coordinates:
+        - - - 75.5088
+            - 21.24983
+          - - 75.62087
+            - 21.23604
+          - - 75.72532
+            - 21.19561
+          - - 75.815
+            - 21.13129
+          - - 75.88382
+            - 21.04748
+          - - 75.92708
+            - 20.94987
+          - - 75.94183
+            - 20.84513
+          - - 75.92708
+            - 20.74039
+          - - 75.88382
+            - 20.64278
+          - - 75.815
+            - 20.55897
+          - - 75.72532
+            - 20.49465
+          - - 75.62087
+            - 20.45423
+          - - 75.5088
+            - 20.44044
+          - - 75.39672
+            - 20.45423
+          - - 75.29228
+            - 20.49465
+          - - 75.20259
+            - 20.55897
+          - - 75.13377
+            - 20.64278
+          - - 75.09051
+            - 20.74039
+          - - 75.07576
+            - 20.84513
+          - - 75.09051
+            - 20.94987
+          - - 75.13377
+            - 21.04748
+          - - 75.20259
+            - 21.13129
+          - - 75.29228
+            - 21.19561
+          - - 75.39672
+            - 21.23604
+          - - 75.5088
+            - 21.24983
+      width_km: 90.0
+      center:
+        lat: 20.84513034805224
+        lon: 75.50879562770838
+  t1:
+    t3:
+      cone:
+        type: Polygon
+        coordinates:
+        - - - 75.91118
+            - 20.53264
+          - - 76.02274
+            - 20.51885
+          - - 76.12669
+            - 20.47842
+          - - 76.21596
+            - 20.41411
+          - - 76.28445
+            - 20.33029
+          - - 76.32751
+            - 20.23269
+          - - 76.3422
+            - 20.12794
+          - - 76.32751
+            - 20.0232
+          - - 76.28445
+            - 19.9256
+          - - 76.21596
+            - 19.84178
+          - - 76.12669
+            - 19.77747
+          - - 76.02274
+            - 19.73704
+          - - 75.91118
+            - 19.72325
+          - - 75.79962
+            - 19.73704
+          - - 75.69567
+            - 19.77747
+          - - 75.6064
+            - 19.84178
+          - - 75.53791
+            - 19.9256
+          - - 75.49485
+            - 20.0232
+          - - 75.48016
+            - 20.12794
+          - - 75.49485
+            - 20.23269
+          - - 75.53791
+            - 20.33029
+          - - 75.6064
+            - 20.41411
+          - - 75.69567
+            - 20.47842
+          - - 75.79962
+            - 20.51885
+          - - 75.91118
+            - 20.53264
+      width_km: 90.0
+      center:
+        lat: 20.12794336034846
+        lon: 75.91118049226498
 realized:
-  t3: [fiber_satna_rewa_0]
+  t3:
+  - fiber_jalgaon_buldhana_0
+  - fiber_jalgaon_khandwa_0
+  - fiber_jalgaon_khandwa_1
 gold:
-  # Real service ids, not the narrative alias "svc-b" -- the harness's own
-  # service roster (get_services(), simulate_ip_routing's dropped list) only
-  # ever uses real ids, so a literal "svc-b" here could never be found in
-  # `survived` regardless of outcome. Neither claimant is realized-cut in T1b
-  # (see `realized` above -- only storm-svc-1's own fiber is), so both
-  # trivially survive in every replay; naming them correctly here is
-  # precision, not a load-bearing check.
-  survived: [storm-svc-1, claimant-satna-jabalpur-fwd, claimant-satna-jabalpur-rev]
+  survived:
+  - t1-svc-jalgaon-indore
+  - t1-claimant-jalgaon-dhulia-fwd
+  - t1-claimant-jalgaon-dhulia-rev
   max_spares_wasted: 0
   decision_at_t0: wait
-  label: act
+  label: spend
   rationale: |
-    storm-svc-1's OWN exposure at t+3 is the SAME here as in T1a -- p_cut =
-    0.09692530708781567, bit for bit -- so no threshold on storm-svc-1's own
-    numbers can tell the halves apart. What the revision changes is who ELSE
-    is in the way:
-      storm-svc-1 (300G)                       p_cut 0.0969 -> 29.078 G expected loss
-      claimant-satna-jabalpur-fwd (100G)       p_cut 0.0174 ->  1.743 G
-      claimant-satna-jabalpur-rev (100G)       p_cut 0.0174 ->  1.743 G
-      the two claimants together (one lightpath restores both) -> 3.48 G
-    One spare pair between them. The track resolved away from the
-    satna<->jabalpur corridor, so the claim that dominated in T1a has
-    collapsed from 118.2 G to 3.48 G -- a tiny fraction of storm-svc-1's
-    own 29.078 G. The lead time (1 h) means an optical_reroute committed at
-    t1 is effective at t2, strictly before the t3 cut, and no further
-    issuance arrives (t2 and t3 carry t1's forward), so waiting past t1 buys
-    no information and only erodes the margin. With no better claimant for
-    the spare and storm-svc-1 holding the larger expected loss on the board
-    by 25.592 G (88.0% of storm-svc-1's own ecar, 734.3% of the claim's own
-    ecar), correct: act by t+2 on storm-svc-1.
-    At t0 this half is byte-identical to T1a (storm-svc-1 and both claimants
-    all at offset 65.299 km, p_cut 0.5716) and the t+3 exposure is 3 hours
-    out against a 1 h lead time, so waiting into t1 is free:
-    gold.decision_at_t0 = wait.
-    Realized: storm-svc-1 is cut at t3 (fiber_satna_rewa_0). 0.0969 is a
-    minority outcome, and that is the point -- `realized` is scripted ground
-    truth, not the modal draw, and the label is graded on the DECISION the
-    expected values justify, not on the coin that came up.
-    The t1 issuance publishes a single horizon (t+3) in both halves -- no
-    nearer nowcast exists to read a raw containment flag off, so the only
-    signal available at t1 is this expected-value comparison.
-flip_variable: [svc-b, cone, centre, spare]
+    service                               spend         hold
+    t1-svc-jalgaon-indore                 0.000      600.000
+    t1-claimant-jalgaon-dhulia-fwd        0.000        0.000
+    t1-claimant-jalgaon-dhulia-rev        0.000        0.000
+    TOTAL                             16000.000    16600.000
+    gold: spend (argmin total Gbps-hours lost, margin 600.000 over 'hold')
+  outcome_gbps_h:
+    spend: 16000.0
+    hold: 16600.0
+  min_margin_gbps_h: 160.0
+flip_variable:
+- spend
+- hold
+- claimant
+- escape
 metadata:
-  # The two REAL named claimants (Task 14, exposure-and-depot plan) -- same
-  # two services as T1a; only their exposure differs.
-  claimant_services: [claimant-satna-jabalpur-fwd, claimant-satna-jabalpur-rev]
-  # "the two claimants together (one lightpath restores both) -> 3.48 G"
-  # (gold.rationale, verbatim) -- the honest LARGEST RESTORABLE GROUP figure
-  # at this half's only horizon (t3). 3.48, not the header comment's more
-  # precise 3.485160601205463 -- see T1a.yaml's identical comment on the
-  # observation-rounded vs. derived.py-unrounded distinction invariant 4
-  # checks against. Task 14, 2026-08-30.
-  claimed_competing_ecar_gbps: 3.48
-  claimed_competing_ecar_at: t3
-  # For the record (Task 14): FlipScalars.largest_restorable_group_ecar_gbps
-  # at THIS half's own exposure horizon (t3) -- the UNROUNDED derived.py
-  # figure; see T1a.yaml's identical comment on the two different roundings.
-  largest_restorable_group_ecar_gbps: 3.485
-  label_rule: timing_at_decision_hour
-  cone_width_km: 90          # EQUAL to T1a -- every horizon, both halves
-  cone_motion_kmh: 95.0      # EQUAL to T1a -- see T1a.yaml's comment
-  n_future_claimants: 2      # EQUAL to T1a -- claimant-satna-jabalpur-fwd and
-                              # -rev, the same two services in both halves;
-                              # only their exposure differs (0.0174 here,
-                              # 0.5910 in T1a)
-  exposure_horizon_hours: 2  # EQUAL to T1a
-  spares_on_hand: 1          # EQUAL to T1a
+  label_rule: spare_action_by_deadline
+  exposure_legs: both
+  escape_route_node: surat
+  claimant_services:
+  - t1-claimant-jalgaon-dhulia-fwd
+  - t1-claimant-jalgaon-dhulia-rev
+  cone_width_km: 90.0
+  cone_motion_kmh: 89.774629
+  n_future_claimants: 2
+  exposure_horizon_hours: 2
+  spares_on_hand: 1
+  gold_spare_action: spend
   widest_avoid_feasible: true
-  # W1.2's whole-suite check needs ONE global orientation, but the three pairs
-  # draw gold labels from three vocabularies (act/wait, wide/narrow, A/B).
-  # This is the common axis. Deliberately NOT in rules.OBSERVABLE_VARS or
-  # assertions.SHARED_SCALARS: it is categorical and it IS the label, so
-  # enumerating it would trivially solve every pair.
-  gold_spare_action: spend      # gold label "act": commit the pair to storm-svc-1
+  claimed_competing_ecar_gbps: 24.64
+  claimed_competing_ecar_at: t3

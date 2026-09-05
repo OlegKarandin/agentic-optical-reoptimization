@@ -264,6 +264,49 @@ This is legitimate — the toy topology is ours, built for this project — on t
 condition that it is recorded rather than quietly changed. It is recorded here
 and asserted in `tests/eval/test_build_eval_state.py`.
 
+### The T1 pair moved to a jalgaon-homed SUT (2026-09-05) — no topology change
+
+The redesigned T1 pair (spec `docs/superpowers/specs/2026-09-05-t1-spend-or-hold-redesign.md`)
+needed CLAUDE.md's canonical case for real: a protected service whose working
+AND protection legs both leave their home site on aerial spans inside the cone,
+so 1:1 switchover does not save it, plus one buried escape and an independent
+aerial claimant corridor out of the same site. `storm-svc-1` never was that —
+its protection leg (`satna <-> jhansi`) sits outside every T1 cone.
+
+Three new stage-2 pins were added to `tools/build_eval_state.py` (`T1_PINS`),
+so `eval/states/loaded-s17.json` was rebuilt:
+
+- `t1-svc-jalgaon-indore` — `jalgaon <-> indore`, 300 G, protected. Its real
+  legs (solver-chosen, read back live) are working `jalgaon -> khandwa -> dhar
+  -> indore` and protection `jalgaon -> buldhana -> amravati -> nagpur ->
+  bhandara -> raipur -> jabalpur -> indore`: two AERIAL first hops out of the
+  depot.
+- `t1-claimant-jalgaon-dhulia-fwd` / `-rev` — `jalgaon <-> dhulia`, 100 G each
+  direction, unprotected.
+
+Depot is `jalgaon`; the escape is a new lightpath over one of its BURIED spurs
+(`surat` / `aurangabad`).
+
+**No mount type was changed.** `jalgaon` already carries four aerial neighbours
+(`akola`, `buldhana`, `dhulia`, `khandwa`) and two buried ones (`aurangabad`,
+`surat`), so the SUT's two legs, the claimant corridor and the escape are four
+independent directions out of one site with nothing to edit. The 2026-08-30
+`satna <-> jabalpur` change above therefore remains this topology's ONLY
+scenario-driven mount-type edit.
+
+Why `dhulia` and not `khandwa` as the claimant far end (this was found the hard
+way, live): the harness's post-cut restoration replay has to REACH the far end
+after the corridor is cut and the whole storm risk group is avoided, or holding
+the spare buys nothing. `khandwa`'s only other link is aerial (`dhar <->
+khandwa`) and falls inside the same cone, so the avoid set disconnects it and
+both gold rollouts tied at identical loss. `dhulia`'s other link is BURIED
+(`dhulia <-> nasik`), which a storm filter can never admit. Both facts are
+asserted in `tests/eval/test_build_eval_state.py`.
+
+D1/T2/T3 are unaffected: they still name `storm-svc-1` and the satna claimant
+family, stage 1 (the gravity load) runs before any pin and is not re-routed by
+one, and the pin list is solved in order.
+
 ---
 
 ## Build order

@@ -197,6 +197,7 @@ async def assert_non_flip_decisions_non_binding(
     client_factory, scenario: ScenarioFile, *, topology_path: str | Path,
     gold_decisions: dict, non_flip: tuple[str, ...],
     gold_by_hour: dict[str, dict] | None = None,
+    objective_fn=None,
 ) -> None:
     """Replay this half with the gold decision for the flip variable and each
     plausible alternative for the two decisions the pair is NOT testing; the
@@ -266,7 +267,19 @@ async def assert_non_flip_decisions_non_binding(
     check does real work on T2 (where a constraints/objective alternative
     could commit under a different avoid horizon) and on T3 (where a
     constraints alternative could commit a different LEVER, which is exactly
-    what `chosen_lever_at_decision_hour` grades)."""
+    what `chosen_lever_at_decision_hour` grades).
+
+    **`objective_fn`** (optional; None keeps every existing caller's
+    behaviour exactly) hands the replay decider a RULE for the objective
+    instead of a fixed `candidate_N` -- `baseline.ScriptedDecider` has
+    supported this since Task 9 and this only exposes it. A
+    `spare_action_by_deadline` pair needs it: that label rule has no `None`
+    (ungraded) reading -- `scoring._spare_action_by_deadline_label` returns
+    "hold" whenever no qualifying decider debit exists -- so the "no label
+    is tolerated" escape hatch above does not apply to it, and a spend half
+    replayed under a DIFFERENT avoid set must still find and commit a real
+    escape rather than whatever `candidate_0` happens to be under that set.
+    `oracle.escape_objective` is exactly that rule."""
     for name in non_flip:
         for alternative in PLAUSIBLE_ALTERNATIVES[name]:
             # Gold's own per-hour script, with the alternative substituted for
@@ -281,7 +294,8 @@ async def assert_non_flip_decisions_non_binding(
                 default_objective=gold_decisions.get("objective"),
                 timing_by_hour=by_hour.get("timing"),
                 constraints_by_hour=by_hour.get("constraints"),
-                objective_by_hour=by_hour.get("objective"))
+                objective_by_hour=by_hour.get("objective"),
+                objective_fn=objective_fn)
             async with client_factory() as client:
                 trace = await run_episode(client, scenario, decider,
                                           topology_path=topology_path)

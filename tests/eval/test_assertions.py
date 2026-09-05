@@ -31,6 +31,17 @@ TOPOLOGY_PATH = (
     / "src" / "storm_reoptimizer" / "data" / "toy_india_topology.json"
 )
 
+# The PRE-REDESIGN T1 pair (storm-svc-1, depot satna), moved here by Task 15
+# when T1 was re-authored on the jalgaon-homed SUT. Kept, and still exercised
+# below, because the two negative cases Task 9 established -- a protection leg
+# that sits outside the cone, and a service with no real escape at all -- are
+# genuine, live-confirmed properties of THAT geometry, and they are the
+# evidence that `assert_both_legs_exposed`/`assert_spend_is_real` can actually
+# fail. `storm-svc-1` and the satna claimant family are still pinned into
+# `eval/states/loaded-s17.json` (D1/T2/T3 need them), so these files still
+# load and route against the same live state.
+DISCARDED_DIR = Path(__file__).parent / "fixtures" / "discarded"
+
 TWIN = textwrap.dedent("""
     id: {id}
     pair: P
@@ -470,11 +481,12 @@ def test_a_free_escape_that_would_flip_a_chosen_lever_label_still_raises():
 # claimant_service_ids: the shared parsing note (invariants 2-4).
 def test_claimant_service_ids_returns_the_declared_list():
     scenario = load_scenario(SCENARIOS_DIR / "T1a.yaml")
-    # The REAL satna-homed claimant pair (Task 14, exposure-and-depot plan,
-    # 2026-08-30) -- NOT the pre-Task-14 placeholder ids (d0029, d0348),
-    # which had no real aerial exposure at all.
+    # The REAL jalgaon-homed claimant pair (Task 15, T1 spend-or-hold
+    # redesign, 2026-09-05). Was the satna-homed pair until T1 was rebuilt
+    # on a new SUT; before that, the pre-Task-14 placeholder ids (d0029,
+    # d0348), which had no real aerial exposure at all.
     assert claimant_service_ids(scenario) == (
-        "claimant-satna-jabalpur-fwd", "claimant-satna-jabalpur-rev")
+        "t1-claimant-jalgaon-dhulia-fwd", "t1-claimant-jalgaon-dhulia-rev")
 
 
 def test_claimant_service_ids_is_empty_when_none_are_declared(tmp_path):
@@ -517,11 +529,18 @@ def test_a_realized_cut_on_buried_fibre_fails_the_build(tmp_path):
 
 
 def test_a_realized_cut_on_aerial_fibre_passes():
+    # T1b's own realized cut, since Task 15 rebuilt the pair on the
+    # jalgaon-homed SUT: the two AERIAL spans its working and protection
+    # legs leave the depot on.
     scenario = load_scenario(SCENARIOS_DIR / "T1b.yaml")
     oms_by_id = {
-        "oms_satna_rewa": {
-            "id": "oms_satna_rewa", "src_node_id": "satna",
-            "dst_node_id": "rewa", "elements": ["fiber_satna_rewa_0"]},
+        "oms_jalgaon_buldhana": {
+            "id": "oms_jalgaon_buldhana", "src_node_id": "jalgaon",
+            "dst_node_id": "buldhana", "elements": ["fiber_jalgaon_buldhana_0"]},
+        "oms_jalgaon_khandwa": {
+            "id": "oms_jalgaon_khandwa", "src_node_id": "jalgaon",
+            "dst_node_id": "khandwa", "elements": ["fiber_jalgaon_khandwa_0",
+                                                   "fiber_jalgaon_khandwa_1"]},
     }
     assert_realized_cuts_pass_the_event_filter(
         scenario, topology_path=TOPOLOGY_PATH, oms_by_id=oms_by_id)
@@ -914,11 +933,19 @@ def test_an_empty_group_with_nothing_measurably_at_risk_is_fine():
 # `assert_gold_matches_outcomes` (T1 spend-or-hold redesign, Task 9). Pure --
 # the two policies' own simulated outcomes are handed in, never computed
 # here (a later task's oracle enumerator, run for real, produces them).
-def _with_gold(scenario, *, label=None, min_margin_gbps_h=None):
+# Sentinel, so `min_margin_gbps_h=None` means "declare NO floor" rather than
+# "leave the scenario's own floor alone". It used to be safe to conflate the
+# two only because the shipped T1a carried no floor at all; Task 15's
+# enumerated gold gives it one (127.0), which made the no-floor test below
+# silently assert against a real floor.
+_KEEP = object()
+
+
+def _with_gold(scenario, *, label=None, min_margin_gbps_h=_KEEP):
     gold = scenario.gold
     if label is not None:
         gold = dataclasses.replace(gold, label=label)
-    if min_margin_gbps_h is not None:
+    if min_margin_gbps_h is not _KEEP:
         gold = dataclasses.replace(gold, min_margin_gbps_h=min_margin_gbps_h)
     return dataclasses.replace(scenario, gold=gold)
 
@@ -953,29 +980,31 @@ def test_gold_matches_outcomes_rejects_an_empty_outcomes_dict(t1a):
 
 # `assert_both_legs_exposed` / `assert_spend_is_real` (T1 spend-or-hold
 # redesign, Task 9) -- live, against the real server. Both pass/fail paths
-# are exercised against REAL geometry, not a forced/synthetic threshold:
+# are exercised against REAL geometry, not a forced/synthetic threshold.
 #
-# `assert_both_legs_exposed`: T1a's storm-svc-1 genuinely has both legs
-# exposed above the default floor (working 0.0969, protection 0.0657 --
-# confirmed live); T1b's does not (working 0.0969, protection 0.0176 -- the
-# protection leg sits under the floor because T1b's cone bearing points AWAY
-# from the claimant corridor, per T1b.yaml's own header comment). This is a
-# REAL, useful finding, not a test artifact: it means T1b as CURRENTLY
-# authored (pre-redesign; `label_rule: timing_at_decision_hour`, not yet
-# `spare_action_by_deadline`) does not yet satisfy the "real decision"
-# invariant this task's assertions exist to check -- exactly the gap a later
-# task's T1 rebuild has to close before Task 15 can run these against it.
+# UPDATED by Task 15 (2026-09-05), which rebuilt T1 on the jalgaon-homed SUT
+# `t1-svc-jalgaon-indore`: the two FAIL cases below now read the DISCARDED
+# pre-redesign fixtures rather than the shipped scenarios, because the whole
+# point of the rebuild was to make the shipped pair pass them.
 #
-# `assert_spend_is_real`: neither T1a nor T1b's storm-svc-1 CURRENTLY has a
-# real escape under the spend decider's own risk-group avoid (confirmed
-# live: T1a's wide, corridor-facing cone sweeps every aerial direction out
-# of satna, leaving `route_service` zero candidates; T1b's narrower cone
-# leaves candidates, but EVERY alternative route into allahabad funnels
-# through oms_jhansi_allahabad -- storm-svc-1's own protection leg's last
-# hop -- so every one of them collides with protection). Both are genuine,
-# live-confirmed properties of the CURRENT topology/scenario, not bugs in
-# this assertion -- again, exactly what the still-pending T1 rebuild has to
-# fix. The PASS path is exercised against a hand-built scenario reusing T1b's
+# `assert_both_legs_exposed`: the shipped T1a passes (working 0.1172,
+# protection 0.1218 -- confirmed live), and so does the shipped T1b (working
+# 0.1172, protection 0.6947); the PRE-REDESIGN T1b does not (working 0.0969,
+# protection 0.0176 -- storm-svc-1's protection leg, satna<->jhansi, sits
+# outside every T1 cone). That was a REAL finding, not a test artifact, and
+# it is exactly the gap the rebuild closed.
+#
+# `assert_spend_is_real`: neither half of the PRE-REDESIGN T1 had a real
+# escape for storm-svc-1 under the spend decider's own risk-group avoid
+# (confirmed live: T1a's wide, corridor-facing cone sweeps every aerial
+# direction out of satna, leaving `route_service` zero candidates; T1b's
+# narrower cone leaves candidates, but EVERY alternative route into
+# allahabad funnels through oms_jhansi_allahabad -- storm-svc-1's own
+# protection leg's last hop -- so every one collides with protection). The
+# rebuilt pair has 8 real escape candidates in both halves; the shipped
+# PASS side is checked by `test_episodes.py::test_t1_spend_is_real`. The
+# local PASS path below is exercised against a hand-built scenario reusing
+# the pre-redesign T1b's
 # OWN real cone (Task 14's real `claimant-satna-jabalpur-fwd`, UNPROTECTED --
 # `protection_path: []`, live-confirmed -- so `collides_with_protection` can
 # never bind for it) rerouting off its own direct satna<->jabalpur span: a
@@ -1001,9 +1030,15 @@ def test_both_legs_exposed_passes_on_t1a(
     asyncio.run(_run())
 
 
-def test_both_legs_exposed_rejects_t1b_whose_protection_is_barely_exposed(
+def test_both_legs_exposed_rejects_the_old_t1b_whose_protection_was_barely_exposed(
         loaded_state_path, local_server_command, local_server_env):
-    scenario = load_scenario(SCENARIOS_DIR / "T1b.yaml")
+    """The FAIL path, against the pre-redesign T1b (storm-svc-1: working
+    0.0969, protection 0.0176 -- its cone points away from the claimant
+    corridor and storm-svc-1's protection leg, satna<->jhansi, sits outside
+    it). Repointed at the discarded fixture by Task 15: the shipped T1b now
+    PASSES this check by construction, which is the whole point of the
+    rebuild, so keeping the negative case means keeping the old geometry."""
+    scenario = load_scenario(DISCARDED_DIR / "T1b-2026-08-30.yaml")
 
     async def _run():
         async with _connected(
@@ -1102,14 +1137,17 @@ def test_spend_is_real_rejects_an_unreachable_residual_ceiling(
     asyncio.run(_run())
 
 
-@pytest.mark.parametrize("half", ("T1a", "T1b"))
-def test_spend_is_real_rejects_storm_svc_1_which_has_no_escape_today(
+@pytest.mark.parametrize("half", ("T1a-2026-08-30", "T1b-2026-08-30"))
+def test_spend_is_real_rejects_storm_svc_1_which_had_no_escape(
         half, loaded_state_path, local_server_command, local_server_env):
-    """Neither T1a nor T1b's storm-svc-1 currently has a real escape under
-    the spend decider's own avoid (see the module comment above) -- a real,
-    live-confirmed property of the CURRENT (pre-rebuild) T1 scenario, and
-    the failure mode this test documents rather than works around."""
-    scenario = load_scenario(SCENARIOS_DIR / f"{half}.yaml")
+    """Neither half of the PRE-REDESIGN T1 had a real escape for
+    storm-svc-1 under the spend decider's own avoid (see the module comment
+    above) -- a real, live-confirmed property of that geometry and the
+    failure mode this test documents. Repointed at the discarded fixtures by
+    Task 15: the rebuilt T1 has a real escape in BOTH halves (8 candidates,
+    residual p_cut 0.0, no protection collision), which
+    `test_episodes.py::test_t1_spend_is_real` now checks on the PASS side."""
+    scenario = load_scenario(DISCARDED_DIR / f"{half}.yaml")
 
     async def _run():
         async with _connected(

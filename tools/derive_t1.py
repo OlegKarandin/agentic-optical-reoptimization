@@ -126,10 +126,37 @@ def _node_coords(topology_path: str | Path) -> dict[str, tuple[float, float]]:
     return {n["id"]: (n["lat"], n["lon"]) for n in data["graph"]["nodes"]}
 
 
-def _fiber_ids(oms_by_id: dict, oms_id: str) -> list[str]:
+def _vulnerable_pairs(edges, filter_fn) -> set[tuple[str, str]]:
+    """Every (node, node) pair, BOTH orders, whose local-topology edge the
+    event's own vulnerability filter admits -- the same both-orders matching
+    `runner.horizon_risk_group_asset_ids` does, because an OMS's direction
+    and the topology edge's direction are independent facts."""
+    admitted = [e for e in edges if filter_fn(e)]
+    return ({(e.src, e.dst) for e in admitted}
+            | {(e.dst, e.src) for e in admitted})
+
+
+def _fiber_ids(oms_by_id: dict, oms_id: str, *,
+               vulnerable_pairs: set[tuple[str, str]] | None = None) -> list[str]:
     """Every `fiber_*` element of one OMS -- the SAME filter `runner.
     horizon_risk_group_asset_ids` applies, just keyed by a single OMS id
-    instead of walking every OMS a hazard footprint touches."""
+    instead of walking every OMS a hazard footprint touches.
+
+    `vulnerable_pairs` (from `_vulnerable_pairs`) additionally drops an OMS
+    the EVENT FILTER does not admit at all, returning `[]` for it. Without
+    it this function will happily name a BURIED fibre as a storm's realized
+    cut whenever a service's optical route happens to run over one -- which
+    `assertions.assert_realized_cuts_pass_the_event_filter` (invariant 1)
+    rejects outright, and which is physically wrong besides. Found for real
+    on 2026-09-05 (Task 15): the T1 claimant pair's own optical route is
+    `jalgaon -> dhulia -> nasik -> mumbai -> nasik -> dhulia`, of which only
+    the first hop is aerial; the unfiltered version of this function emitted
+    all five OMS's fibres as the storm's cut. Defaulted to None (no
+    filtering) so nothing else that calls this changes behaviour."""
+    if (vulnerable_pairs is not None
+            and (oms_by_id[oms_id]["src_node_id"],
+                 oms_by_id[oms_id]["dst_node_id"]) not in vulnerable_pairs):
+        return []
     return sorted(e for e in oms_by_id[oms_id]["elements"]
                  if e.startswith("fiber_"))
 
@@ -299,10 +326,15 @@ async def derive(args: argparse.Namespace) -> dict:
              f"{'(PASS, >= 0.2)' if claimant_delta >= 0.2 else '(WARN: < 0.2)'}")
 
         # ---- realized cuts, resolved live -------------------------------
+        # Filtered by the EVENT's own vulnerability filter, not merely by the
+        # `fiber_*` prefix: a service's optical route can (and here does) run
+        # over buried OMS, which no storm may cut -- see `_fiber_ids`.
+        vulnerable_pairs = _vulnerable_pairs(edges, get_filter(EVENT_TYPE))
         claimant_fiber_ids = sorted({
             fid for cid in claimants
             for oms_id in geometry.path_oms.get(cid, {}).get("working", ())
-            for fid in _fiber_ids(oms_by_id, oms_id)})
+            for fid in _fiber_ids(oms_by_id, oms_id,
+                                  vulnerable_pairs=vulnerable_pairs)})
         print(f"\nhalf A realized cuts (claimant corridor, both directions): "
              f"{claimant_fiber_ids}")
         if not claimant_fiber_ids:
@@ -325,8 +357,11 @@ async def derive(args: argparse.Namespace) -> dict:
                 print(f"WARNING: SUT {leg_name} first-hop OMS {oms_id!r} "
                      f"nodes {nodes} do not include depot {args.depot!r} -- "
                      f"'first hop' may not be the depot-leaving span")
-        sut_fiber_ids = sorted(set(_fiber_ids(oms_by_id, working_first_hop))
-                               | set(_fiber_ids(oms_by_id, protection_first_hop)))
+        sut_fiber_ids = sorted(
+            set(_fiber_ids(oms_by_id, working_first_hop,
+                           vulnerable_pairs=vulnerable_pairs))
+            | set(_fiber_ids(oms_by_id, protection_first_hop,
+                             vulnerable_pairs=vulnerable_pairs)))
         print(f"half B realized cuts (SUT working+protection first hop): "
              f"{sut_fiber_ids}")
         if not sut_fiber_ids:

@@ -8,15 +8,19 @@ from pathlib import Path
 
 import pytest
 
+from storm_reoptimizer.eval import oracle
 from storm_reoptimizer.eval.assertions import (
-    PairInvalid, assert_flip_dominates, assert_pair_derived_geometry_is_equal,
+    PairInvalid, assert_both_legs_exposed, assert_flip_dominates,
+    assert_pair_derived_geometry_is_equal,
     assert_each_baseline_variant_ties, assert_gold_choices_differ,
-    assert_gold_spare_action_is_grounded, assert_issuance_prefix_shared,
+    assert_gold_matches_outcomes, assert_gold_spare_action_is_grounded,
+    assert_issuance_prefix_shared,
     assert_menus_identical, assert_no_global_policy_solves_the_suite,
-    assert_non_flip_decisions_non_binding,
+    assert_non_flip_decisions_non_binding, assert_spend_is_real,
     assert_risk_group_covers_measurable_exposure, assert_shared_scalars_equal,
     assert_wait_gold_has_no_free_escape,
 )
+from storm_reoptimizer.eval.gold import enumerate_outcomes
 from storm_reoptimizer.eval.baseline import ForecastBlindBaseline
 from storm_reoptimizer.eval.decisions import (
     ConstraintDecision, ObjectiveDecision, TimingDecision,
@@ -153,28 +157,59 @@ def test_each_baseline_variant_scores_exactly_one_half(
     asyncio.run(_run())
 
 
-# T1's flip variable is `timing`, so gold.label IS the gold timing action;
-# the two decisions this pair is NOT testing are `constraints` and
-# `objective`. This test exists BECAUSE its absence let two real bugs slip
-# through Task 14's own review three times over -- the assertion had only
-# ever been reasoned about from a probed menu, never actually run against
-# the live server (see docs/superpowers/rehearsals/T1.md's Q2 and the SDD
-# ledger's Task-14-reopened-3rd-time entry). Tasks 15/16 (T2, T3) must add
-# their own equivalent test when they author those pairs: gold.label there
-# encodes the constraints/objective flip, not timing, so the gold_decisions
-# mapping below does not generalize as-is -- it needs a pair-specific
-# translation from that pair's own gold.label into a decision object.
-# Both halves declare `gold.decision_at_t0: wait`, so the gold TIMING
-# DEFAULT is "wait" in both and T1b's gold.label ("act") is scripted at the
-# decision hour only. Passing the label as a bare default would replay a
-# rollout that also acts at t0 -- not the gold rollout. That mistake was live
-# in T2/T3's fixtures below until 2026-08-23, where it really did move the
-# graded label; see assert_non_flip_decisions_non_binding's docstring.
-_T1_NON_FLIP_GOLD_DECISIONS = {
-    "T1a": (TimingDecision("wait", "gold"), None),
-    "T1b": (TimingDecision("wait", "gold: hold at t0, per gold.decision_at_t0"),
-            TimingDecision("act", "gold: act at the decision hour")),
-}
+# T1's flip variable (2026-09-05 redesign) is the SPEND/HOLD decision, which
+# the harness expresses as the timing decision plus a real, spare-consuming
+# objective pick -- `metadata.label_rule: spare_action_by_deadline`, graded by
+# `scoring._spare_action_by_deadline_label`. The one decision this pair is NOT
+# testing is therefore `constraints`: which avoid set the escape is searched
+# under is free, as long as a genuine escape is still found and spent.
+#
+# The gold replay is built from `oracle`'s OWN pieces rather than a
+# hand-written candidate index, because those pieces ARE the gold: Task 10's
+# enumerator computed each half's `gold.label` by running exactly
+# `oracle.spend_decider`/`oracle.hold_decider` (see `gold.enumerate_outcomes`),
+# so a hand-copied approximation here could disagree with the very rollout the
+# label came from. Both halves declare `gold.decision_at_t0: wait`, so the
+# gold TIMING DEFAULT is "wait" in both and the spend half's "act" is scripted
+# at the decision hour only -- passing it as a bare default would replay a
+# rollout that also acts at t0, which is NOT the gold rollout (that mistake
+# was live in T2/T3's fixtures below until 2026-08-23, where it really did
+# move the graded label).
+def _t1_gold_replay(scenario):
+    """`(gold_decisions, gold_by_hour, objective_fn)` reproducing whichever
+    of `oracle.spend_decider`/`oracle.hold_decider` this half's own
+    `gold.label` names."""
+    d = scenario.decision_hour
+    sut = scenario.service_under_test
+    claimants = tuple(scenario.metadata.get("claimant_services", ()))
+    if scenario.gold.label == "spend":
+        horizon, rg_id = oracle.spend_risk_group(scenario)
+        priority = (sut, *claimants)
+        return (
+            {"timing": TimingDecision(
+                "wait", "gold: wait outside the decision hour",
+                claim_priority=priority),
+             "constraints": ConstraintDecision(
+                 avoid={"risk_groups": [rg_id]},
+                 reasoning=f"gold: oracle.spend_decider's own avoid of "
+                          f"{rg_id!r} ({horizon!r})",
+                 protected=False, best_effort=False, basis="risk_group",
+                 level="risk_group")},
+            {"timing": {d: TimingDecision(
+                "act", "gold: spend the depot's spare at the decision hour",
+                claim_priority=priority)}},
+            oracle.escape_objective)
+    priority = (*claimants, sut)
+    return (
+        {"timing": TimingDecision(
+            "wait", "gold: hold the depot's spare for the claimants",
+            claim_priority=priority),
+         # Never consulted -- `run_episode` only reaches the constraints
+         # decision after a timing decision of "act", and hold never acts.
+         "constraints": ConstraintDecision(
+             avoid={}, reasoning="gold: hold never acts", protected=False,
+             basis="physical", level="link")},
+        None, None)
 
 
 @pytest.mark.parametrize("half", ("T1a", "T1b"))
@@ -182,16 +217,7 @@ def test_t1_non_flip_decisions_are_non_binding(
     half, loaded_state_path, local_server_command, local_server_env,
 ):
     scenario = load_all_scenarios()[half]
-    default_timing, timing_at_d = _T1_NON_FLIP_GOLD_DECISIONS[half]
-    gold_decisions = {
-        "timing": default_timing,
-        "constraints": ConstraintDecision(
-            avoid={}, reasoning="gold", protected=False, basis="physical",
-            level="link"),
-        "objective": ObjectiveDecision("candidate_0", None, "gold"),
-    }
-    gold_by_hour = ({"timing": {scenario.decision_hour: timing_at_d}}
-                    if timing_at_d else None)
+    gold_decisions, gold_by_hour, objective_fn = _t1_gold_replay(scenario)
 
     async def _run():
         @asynccontextmanager
@@ -206,9 +232,92 @@ def test_t1_non_flip_decisions_are_non_binding(
         await assert_non_flip_decisions_non_binding(
             _connect, scenario, topology_path=TOPOLOGY_PATH,
             gold_decisions=gold_decisions, gold_by_hour=gold_by_hour,
-            non_flip=("constraints", "objective"))
+            non_flip=("constraints",), objective_fn=objective_fn)
 
     asyncio.run(_run())
+
+
+@pytest.mark.parametrize("half", ("T1a", "T1b"))
+def test_t1_both_legs_exposed(
+    half, loaded_state_path, local_server_command, local_server_env,
+):
+    """Invariant 9a (redesign spec 4.7): the SUT's WORKING and PROTECTION
+    legs each carry a non-trivial cut probability at the decision-hour
+    issuance's own latest horizon, in BOTH halves. This is what makes
+    `t1-svc-jalgaon-indore` CLAUDE.md's canonical case rather than the old
+    T1's technicality -- storm-svc-1's protection leg (satna<->jhansi) sat
+    outside every T1 cone, so switchover absorbed everything and the
+    spend/hold comparison tested nothing."""
+    scenario = load_all_scenarios()[half]
+
+    async def _run():
+        async with connect_server(
+            TOPOLOGY_PATH, server_command=local_server_command,
+            env=local_server_env,
+            extra_args=["--state", str(loaded_state_path)],
+        ) as client:
+            await assert_both_legs_exposed(client, scenario,
+                                           topology_path=TOPOLOGY_PATH)
+
+    asyncio.run(_run())
+
+
+@pytest.mark.parametrize("half", ("T1a", "T1b"))
+def test_t1_spend_is_real(
+    half, loaded_state_path, local_server_command, local_server_env,
+):
+    """Invariant 9b (redesign spec 4.7): the escape `oracle.spend_decider`
+    would actually take exists, moves the service, does not ride its own
+    protection corridor, costs exactly one transponder pair at the depot,
+    and lands the service clear of the cone. Run on BOTH halves, not just
+    the spend one: the two halves share a state file and a menu, so "spend"
+    has to be a real, available option in the half where gold says to HOLD
+    it too -- otherwise T1a's gold would be correct by absence of an
+    alternative rather than by comparison."""
+    scenario = load_all_scenarios()[half]
+
+    async def _run():
+        async with connect_server(
+            TOPOLOGY_PATH, server_command=local_server_command,
+            env=local_server_env,
+            extra_args=["--state", str(loaded_state_path)],
+        ) as client:
+            await assert_spend_is_real(client, scenario,
+                                       topology_path=TOPOLOGY_PATH)
+
+    asyncio.run(_run())
+
+
+@pytest.mark.parametrize("half", ("T1a", "T1b"))
+def test_t1_gold_matches_oracle_outcomes(
+    half, loaded_state_path, local_server_command, local_server_env,
+):
+    """The frozen `gold.label`/`gold.outcome_gbps_h` are re-enumerated LIVE
+    (`gold.enumerate_outcomes`, the same function `tools/compute_gold.py`
+    wrote them with) and must still argmin to the frozen label by at least
+    `gold.min_margin_gbps_h`. This is the check that keeps the authored gold
+    a MEASUREMENT rather than a prediction: any harness or state change that
+    moves the two rollouts' real Gbps-hours shows up here."""
+    scenario = load_all_scenarios()[half]
+
+    async def _run():
+        @asynccontextmanager
+        async def _connect():
+            async with connect_server(
+                TOPOLOGY_PATH, server_command=local_server_command,
+                env=local_server_env,
+                extra_args=["--state", str(loaded_state_path)],
+            ) as client:
+                yield client
+
+        return await enumerate_outcomes(_connect, scenario,
+                                        topology_path=TOPOLOGY_PATH)
+
+    outcomes = asyncio.run(_run())
+    assert_gold_matches_outcomes(
+        scenario, {choice: data["total"] for choice, data in outcomes.items()})
+    assert {c: d["total"] for c, d in outcomes.items()} == \
+        scenario.gold.outcome_gbps_h
 
 
 # T2's flip variable is `constraints` (gold.label is `wide`/`narrow`, an
@@ -810,11 +919,14 @@ def test_a_conserve_gold_has_no_free_escape(
 # non-representative placeholder for testing that T1's objective decision is
 # non-binding, not a claim about what T1b's real committed action costs.
 _GOLD_COMMITTED_LEVER = {
-    "T1a": None,                 # gold never acts here; see assert_wait_gold_
-                                  # has_no_free_escape for the separate check
-                                  # that DOES cover this half
-    "T1b": "optical_reroute",    # gold.rationale: "an optical_reroute
-                                  # committed at t1 is effective at t2..."
+    "T1a": None,                 # gold label "hold": the gold rollout never
+                                  # acts on the SUT at all, so it commits no
+                                  # lever
+    "T1b": "optical_reroute",    # gold label "spend": the only candidate that
+                                  # both escapes the cone and charges a real
+                                  # transponder pair at the depot is an
+                                  # optical_reroute (assert_spend_is_real
+                                  # checks exactly that candidate, live)
     "T2a": "optical_reroute",    # gold.rationale: "an optical_reroute via
                                   # jabalpur costing 1 pair"; matches
                                   # _T2_NON_FLIP_GOLD_DECISIONS' candidate_2
@@ -860,13 +972,15 @@ FROZEN_SCALARS_PATH = (
     Path(__file__).parent / "fixtures" / "frozen_derived_scalars.json")
 
 
-# stale_pair (2026-09-05 plan, Task 11): Tasks 3/4 of this plan moved p_cut
-# to a joint (working-AND-protection) probability for protected services,
-# which moves derived.py's scalars for every protected episode -- the
-# `frozen_derived_scalars.json` snapshot below predates that change and is
-# now stale, not merely for T2/T3. Left skipped until Task 15 regenerates
-# the fixture against the new model.
-@pytest.mark.stale_pair
+# RE-FROZEN 2026-09-05 (Task 15), and un-skipped with it. Tasks 3/4 of this
+# plan moved `p_cut` to a joint (working-AND-protection) probability for
+# protected services, which moved derived.py's scalars for EVERY protected
+# episode -- so the pre-Task-3 snapshot this test read was stale for D1/T2/T3
+# as well as for T1, and Task 11 skipped the test rather than re-freeze it
+# mid-plan. Task 15 re-froze it against the rebuilt state
+# (`tools/freeze_derived_scalars.py --state eval/states/loaded-s17.json`),
+# which also picks up T1's brand-new SUT/claimant pins. The guarantee below
+# is unchanged and now bites again from this snapshot forward.
 def test_the_probability_model_scalars_are_unmoved(
     loaded_state_path, local_server_command, local_server_env,
 ):

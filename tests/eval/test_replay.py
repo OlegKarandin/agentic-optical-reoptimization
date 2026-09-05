@@ -196,6 +196,84 @@ def test_a_service_not_actually_dropped_gets_no_record(write_scenario):
     assert records[0]["outcome"] == "restored"
 
 
+class _TransientOutageCounting(_FakeCounting):
+    """A server that refuses a WHOLE two-op restoration plan for the outage
+    the plan is repairing, and accepts either half of it on its own -- the
+    real `multilayer-optical-mcp` behaviour, confirmed live 2026-09-05
+    (Task 15) and the reason `runner.try_commit` grew
+    `split_transient_outage`. See that function's docstring: `baseline=
+    "standing"` moves only NON-transient standing findings into
+    `pre_existing`, and a plan that restores an already-dropped service is
+    always at least two ops, so its own repaired outage comes back tagged
+    transient and `ValidationReport.ok` is false."""
+
+    def __init__(self):
+        super().__init__()
+        self.committed_op_lists: list[list[str]] = []
+
+    async def call(self, name, arguments=None, **kw):
+        if name == "validate_plan":
+            self.calls.append((name, arguments))
+            ops = arguments["plan"]["ops"]
+            if len(ops) > 1:
+                return {"ok": False, "violations": [
+                    {"type": "dropped_traffic", "state_index": 0,
+                     "asset_id": "c-fwd", "transient": True,
+                     "reason": "link_down"}]}
+            return {"ok": True}
+        if name == "commit_plan":
+            self.calls.append((name, arguments))
+            self.committed_op_lists.append(
+                [o["op"] for o in arguments["plan"]["ops"]])
+            return {"status": "committed", "intended_snapshot_id": "snap"}
+        return await super().call(name, arguments, **kw)
+
+
+def test_a_transiently_dropped_service_is_restored_by_splitting_the_plan(
+        write_scenario):
+    scenario = load_scenario(
+        write_scenario(REPLAY_SCENARIO_YAML, "REPLAY_TEST.yaml"))
+    counting = _TransientOutageCounting()
+    actions, records = asyncio.run(restore_after_cuts(
+        counting, scenario=scenario, hour="t1", hour_index=1,
+        affected=["c-fwd"], priority=("c-fwd",), ledger=_ledger(),
+        geometry=_geometry(), issuance=_issuance(), rg_for_cut_hour=None,
+        index_factory=_index_factory(counting)))
+
+    assert [r["outcome"] for r in records] == ["restored"]
+    assert records[0]["spares"] == {"tirupati": 1, "nellore": 1}
+    assert len(actions) == 1 and actions[0].origin == "harness"
+    # The whole plan was offered first and refused, then the SAME ops were
+    # committed as provisioning-then-reroute.
+    assert counting.committed_op_lists == [["provision_lightpath"],
+                                           ["reroute_service"]]
+
+
+def test_a_non_transient_violation_is_still_a_rejection(write_scenario):
+    """The split is not a blanket "commit anyway": a violation that is NOT
+    transient, or that names some OTHER asset, still rejects the candidate."""
+    class _RealViolation(_TransientOutageCounting):
+        async def call(self, name, arguments=None, **kw):
+            if name == "validate_plan" and len(arguments["plan"]["ops"]) > 1:
+                return {"ok": False, "violations": [
+                    {"type": "disjointness_collapse", "state_index": 1,
+                     "asset_id": "some-other-service", "transient": False}]}
+            return await super().call(name, arguments, **kw)
+
+    scenario = load_scenario(
+        write_scenario(REPLAY_SCENARIO_YAML, "REPLAY_TEST.yaml"))
+    counting = _RealViolation()
+    actions, records = asyncio.run(restore_after_cuts(
+        counting, scenario=scenario, hour="t1", hour_index=1,
+        affected=["c-fwd"], priority=("c-fwd",), ledger=_ledger(),
+        geometry=_geometry(), issuance=_issuance(), rg_for_cut_hour=None,
+        index_factory=_index_factory(counting)))
+
+    assert [r["outcome"] for r in records] == ["rejected"]
+    assert actions == []
+    assert counting.committed_op_lists == []
+
+
 def test_a_duplicated_priority_id_is_attempted_only_once(write_scenario):
     # decisions._claim_priority only validates SHAPE, never uniqueness -- a
     # real decider can legally repeat an id. Without deduping in

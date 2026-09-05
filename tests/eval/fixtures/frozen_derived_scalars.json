@@ -5,27 +5,27 @@
       "within_issuance_cone_motion_kmh": 0.0
     },
     "T1a": {
-      "sut_p_cut_at_exposure_horizon": 0.09692530708781567,
+      "sut_p_cut_at_exposure_horizon": 0.11718928816662852,
       "within_issuance_cone_motion_kmh": 0.0
     },
     "T1b": {
-      "sut_p_cut_at_exposure_horizon": 0.09692530708781567,
+      "sut_p_cut_at_exposure_horizon": 0.11718928816662852,
       "within_issuance_cone_motion_kmh": 0.0
     },
     "T2a": {
-      "sut_p_cut_at_exposure_horizon": 0.49178301670862895,
+      "sut_p_cut_at_exposure_horizon": 0.3402761882963302,
       "within_issuance_cone_motion_kmh": 250.00000000000014
     },
     "T2b": {
-      "sut_p_cut_at_exposure_horizon": 0.49178301670862895,
+      "sut_p_cut_at_exposure_horizon": 0.3402761882963302,
       "within_issuance_cone_motion_kmh": 250.00000000000006
     },
     "T3a": {
-      "sut_p_cut_at_exposure_horizon": 0.25880827038986803,
+      "sut_p_cut_at_exposure_horizon": 0.18147554741741054,
       "within_issuance_cone_motion_kmh": 289.9999999999999
     },
     "T3b": {
-      "sut_p_cut_at_exposure_horizon": 0.25880827038986803,
+      "sut_p_cut_at_exposure_horizon": 0.18147554741741054,
       "within_issuance_cone_motion_kmh": 290.0000000000003
     }
   },
@@ -38,18 +38,18 @@
       "largest_restorable_group_ecar_gbps": 200.0
     },
     "T1a": {
-      "claimant_ecar_at_exposure_horizon": 655.4772259098193,
+      "claimant_ecar_at_exposure_horizon": 2456.858167391468,
       "claimant_ecar_before_exposure_horizon": 0,
-      "claimant_ecar_min_over_horizons": 655.4772259098193,
-      "claimant_ecar_peak_over_horizons": 655.4772259098193,
-      "largest_restorable_group_ecar_gbps": 118.209
+      "claimant_ecar_min_over_horizons": 2456.858167391468,
+      "claimant_ecar_peak_over_horizons": 2456.858167391468,
+      "largest_restorable_group_ecar_gbps": 148.931
     },
     "T1b": {
-      "claimant_ecar_at_exposure_horizon": 63.047226672770286,
+      "claimant_ecar_at_exposure_horizon": 831.0704203860523,
       "claimant_ecar_before_exposure_horizon": 0,
-      "claimant_ecar_min_over_horizons": 63.047226672770286,
-      "claimant_ecar_peak_over_horizons": 63.047226672770286,
-      "largest_restorable_group_ecar_gbps": 3.485
+      "claimant_ecar_min_over_horizons": 831.0704203860523,
+      "claimant_ecar_peak_over_horizons": 831.0704203860523,
+      "largest_restorable_group_ecar_gbps": 24.643
     },
     "T2a": {
       "claimant_ecar_at_exposure_horizon": 529.4407568474861,
