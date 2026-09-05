@@ -136,15 +136,37 @@ def load_scenario(path: str | Path) -> ScenarioFile:
             raise ScenarioFileError(
                 f"{path}: forecast issue hour {issued_at!r} not in hours {hours}")
         parsed: dict[str, ConeAtHorizon] = {}
+        # Horizon keys must appear in ASCENDING `hours` order within one
+        # issuance. Not merely cosmetic: `oracle.latest_horizon` and every
+        # caller of it (escape_objective, spend_decider, assertions.
+        # assert_both_legs_exposed/assert_spend_is_real) pick "the latest
+        # horizon" as `next(reversed(issuance.horizons))` -- the last dict
+        # key -- rather than re-deriving it from `scenario.hours` on every
+        # call (the way `observation.latest_issuance` and
+        # `baseline._nearest_exposed_horizon` do for their own, different,
+        # "which issuance/horizon" questions). Guaranteeing the order HERE,
+        # once, at load time, is what makes that last-key idiom a structural
+        # fact about a loaded `ScenarioFile` rather than a silent convention
+        # an out-of-order YAML could violate undetected.
+        last_horizon_index = -1
         for horizon, cone in horizons.items():
             if horizon not in hours:
                 raise ScenarioFileError(
                     f"{path}: forecast horizon {horizon!r} not in hours {hours}")
-            if hours.index(horizon) <= hours.index(issued_at):
+            horizon_index = hours.index(horizon)
+            if horizon_index <= hours.index(issued_at):
                 raise ScenarioFileError(
                     f"{path}: issuance {issued_at!r} has horizon {horizon!r} at "
                     f"or before its own issue hour -- an issuance can only "
                     f"forecast the future")
+            if horizon_index <= last_horizon_index:
+                raise ScenarioFileError(
+                    f"{path}: issuance {issued_at!r} lists horizon {horizon!r} "
+                    f"out of chronological order -- horizons within one "
+                    f"issuance must appear in ascending `hours` order, since "
+                    f"callers pick 'the latest horizon' as the last one "
+                    f"listed")
+            last_horizon_index = horizon_index
             _require_keys(f"{path}:{issued_at}:{horizon}", cone, _HORIZON_KEYS)
             parsed[horizon] = ConeAtHorizon(
                 cone=cone["cone"], width_km=float(cone["width_km"]),

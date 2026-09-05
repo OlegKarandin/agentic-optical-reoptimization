@@ -22,7 +22,52 @@ from __future__ import annotations
 from .baseline import ScriptedDecider
 from .decisions import ConstraintDecision, ObjectiveDecision, TimingDecision
 from .observation import Observation
-from .scenario_file import ScenarioFile
+from .scenario_file import Issuance, ScenarioFile
+
+
+def latest_horizon(issuance: Issuance) -> str:
+    """The last horizon key `issuance` publishes -- the furthest-out cone of
+    the issuance and, since `scenario_file.load_scenario` enforces ascending
+    `hours` order for horizons within one issuance, genuinely the LATEST
+    one, not merely the last one a YAML author happened to list.
+
+    Shared by `escape_objective`, `spend_risk_group` and `assertions.
+    assert_both_legs_exposed` so "the latest horizon" is picked in exactly
+    one place. Assumes `issuance.horizons` is non-empty -- every caller here
+    checks that first and reports "no horizon" in its own idiom (an
+    `ObjectiveDecision("infeasible", ...)` for `escape_objective`, a raised
+    error for the rest)."""
+    return next(reversed(issuance.horizons))
+
+
+def spend_risk_group(scenario: ScenarioFile) -> tuple[str, str]:
+    """`(horizon, rg_id)` for `scenario.decision_hour`'s own forecast
+    issuance: its own latest horizon, and the risk-group id a constraints
+    decision avoiding it needs -- `f"rg_{{scenario.id}}_{{decision_hour}}_
+    {{horizon}}"`, the SAME id `runner._define_horizon_risk_groups` mints
+    for that (issuance, horizon) pair when `issuance.issued_at ==
+    decision_hour` (true by the twin-pair discipline: "the issuance read AT
+    d is the first thing that differs", assertions.py).
+
+    Factored out of `spend_decider` so `assertions.assert_spend_is_real` --
+    which must probe the EXACT SAME avoided risk group to be checking "the
+    spend decider's own avoid" at all, per both functions' own docstrings --
+    computes it from this ONE function rather than a second, hand-copied
+    `next(reversed(...))`/f-string that could silently drift from this one.
+
+    Raises `ValueError` if `scenario.decision_hour` has no forecast issuance
+    of its own, or that issuance has no horizon -- the id format above
+    assumes both. `assert_spend_is_real` catches this and re-raises as
+    `PairInvalid`, matching every other pre-flight failure in that module."""
+    d = scenario.decision_hour
+    issuance = scenario.forecast.get(d)
+    if issuance is None or not issuance.horizons:
+        raise ValueError(
+            f"{scenario.id}: decision hour {d!r} has no forecast issuance of "
+            f"its own (or that issuance has no horizon) -- "
+            f"oracle.spend_risk_group's risk-group id assumes both")
+    horizon = latest_horizon(issuance)
+    return horizon, f"rg_{scenario.id}_{d}_{horizon}"
 
 
 def escape_objective(obs: Observation, menu: dict) -> ObjectiveDecision:
@@ -59,13 +104,12 @@ def escape_objective(obs: Observation, menu: dict) -> ObjectiveDecision:
     `"infeasible"` if no candidate clears all four gates, or if the issuance
     publishes no horizon at all to score residual exposure against."""
     candidates = menu.get("candidates") or []
-    horizons = obs.issuance.horizons
-    if not horizons:
+    if not obs.issuance.horizons:
         return ObjectiveDecision(
             "infeasible", None,
             "oracle.escape_objective: this issuance publishes no horizon to "
             "score residual exposure against")
-    latest = next(reversed(horizons))
+    latest = latest_horizon(obs.issuance)
     survivors = [
         i for i, c in enumerate(candidates)
         if (c.get("path_delta") or {}).get("changes_working_path")
@@ -100,13 +144,9 @@ def spend_decider(scenario: ScenarioFile) -> ScriptedDecider:
     every other hour.
 
     Constraints avoid the decision-hour issuance's own LATEST horizon's risk
-    group -- `f"rg_{{scenario.id}}_{{decision_hour}}_{{H}}"`, the SAME id
-    `runner._define_horizon_risk_groups` mints for that (issuance, horizon)
-    when `issuance.issued_at == decision_hour` (true by the twin-pair
-    discipline: "the issuance read AT d is the first thing that differs",
-    assertions.py) -- under `basis="risk_group"`/`level="risk_group"`, so
-    this decider's own escape genuinely clears the full forecast cone rather
-    than only current exposure.
+    group (`spend_risk_group`) under `basis="risk_group"`/
+    `level="risk_group"`, so this decider's own escape genuinely clears the
+    full forecast cone rather than only current exposure.
 
     `claim_priority` states this decider's own bias for the harness's
     post-cut restoration replay (replay.py, Task 7): the service under test
@@ -119,15 +159,7 @@ def spend_decider(scenario: ScenarioFile) -> ScriptedDecider:
     ordering, not only the decision-hour one, so a cut at any other hour
     must see the same bias."""
     d = scenario.decision_hour
-    issuance = scenario.forecast.get(d)
-    if issuance is None or not issuance.horizons:
-        raise ValueError(
-            f"{scenario.id}: decision hour {d!r} has no forecast issuance of "
-            f"its own (or that issuance has no horizon) -- oracle."
-            f"spend_decider's risk-group id assumes one, matching "
-            f"runner._define_horizon_risk_groups's own `issuance.issued_at`")
-    horizon = next(reversed(issuance.horizons))
-    rg_id = f"rg_{scenario.id}_{d}_{horizon}"
+    horizon, rg_id = spend_risk_group(scenario)
     claim_priority = (scenario.service_under_test, *_claimants(scenario))
     return ScriptedDecider(
         f"oracle:spend:{scenario.id}",

@@ -1459,6 +1459,8 @@ async def assert_both_legs_exposed(
     EITHER leg alone is barely exposed. This check needs the two legs' own,
     separate probabilities, which is exactly what `p_cut_region` computes
     over one span union."""
+    from .oracle import latest_horizon
+
     edges = load_edges(topology_path)
     geometry = await service_geometry(client, topology_path, edges=edges)
     issuance = latest_issuance(scenario, scenario.decision_hour)
@@ -1466,7 +1468,7 @@ async def assert_both_legs_exposed(
         raise PairInvalid(
             f"{scenario.id}: the {scenario.decision_hour!r} issuance "
             f"publishes no horizon to check leg exposure against")
-    horizon = next(reversed(issuance.horizons))
+    horizon = latest_horizon(issuance)
     cone = issuance.horizons[horizon]
     sut = scenario.service_under_test
     working = geometry.cuttable_spans.get(sut, ())
@@ -1493,9 +1495,9 @@ async def assert_spend_is_real(
     paper one. Replays this half's realized cuts strictly before the
     decision hour (the same discipline `menu_at_decision_hour` uses),
     defines the decision-hour issuance's own latest-horizon risk group
-    EXACTLY as `oracle.spend_decider`'s own constraints decision would (the
-    same `f"rg_{{scenario.id}}_{{d}}_{{H}}"` id, the same avoid/basis/
-    level), reads the real menu under it, and runs `oracle.escape_objective`
+    EXACTLY as `oracle.spend_decider`'s own constraints decision would (via
+    the SAME `oracle.spend_risk_group` helper, so the two can never drift
+    apart), reads the real menu under it, and runs `oracle.escape_objective`
     over it -- the SAME function `oracle.spend_decider` is wired to.
 
     The pick must exist (not `"infeasible"`), charge exactly one spare
@@ -1505,7 +1507,7 @@ async def assert_spend_is_real(
     service at a residual p_cut at or below `residual_ceiling` -- an
     "escape" that is still nearly as exposed as before would not be a real
     spend."""
-    from .oracle import escape_objective
+    from .oracle import escape_objective, spend_risk_group
 
     edges = load_edges(topology_path)
     geometry = await service_geometry(client, topology_path, edges=edges)
@@ -1517,14 +1519,11 @@ async def assert_spend_is_real(
             await call_tool_json(client, "inject_failure",
                                  {"asset_ids": list(cuts)})
 
-    issuance = scenario.forecast.get(d)
-    if issuance is None or not issuance.horizons:
-        raise PairInvalid(
-            f"{scenario.id}: decision hour {d!r} publishes no forecast "
-            f"issuance of its own, or that issuance has no horizon -- "
-            f"oracle.spend_decider's own risk-group id assumes both")
-    horizon = next(reversed(issuance.horizons))
-    rg_id = f"rg_{scenario.id}_{d}_{horizon}"
+    try:
+        horizon, rg_id = spend_risk_group(scenario)
+    except ValueError as e:
+        raise PairInvalid(str(e)) from e
+    issuance = scenario.forecast[d]
 
     topo = await call_tool_json(client, "get_topology", {"layer": "optical"})
     filter_fn = get_filter(EVENT_TYPE)

@@ -60,6 +60,30 @@ def test_horizon_at_or_before_its_own_issue_hour_is_rejected(
         load_scenario(write_scenario(bad))
 
 
+def test_horizons_within_one_issuance_must_be_chronologically_ordered(
+    write_scenario, example_scenario_yaml,
+):
+    """t0's own issuance publishes t1 THEN t3 (ascending `hours` order) --
+    swapping the two lines makes it publish t3 before t1, which must be
+    rejected at load time. `oracle.latest_horizon` (and every caller of it:
+    `escape_objective`, `spend_decider`, `assertions.
+    assert_both_legs_exposed`/`assert_spend_is_real`) picks "the latest
+    horizon" as `next(reversed(issuance.horizons))` -- the LAST dict key --
+    which only means anything if `load_scenario` guarantees ascending order
+    here, once, rather than leaving it a silent YAML-authoring convention."""
+    t1_line = ("    t1: {cone: {type: Polygon, coordinates: "
+               "[[[81.0, 25.0], [81.1, 25.0], [81.1, 25.1], [81.0, 25.0]]]}, "
+               "width_km: 190, center: {lat: 25.0, lon: 81.0}}\n")
+    t3_line = ("    t3: {cone: {type: Polygon, coordinates: "
+               "[[[81.0, 25.0], [81.1, 25.0], [81.1, 25.1], [81.0, 25.0]]]}, "
+               "width_km: 90, center: {lat: 25.0, lon: 81.0}}\n")
+    assert t1_line in example_scenario_yaml
+    assert t3_line in example_scenario_yaml
+    bad = example_scenario_yaml.replace(t1_line + t3_line, t3_line + t1_line)
+    with pytest.raises(ScenarioFileError, match="chronological order"):
+        load_scenario(write_scenario(bad))
+
+
 def test_the_depot_keys_are_required(write_scenario, example_scenario_yaml):
     # scenario_file.py's docstring is explicit: a misspelled key is a silently
     # different episode. `spare_inventory_` typed for `spare_inventory` would
