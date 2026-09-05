@@ -350,6 +350,14 @@ def test_action_payloads_defaults_hours_to_empty_for_positional_callers():
     assert payload["effective_at_hour"] is None
 
 
+def test_action_payloads_carry_origin_and_service():
+    a = runner.Action(hour="t1", hour_index=1, lever="optical_reroute",
+                      effective_at_index=3, spares={"x": 1}, service_id="s",
+                      origin="harness")
+    (p,) = runner.action_payloads([a], hours=("t0", "t1", "t2", "t3"))
+    assert p["origin"] == "harness" and p["service_id"] == "s"
+
+
 def _scenario(tmp_path):
     path = tmp_path / "SMOKE.yaml"
     path.write_text(SMOKE, encoding="utf-8")

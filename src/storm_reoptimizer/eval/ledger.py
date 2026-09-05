@@ -140,10 +140,14 @@ class SpareLedger:
                 "needed": needed, "inventory": dict(self.inventory)}
 
     def debit(self, candidate: dict, *, hour: str,
-              service_id: str) -> dict[str, int]:
+              service_id: str, origin: str = "decider") -> dict[str, int]:
         """Consume this candidate's spares at every site it charges. Raises
         InsufficientSpares and changes nothing if any charged site cannot
-        cover it."""
+        cover it.
+
+        `origin` distinguishes spares spent by the decider's own choices from
+        spares spent by the harness's own deterministic restoration logic
+        ("harness") -- later scoring needs to tell the two apart."""
         needed = spares_needed(candidate, self.oms_nodes)
         site = self._binding_site(needed)
         if site is not None:
@@ -152,5 +156,6 @@ class SpareLedger:
             self.inventory[charged_site] = self._stock(charged_site) - count
         if needed:
             self.debits.append(
-                {"hour": hour, "service_id": service_id, "spares": needed})
+                {"hour": hour, "service_id": service_id, "spares": needed,
+                 "origin": origin})
         return needed

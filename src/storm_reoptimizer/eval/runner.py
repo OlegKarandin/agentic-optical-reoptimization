@@ -82,6 +82,12 @@ class Action:
     # it. A dict field makes Action unhashable in practice; nothing in the
     # harness hashes one.
     avoid: dict = field(default_factory=dict)
+    # Which side of the harness spent the spares: the decider's own choice
+    # ("decider", the default -- every action run_episode records today) or
+    # the harness's own deterministic restoration logic ("harness", added by
+    # a later post-cut-restoration task). Last field so existing positional
+    # constructions keep working.
+    origin: str = "decider"
 
 
 def action_payloads(actions, hours=()) -> tuple[dict, ...]:
@@ -101,7 +107,8 @@ def action_payloads(actions, hours=()) -> tuple[dict, ...]:
     index that runs past the end of a real `hours` list -- e.g. acting on the
     episode's last hour with a lead time of 1."""
     return tuple({"hour": a.hour, "lever": a.lever, "spares": a.spares,
-                  "avoid": a.avoid,
+                  "avoid": a.avoid, "origin": a.origin,
+                  "service_id": a.service_id,
                   "effective_at_index": a.effective_at_index,
                   "effective_at_hour": (hours[a.effective_at_index]
                                         if a.effective_at_index < len(hours)
@@ -684,6 +691,30 @@ async def _define_horizon_risk_groups(
     return rg_ids
 
 
+async def try_commit(counting, index, candidate: dict, service_id: str, *,
+                     prefix: str, basis: str, level: str
+                     ) -> tuple[dict | None, dict | None]:
+    """validate_plan + commit_plan for one candidate under baseline="standing".
+    Returns (commit_result, None) on success or (None, rejection) -- the same
+    rejection dicts run_episode has always recorded."""
+    try:
+        plan = plan_from_candidate(index, candidate, service_id, prefix=prefix)
+    except PlanTranslationError as exc:
+        return None, {"type": "plan_translation_failed", "message": str(exc)}
+    report = await counting.call("validate_plan", {
+        "plan": plan, "basis": basis, "level": level, "baseline": "standing"})
+    if not report["ok"]:
+        return None, {"type": "validation_violations",
+                      "violations": report["violations"]}
+    commit = await counting.call("commit_plan", {
+        "plan": plan, "dry_run": False, "confirm": True,
+        "basis": basis, "level": level, "baseline": "standing"})
+    if commit["status"] != "committed":
+        return None, {"type": "commit_" + commit["status"],
+                      "validation": commit.get("validation")}
+    return commit, None
+
+
 async def run_episode(
     client: Client, scenario: ScenarioFile, decider: Decider, *,
     topology_path: str | Path, run_index: int = 0,
@@ -852,35 +883,19 @@ async def run_episode(
                     step["outcome"] = "insufficient_spares"
                     continue
 
-                try:
-                    plan = plan_from_candidate(
-                        index, candidate, scenario.service_under_test,
-                        prefix=f"eval-{hour}-{iteration}")
-                except PlanTranslationError as exc:
-                    last_rejection = {"type": "plan_translation_failed",
-                                      "message": str(exc)}
+                commit, rejection = await try_commit(
+                    counting, index, candidate, scenario.service_under_test,
+                    prefix=f"eval-{hour}-{iteration}",
+                    basis=constraints.basis, level=constraints.level)
+                if rejection is not None:
+                    last_rejection = rejection
                     record["rejections"].append(last_rejection)
-                    step["outcome"] = "plan_translation_failed"
-                    continue
-
-                report = await counting.call("validate_plan", {
-                    "plan": plan, "basis": constraints.basis,
-                    "level": constraints.level})
-                if not report["ok"]:
-                    last_rejection = {"type": "validation_violations",
-                                      "violations": report["violations"]}
-                    record["rejections"].append(last_rejection)
-                    step["outcome"] = "rejected"
-                    continue
-
-                commit = await counting.call("commit_plan", {
-                    "plan": plan, "dry_run": False, "confirm": True,
-                    "basis": constraints.basis, "level": constraints.level})
-                if commit["status"] != "committed":
-                    last_rejection = {"type": "commit_" + commit["status"],
-                                      "validation": commit.get("validation")}
-                    record["rejections"].append(last_rejection)
-                    step["outcome"] = commit["status"]
+                    if rejection["type"] == "validation_violations":
+                        step["outcome"] = "rejected"
+                    elif rejection["type"].startswith("commit_"):
+                        step["outcome"] = rejection["type"][len("commit_"):]
+                    else:
+                        step["outcome"] = rejection["type"]
                     continue
 
                 spares = ledger.debit(candidate, hour=hour,

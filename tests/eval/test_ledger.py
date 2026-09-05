@@ -92,6 +92,23 @@ def test_the_rejection_names_the_binding_site():
     assert ledger.inventory == {"satna": 0}      # nothing changed
 
 
+def test_debit_records_origin():
+    ledger = SpareLedger(inventory={"satna": 1}, depot_site="satna",
+                         oms_nodes={"oms_a": ["satna", "rewa"]})
+    cand = {"new_lightpaths": [{"oms_sequence": ["oms_a"]}], "reused_lightpaths": []}
+    ledger.debit(cand, hour="t3", service_id="c", origin="harness")
+    assert ledger.debits == [{"hour": "t3", "service_id": "c",
+                              "spares": {"satna": 1, "rewa": 1}, "origin": "harness"}]
+
+
+def test_debit_origin_defaults_to_decider():
+    ledger = SpareLedger(inventory={"satna": 1}, depot_site="satna",
+                         oms_nodes={"oms_a": ["satna", "rewa"]})
+    cand = {"new_lightpaths": [{"oms_sequence": ["oms_a"]}], "reused_lightpaths": []}
+    ledger.debit(cand, hour="t1", service_id="s")
+    assert ledger.debits[0]["origin"] == "decider"
+
+
 def test_the_word_pair_has_left_the_module():
     # A pair spans two sites and cannot be scoped to one. `pairs_needed` is
     # renamed, not aliased -- an alias would let the old, site-blind reading
