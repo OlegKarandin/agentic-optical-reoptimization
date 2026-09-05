@@ -35,7 +35,15 @@ _TOP_LEVEL_KEYS = {
 }
 _OPTIONAL_TOP_LEVEL_KEYS = {"pair"}   # omitted for singleton episodes (D1)
 _GOLD_KEYS = {"survived", "max_spares_wasted", "decision_at_t0", "label",
-              "rationale"}
+              "rationale", "outcome_gbps_h", "min_margin_gbps_h"}
+# T1 spend-or-hold redesign (Task 8): the OUTCOME the oracle enumerator
+# (a later task) scores each of the two candidate decisions against, so
+# `scoring.episode_metrics` can grade the episode on Gbps-hours lost against
+# the best of those two outcomes (`regret_gbps_h`) rather than on a bare
+# act/wait label match alone. Optional -- only episodes using the
+# `spare_action_by_deadline` label rule populate them; every other episode's
+# gold stays exactly as strict as it always was.
+_OPTIONAL_GOLD_KEYS = {"outcome_gbps_h", "min_margin_gbps_h"}
 _HORIZON_KEYS = {"cone", "width_km", "center"}
 
 
@@ -63,6 +71,17 @@ class Gold:
     decision_at_t0: str      # "act" | "wait"
     label: str               # the single categorical rules.py predicts
     rationale: str           # the expected-cost arithmetic behind the label
+    # T1 spend-or-hold redesign: the two candidate decisions' own outcome, in
+    # Gbps-hours lost -- {"spend": ..., "hold": ...} -- so `scoring.
+    # episode_metrics` can compute `regret_gbps_h` against the BEST of the
+    # two, not against the label alone. Populated by a later task's oracle
+    # enumerator; None for every episode not using the
+    # `spare_action_by_deadline` label rule.
+    outcome_gbps_h: dict[str, float] | None = None
+    # The smallest of the two outcomes' margin over the other, in Gbps-hours
+    # -- a diagnostic scalar the oracle enumerator records alongside
+    # outcome_gbps_h; not consumed by scoring.py itself.
+    min_margin_gbps_h: float | None = None
 
 
 @dataclass(frozen=True)
@@ -139,13 +158,20 @@ def load_scenario(path: str | Path) -> ScenarioFile:
                 f"{path}: realized hour {hour!r} not in hours {hours}")
         realized[hour] = tuple(assets)
 
-    _require_keys(f"{path}:gold", raw["gold"], _GOLD_KEYS)
+    _require_keys(f"{path}:gold", raw["gold"], _GOLD_KEYS,
+                  optional=_OPTIONAL_GOLD_KEYS)
+    raw_outcome = raw["gold"].get("outcome_gbps_h")
+    raw_margin = raw["gold"].get("min_margin_gbps_h")
     gold = Gold(
         survived=tuple(raw["gold"]["survived"]),
         max_spares_wasted=int(raw["gold"]["max_spares_wasted"]),
         decision_at_t0=raw["gold"]["decision_at_t0"],
         label=raw["gold"]["label"],
-        rationale=raw["gold"]["rationale"])
+        rationale=raw["gold"]["rationale"],
+        outcome_gbps_h=({str(k): float(v) for k, v in raw_outcome.items()}
+                       if raw_outcome is not None else None),
+        min_margin_gbps_h=(float(raw_margin) if raw_margin is not None
+                          else None))
     if gold.decision_at_t0 not in {"act", "wait"}:
         raise ScenarioFileError(
             f"{path}: gold.decision_at_t0 must be 'act' or 'wait', "

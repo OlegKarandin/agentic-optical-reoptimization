@@ -9,6 +9,7 @@ from storm_reoptimizer.eval.runner import Action, EpisodeTrace
 from storm_reoptimizer.eval.scenario_file import load_scenario
 from storm_reoptimizer.eval.scoring import (
     cites_flip_variable, cross_twin_metrics, decision_label, episode_metrics,
+    gbps_hours_lost,
 )
 
 BASE = textwrap.dedent("""
@@ -18,7 +19,7 @@ BASE = textwrap.dedent("""
     state_file: eval/states/loaded-s17.json
     service_under_test: storm-svc-1
     track: hudhud
-    hours: [t0, t1, t2, t3]
+    hours: {hours}
     decision_hour: t1
     lead_time_hours: 1
     spares_on_hand: 1
@@ -37,9 +38,10 @@ BASE = textwrap.dedent("""
       decision_at_t0: wait
       label: {label}
       rationale: test fixture
+      {gold_extra}
     flip_variable: [svc-b, centre]
     metadata:
-      label_rule: timing_at_decision_hour
+      label_rule: {label_rule}
       cone_width_km: 90
       cone_motion_kmh: 20
       n_future_claimants: 1
@@ -50,18 +52,31 @@ BASE = textwrap.dedent("""
 """)
 
 
-def _scenario(tmp_path, sid, label):
+def _scenario(tmp_path, sid, label, *, label_rule="timing_at_decision_hour",
+             hours="[t0, t1, t2, t3]", outcome_gbps_h=None):
+    gold_extra = f"outcome_gbps_h: {outcome_gbps_h}" if outcome_gbps_h else ""
     path = tmp_path / f"{sid}.yaml"
-    path.write_text(BASE.format(id=sid, label=label), encoding="utf-8")
+    path.write_text(BASE.format(id=sid, label=label, hours=hours,
+                                label_rule=label_rule, gold_extra=gold_extra),
+                    encoding="utf-8")
     return load_scenario(path)
 
 
 def _trace(*, timing_at_t1="wait", raw_at_t0="wait", effective_at_t0="wait",
            actions=(), dropped=(), affected=None,
            rejections_at=(), committed_at=(), reasoning="the cone is centred "
-           "on svc-b, so the spare is worth more held"):
-    hours = []
-    for hour in ("t0", "t1", "t2", "t3"):
+           "on svc-b, so the spare is worth more held",
+           hours=("t0", "t1", "t2", "t3"), demands=None, debits=()):
+    # `dropped` grew a second shape (Task 8): a dict {hour: [service_id,
+    # ...]} populates each hour's own `dropped_after_cut` (what the loss
+    # metrics read), while the original flat tuple/list still only feeds
+    # `final_routing["dropped"]["services"]` (what `services_survived`
+    # reads) -- existing callers pass the flat shape and are unaffected.
+    dropped_after_cut = dropped if isinstance(dropped, dict) else {}
+    flat_dropped = (sorted({s for svcs in dropped.values() for s in svcs})
+                   if isinstance(dropped, dict) else dropped)
+    records = []
+    for hour in hours:
         if hour == "t0":
             action = raw_at_t0
         elif hour == "t1":
@@ -72,7 +87,7 @@ def _trace(*, timing_at_t1="wait", raw_at_t0="wait", effective_at_t0="wait",
         # be forced to disagree (effective_at_t0), matching what the runner
         # actually produces when a t0 "act" commit turns out inert.
         effective = effective_at_t0 if hour == "t0" else action
-        hours.append({
+        records.append({
             "hour": hour,
             "services": ["storm-svc-1", "svc-b"],
             "timing": {"action": action, "reasoning": reasoning},
@@ -81,14 +96,17 @@ def _trace(*, timing_at_t1="wait", raw_at_t0="wait", effective_at_t0="wait",
             "rejections": [{"type": "validation_violations"}]
             if hour in rejections_at else [],
             "committed": hour in committed_at,
+            "dropped_after_cut": list(dropped_after_cut.get(hour, [])),
+            "demands": dict(demands) if demands else {},
         })
     return EpisodeTrace(
         scenario_id="X", decider_name="test", run_index=0,
-        hours=tuple(hours), actions=tuple(actions), ledger_debits=(),
+        hours=tuple(records), actions=tuple(actions),
+        ledger_debits=tuple(debits),
         spares_remaining=1, terminal_status="converged",
         final_routing={"dropped": {"services": [
             {"service_id": s, "reason": "down", "on_link": None}
-            for s in dropped]}},
+            for s in flat_dropped]}},
         affected_by_hour=affected or {}, tool_calls=7, wall_clock_s=1.0)
 
 
@@ -185,3 +203,48 @@ def test_pair_solved_needs_both_halves_right(tmp_path):
                               b, _trace(timing_at_t1="wait"))
     assert half["pair_solved"] is False
     assert half["halves_correct"] == 1
+
+
+# T1 spend-or-hold redesign (Task 8): `spare_action_by_deadline` reads
+# whether the DECIDER (not the harness) spent a spare on the SUT before it
+# needed to be cut, and `gbps_hours_lost`/`regret_gbps_h` turn the episode
+# into one comparable outcome number, graded against the oracle's own two
+# candidate outcomes (`Gold.outcome_gbps_h`).
+def test_spare_action_spend_when_decider_debit_lands_before_cut(tmp_path):
+    s = _scenario(tmp_path, "X", "spend", label_rule="spare_action_by_deadline")
+    t = _trace(actions=(Action("t1", 1, "optical_reroute", 3, {"d": 1}, "storm-svc-1"),),
+               debits=({"hour": "t1", "service_id": "storm-svc-1", "spares": {"d": 1},
+                        "origin": "decider"},), dropped={"t3": ["svc-b"]})
+    assert decision_label(s, t) == "spend"
+
+
+def test_harness_debit_never_counts_as_spend(tmp_path):
+    s = _scenario(tmp_path, "X", "hold", label_rule="spare_action_by_deadline")
+    t = _trace(actions=(Action("t3", 3, "optical_reroute", 5, {"d": 1}, "storm-svc-1",
+                               origin="harness"),),
+               debits=({"hour": "t3", "service_id": "storm-svc-1", "spares": {"d": 1},
+                        "origin": "harness"},), dropped={"t3": ["storm-svc-1"]})
+    assert decision_label(s, t) == "hold"
+
+
+def test_gbps_hours_lost_counts_until_restoration_lands(tmp_path):
+    # hours t0..t5; svc-b (100G) dropped at t3 (index 3); harness restoration
+    # effective at index 5 -> down for t3 and t4 = 2 h x 100 G.
+    s = _scenario(tmp_path, "X", "hold", label_rule="spare_action_by_deadline",
+                  hours="[t0, t1, t2, t3, t4, t5]")
+    t = _trace(hours=("t0", "t1", "t2", "t3", "t4", "t5"),
+               demands={"storm-svc-1": 300.0, "svc-b": 100.0},
+               dropped={"t3": ["svc-b"]},
+               actions=(Action("t3", 3, "optical_reroute", 5, {"d": 1}, "svc-b",
+                               origin="harness"),))
+    assert gbps_hours_lost(s, t) == {"svc-b": 200.0}
+
+
+def test_regret_is_total_minus_best_gold_outcome(tmp_path):
+    s = _scenario(tmp_path, "X", "hold", label_rule="spare_action_by_deadline",
+                  outcome_gbps_h="{spend: 600.0, hold: 400.0}")
+    t = _trace(demands={"storm-svc-1": 300.0, "svc-b": 100.0},
+               dropped={"t3": ["svc-b"]})          # never restored: 100 G x 1 h
+    m = episode_metrics(s, t)
+    assert m["gbps_hours_lost_total"] == 100.0
+    assert m["regret_gbps_h"] == pytest.approx(100.0 - 400.0)

@@ -645,11 +645,19 @@ def assert_flip_dominates(a: ScenarioFile, b: ScenarioFile,
 
 def _label_if_committed(*, label_rule: str, candidate: dict,
                         avoid_used: dict, wide_avoid_risk_group: str | None,
-                        label_by_lever: dict | None) -> str | None:
+                        label_by_lever: dict | None,
+                        depot_spares_needed: int = 0) -> str | None:
     """The label `scoring.decision_label` would read off a HYPOTHETICAL commit
     of `candidate` under `avoid_used`, without a trace or a rollout -- the same
-    three `label_rule` branches that function implements, applied to one
+    four `label_rule` branches that function implements, applied to one
     candidate instead of a replayed hour's `iterations` record.
+
+    `depot_spares_needed` is the `spare_action_by_deadline` branch's own
+    input: this function never sees a ledger or an oms_nodes map, so the
+    caller (`_check_no_free_escape`, whose only candidates reaching here
+    already cost zero pairs total -- see its own docstring) passes the
+    depot's own share of that total. Defaulted to 0 so every other
+    `label_rule`'s existing callers are unaffected.
 
     Added for Finding #5 (2026-08-26 re-review of W1.6): `_check_no_free_
     escape` used to flag any zero-pair, service-moving candidate regardless of
@@ -669,6 +677,8 @@ def _label_if_committed(*, label_rule: str, candidate: dict,
         return "wide" if wide_avoid_risk_group in chosen else "narrow"
     if label_rule == "chosen_lever_at_decision_hour":
         return (label_by_lever or {}).get(candidate.get("lever"))
+    if label_rule == "spare_action_by_deadline":
+        return "spend" if depot_spares_needed else "hold"
     raise ValueError(f"unknown label_rule {label_rule!r}")
 
 
@@ -725,7 +735,14 @@ def _check_no_free_escape(scenario_id: str, menu: dict, current: set[str], *,
             label_rule=label_rule, candidate=candidate,
             avoid_used=reference_avoid,
             wide_avoid_risk_group=wide_avoid_risk_group,
-            label_by_lever=label_by_lever)
+            label_by_lever=label_by_lever,
+            # Always 0 here: the gate above already requires this
+            # candidate's total spares_needed (summed across every site) to
+            # be zero, so its depot-specific share can never be nonzero
+            # either. Passed explicitly rather than left to the default so a
+            # future caller of _label_if_committed cannot assume the default
+            # is always the right answer for it too.
+            depot_spares_needed=0)
         if label == gold_label:
             continue    # free AND moves the service, but grades the same
         raise PairInvalid(

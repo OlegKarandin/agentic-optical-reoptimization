@@ -801,6 +801,12 @@ async def run_episode(
         # The roster scoring reads to know who could have survived -- the
         # final simulate_ip_routing reports links, not services.
         record["services"] = [s["id"] for s in services]
+        # scoring.gbps_hours_lost's demand input -- the SAME roster fetch
+        # above, so a service's charged demand and the one scoring reads can
+        # never disagree. record["services"] only ever carried ids; nothing
+        # before this needed the per-service Gbps figure at hour-record
+        # granularity.
+        record["demands"] = {s["id"]: s["demand_gbps"] for s in services}
         obs_kwargs = dict(service_spans=geometry.cuttable_spans,
                           services=services,
                           spares_on_hand=ledger.on_hand,

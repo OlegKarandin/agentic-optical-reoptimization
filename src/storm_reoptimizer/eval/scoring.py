@@ -16,7 +16,20 @@ Flip-variable citation is NECESSARY, NOT SUFFICIENT. It is cheap entity
 matching, and it catches "right answer, unrelated reason", which a bare
 outcome metric cannot see. It is not reasoning verification: an agent
 prompted to name every variable passes it with unrelated reasoning. Say so
-wherever the number is reported."""
+wherever the number is reported.
+
+T1 spend-or-hold redesign (Task 8) adds a fourth rule, `spare_action_by_
+deadline`, and the OUTCOME metric that makes T1 gradeable on something other
+than a raw label match: `gbps_hours_lost` turns a rollout into one number per
+service actually cut -- demand times how long it stayed down before anything
+(a harness restoration, or nothing) brought it back -- and `regret_gbps_h`
+compares the episode's own total against the best of the two GOLD outcomes
+(`Gold.outcome_gbps_h`). Both are defined ONLY over consecutive `t0..tN` hour
+labels: T2/T3's own scenarios use a non-positional label set
+(`[t0, t1, t2, t6]`), and the loss arithmetic below indexes hours
+positionally -- reading it against those would silently misread which hour a
+given index names. `episode_metrics` therefore only populates the loss keys
+for episodes whose `metadata.label_rule` is `spare_action_by_deadline`."""
 from __future__ import annotations
 
 from collections import Counter
@@ -25,11 +38,115 @@ from .runner import EpisodeTrace
 from .scenario_file import ScenarioFile
 
 LABEL_RULES = ("timing_at_decision_hour", "avoid_horizon_at_decision_hour",
-               "chosen_lever_at_decision_hour")
+               "chosen_lever_at_decision_hour", "spare_action_by_deadline")
 
 
 def _hour_record(trace: EpisodeTrace, hour: str) -> dict | None:
     return next((h for h in trace.hours if h["hour"] == hour), None)
+
+
+def _assert_consecutive_hours(scenario: ScenarioFile) -> None:
+    """The loss arithmetic (`_cut_index_by_service`, `gbps_hours_lost`)
+    indexes `scenario.hours` positionally -- `restore_index` and `cut_index`
+    are both raw ints into that tuple. That is only a safe thing to do when
+    the labels themselves are `t0..tN` in order; T2/T3's own scenarios use
+    `[t0, t1, t2, t6]`, where index 3 names the hour LABELLED t6, and reading
+    this arithmetic against that would silently score the wrong hour."""
+    expected = tuple(f"t{i}" for i in range(len(scenario.hours)))
+    if scenario.hours != expected:
+        raise ValueError(
+            f"{scenario.id}: spare_action_by_deadline/gbps_hours_lost "
+            f"require consecutive hour labels {expected}, got "
+            f"{scenario.hours}")
+
+
+def _cut_index_by_service(scenario: ScenarioFile,
+                          trace: EpisodeTrace) -> dict[str, int]:
+    """First hour index at which each service was ACTUALLY cut (Loss
+    definition, T1 spend-or-hold redesign spec 5.1): the first hour whose
+    `dropped_after_cut` names it, plus one special case for the service under
+    test alone -- a SUT that is never in `dropped_after_cut` (nothing the
+    server calls a drop) but whose own decider spent a spare too late against
+    a REAL realized cut still counts as cut, at the hour the cut was
+    realized, not at some later hour a tardy action pretends to fix."""
+    _assert_consecutive_hours(scenario)
+    cut_index: dict[str, int] = {}
+    for i, hour in enumerate(scenario.hours):
+        record = _hour_record(trace, hour) or {}
+        for svc in record.get("dropped_after_cut") or ():
+            cut_index.setdefault(svc, i)
+
+    sut = scenario.service_under_test
+    if sut not in cut_index:
+        c_realized = next(
+            (i for i, hour in enumerate(scenario.hours)
+             if sut in trace.affected_by_hour.get(hour, ())), None)
+        if c_realized is not None and any(
+                a.service_id == sut and a.origin == "decider" and a.spares
+                and a.effective_at_index > c_realized
+                for a in trace.actions):
+            cut_index[sut] = c_realized
+    return cut_index
+
+
+def _demands_by_service(trace: EpisodeTrace) -> dict[str, float]:
+    """The per-service Gbps figure `runner.run_episode` now writes every
+    hour (`record["demands"]`, from the same `get_services` roster fetch the
+    hour's `record["services"]` ids already come from). Demand does not
+    change mid-episode, so the first hour that carries the field is enough."""
+    for hour in trace.hours:
+        demands = hour.get("demands")
+        if demands:
+            return demands
+    return {}
+
+
+def gbps_hours_lost(scenario: ScenarioFile, trace: EpisodeTrace) -> dict[str, float]:
+    """Gbps-hours lost per service actually cut this episode: demand times
+    how many hours it stayed down, from its own `cut_index` up to whichever
+    action next touches it (a harness restoration or a decider reroute) or
+    episode end, whichever comes first. See `_cut_index_by_service` and the
+    module docstring's Loss definition."""
+    hours = scenario.hours
+    cut_index = _cut_index_by_service(scenario, trace)
+    demands = _demands_by_service(trace)
+    losses: dict[str, float] = {}
+    for svc, cut in cut_index.items():
+        restore = min(
+            (a.effective_at_index for a in trace.actions
+             if a.service_id == svc and a.effective_at_index > cut),
+            default=len(hours))
+        span = min(restore, len(hours)) - cut
+        losses[svc] = demands.get(svc, 0.0) * span
+    return losses
+
+
+def _spare_action_by_deadline_label(scenario: ScenarioFile,
+                                    trace: EpisodeTrace) -> str:
+    """"spend" iff a DECIDER-origin ledger debit on the SUT is backed by an
+    action whose `effective_at_index` lands at or before the deadline: the
+    SUT's own `cut_index` when it was actually cut (including the
+    acted-too-late special case), or the exposure horizon from the decision
+    hour when it never was. A harness-origin debit -- the harness's own
+    deterministic post-cut restoration -- never counts; only the DECIDER's
+    own choice is the graded decision."""
+    sut = scenario.service_under_test
+    cut_index = _cut_index_by_service(scenario, trace)
+    deadline = cut_index.get(sut)
+    if deadline is None:
+        deadline = (scenario.hours.index(scenario.decision_hour)
+                   + int(scenario.metadata["exposure_horizon_hours"]))
+    for debit in trace.ledger_debits:
+        if debit["service_id"] != sut or debit.get("origin") != "decider":
+            continue
+        action = next(
+            (a for a in trace.actions
+             if a.hour == debit["hour"] and a.service_id == debit["service_id"]
+             and a.origin == debit.get("origin", "decider")
+             and a.spares == debit["spares"]), None)
+        if action is not None and action.effective_at_index <= deadline:
+            return "spend"
+    return "hold"
 
 
 def decision_label(scenario: ScenarioFile, trace: EpisodeTrace) -> str | None:
@@ -40,6 +157,10 @@ def decision_label(scenario: ScenarioFile, trace: EpisodeTrace) -> str | None:
         raise ValueError(
             f"{scenario.id}: metadata.label_rule must be one of "
             f"{list(LABEL_RULES)}, got {rule!r}")
+
+    if rule == "spare_action_by_deadline":
+        return _spare_action_by_deadline_label(scenario, trace)
+
     record = _hour_record(trace, scenario.decision_hour)
     if record is None:
         return None
@@ -99,6 +220,22 @@ def episode_metrics(scenario: ScenarioFile, trace: EpisodeTrace) -> dict:
                     for h in trace.hours)
 
     t0 = _hour_record(trace, hours[0]) or {}
+
+    # T1 spend-or-hold redesign (Task 8): the OUTCOME metrics, populated only
+    # for episodes graded on `spare_action_by_deadline` -- the loss
+    # arithmetic requires consecutive `t0..tN` hours (`_assert_consecutive_
+    # hours`), which T2/T3's own scenarios (`[t0, t1, t2, t6]`) do not have.
+    if scenario.metadata.get("label_rule") == "spare_action_by_deadline":
+        losses = gbps_hours_lost(scenario, trace)
+        losses_total = sum(losses.values())
+        sut_cut_index = _cut_index_by_service(scenario, trace).get(sut)
+        regret = (losses_total - min(scenario.gold.outcome_gbps_h.values())
+                 if scenario.gold.outcome_gbps_h else None)
+        sut_working_cut_hour = (hours[sut_cut_index]
+                               if sut_cut_index is not None else None)
+    else:
+        losses, losses_total, regret, sut_working_cut_hour = {}, 0.0, None, None
+
     return {
         "scenario_id": scenario.id,
         "decider": trace.decider_name,
@@ -137,6 +274,10 @@ def episode_metrics(scenario: ScenarioFile, trace: EpisodeTrace) -> dict:
         "tool_calls": trace.tool_calls,
         "wall_clock_s": trace.wall_clock_s,
         "cites_flip_variable": cites_flip_variable(trace, scenario.flip_variable),
+        "gbps_hours_lost": losses,
+        "gbps_hours_lost_total": losses_total,
+        "regret_gbps_h": regret,
+        "sut_working_cut_hour": sut_working_cut_hour,
     }
 
 

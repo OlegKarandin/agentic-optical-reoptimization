@@ -148,3 +148,33 @@ def test_a_valid_non_empty_claimant_list_with_both_claim_keys_loads(
     s = load_scenario(write_scenario(ok))
     assert s.metadata["claimed_competing_ecar_gbps"] == 10.0
     assert s.metadata["claimed_competing_ecar_at"] == "t3"
+
+
+# T1 spend-or-hold redesign (Task 8): gold.outcome_gbps_h/min_margin_gbps_h
+# are the oracle enumerator's own OUTCOME figures for the two candidate
+# decisions -- optional, since only spare_action_by_deadline episodes
+# populate them, and every other episode's gold stays exactly as strict as
+# it always was.
+def test_gold_outcome_gbps_h_and_min_margin_load_when_present(
+        write_scenario, example_scenario_yaml):
+    # NOT 6-space indent: after textwrap.dedent, conftest's `gold:` sub-keys
+    # (survived, rationale, ...) sit at 2-space indent, with the `rationale:
+    # |` block's own content one level deeper at 4. A line inserted at 4
+    # spaces or deeper, immediately after that block, is read as MORE of the
+    # literal block rather than a new gold key -- exactly the bug this
+    # comment is here to stop a future edit from reintroducing.
+    ok = example_scenario_yaml.replace(
+        "\nflip_variable:",
+        "\n  outcome_gbps_h: {spend: 1, hold: 2}"
+        "\n  min_margin_gbps_h: 0.5"
+        "\nflip_variable:")
+    s = load_scenario(write_scenario(ok))
+    assert s.gold.outcome_gbps_h == {"spend": 1.0, "hold": 2.0}
+    assert s.gold.min_margin_gbps_h == 0.5
+
+
+def test_gold_outcome_gbps_h_defaults_to_none_when_absent(
+        write_scenario, example_scenario_yaml):
+    s = load_scenario(write_scenario(example_scenario_yaml))
+    assert s.gold.outcome_gbps_h is None
+    assert s.gold.min_margin_gbps_h is None
