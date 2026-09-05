@@ -2,6 +2,7 @@
 and their own tests -- "a deliberately invalid pair (same gold both halves)
 must be rejected by assertions.py"."""
 import asyncio
+import dataclasses
 import textwrap
 from pathlib import Path
 
@@ -10,19 +11,20 @@ import pytest
 from storm_reoptimizer.eval.assertions import (
     PairInvalid, _binding_site_violations, _check_no_free_escape,
     _claimant_depot_violations, _claimant_exposure_violations,
-    _jabalpur_optical_reroute_candidate, assert_claim_is_one_lightpath,
-    assert_claimants_depot_eligible, assert_claimants_have_filterable_exposure,
-    assert_flip_dominates, assert_gold_choices_differ,
+    _jabalpur_optical_reroute_candidate, assert_both_legs_exposed,
+    assert_claim_is_one_lightpath, assert_claimants_depot_eligible,
+    assert_claimants_have_filterable_exposure, assert_flip_dominates,
+    assert_gold_choices_differ, assert_gold_matches_outcomes,
     assert_group_fits_one_lightpath, assert_issuance_prefix_shared,
     assert_no_global_policy_solves_the_suite,
-    assert_realized_cuts_pass_the_event_filter,
-    assert_sampling_error_within_margin, assert_shared_scalars_equal,
-    claimant_service_ids,
+    assert_realized_cuts_pass_the_event_filter, assert_sampling_error_within_margin,
+    assert_shared_scalars_equal, assert_spend_is_real, claimant_service_ids,
 )
 from storm_reoptimizer.eval.derived import FlipScalars
 from storm_reoptimizer.eval.scenario_file import (
     SCENARIOS_DIR, load_scenario,
 )
+from storm_reoptimizer.mcp_client import connect_server
 
 TOPOLOGY_PATH = (
     Path(__file__).parent.parent.parent
@@ -907,3 +909,214 @@ def test_an_empty_group_with_nothing_measurably_at_risk_is_fine():
     exposure = {"storm-svc-1": {"t3": {"p_cut": 0.001}}}
     assert _risk_group_coverage_violations(
         exposure, {"t3": []}, threshold=0.005) == []
+
+
+# `assert_gold_matches_outcomes` (T1 spend-or-hold redesign, Task 9). Pure --
+# the two policies' own simulated outcomes are handed in, never computed
+# here (a later task's oracle enumerator, run for real, produces them).
+def _with_gold(scenario, *, label=None, min_margin_gbps_h=None):
+    gold = scenario.gold
+    if label is not None:
+        gold = dataclasses.replace(gold, label=label)
+    if min_margin_gbps_h is not None:
+        gold = dataclasses.replace(gold, min_margin_gbps_h=min_margin_gbps_h)
+    return dataclasses.replace(scenario, gold=gold)
+
+
+def test_gold_matches_outcomes_when_the_label_is_the_argmin_by_enough(t1a):
+    scenario = _with_gold(t1a, label="spend", min_margin_gbps_h=100.0)
+    assert_gold_matches_outcomes(scenario, {"spend": 0.0, "hold": 600.0})
+
+
+def test_gold_matches_outcomes_rejects_a_label_that_is_not_the_argmin(t1a):
+    scenario = _with_gold(t1a, label="hold", min_margin_gbps_h=100.0)
+    with pytest.raises(PairInvalid, match="argmin"):
+        assert_gold_matches_outcomes(scenario, {"spend": 0.0, "hold": 600.0})
+
+
+def test_gold_matches_outcomes_rejects_a_margin_below_the_floor(t1a):
+    scenario = _with_gold(t1a, label="spend", min_margin_gbps_h=100.0)
+    with pytest.raises(PairInvalid, match="margin"):
+        assert_gold_matches_outcomes(scenario, {"spend": 0.0, "hold": 50.0})
+
+
+def test_gold_matches_outcomes_skips_the_margin_check_with_no_floor_declared(
+        t1a):
+    scenario = _with_gold(t1a, label="spend", min_margin_gbps_h=None)
+    assert_gold_matches_outcomes(scenario, {"spend": 0.0, "hold": 1.0})
+
+
+def test_gold_matches_outcomes_rejects_an_empty_outcomes_dict(t1a):
+    with pytest.raises(PairInvalid, match="no outcomes"):
+        assert_gold_matches_outcomes(t1a, {})
+
+
+# `assert_both_legs_exposed` / `assert_spend_is_real` (T1 spend-or-hold
+# redesign, Task 9) -- live, against the real server. Both pass/fail paths
+# are exercised against REAL geometry, not a forced/synthetic threshold:
+#
+# `assert_both_legs_exposed`: T1a's storm-svc-1 genuinely has both legs
+# exposed above the default floor (working 0.0969, protection 0.0657 --
+# confirmed live); T1b's does not (working 0.0969, protection 0.0176 -- the
+# protection leg sits under the floor because T1b's cone bearing points AWAY
+# from the claimant corridor, per T1b.yaml's own header comment). This is a
+# REAL, useful finding, not a test artifact: it means T1b as CURRENTLY
+# authored (pre-redesign; `label_rule: timing_at_decision_hour`, not yet
+# `spare_action_by_deadline`) does not yet satisfy the "real decision"
+# invariant this task's assertions exist to check -- exactly the gap a later
+# task's T1 rebuild has to close before Task 15 can run these against it.
+#
+# `assert_spend_is_real`: neither T1a nor T1b's storm-svc-1 CURRENTLY has a
+# real escape under the spend decider's own risk-group avoid (confirmed
+# live: T1a's wide, corridor-facing cone sweeps every aerial direction out
+# of satna, leaving `route_service` zero candidates; T1b's narrower cone
+# leaves candidates, but EVERY alternative route into allahabad funnels
+# through oms_jhansi_allahabad -- storm-svc-1's own protection leg's last
+# hop -- so every one of them collides with protection). Both are genuine,
+# live-confirmed properties of the CURRENT topology/scenario, not bugs in
+# this assertion -- again, exactly what the still-pending T1 rebuild has to
+# fix. The PASS path is exercised against a hand-built scenario reusing T1b's
+# OWN real cone (Task 14's real `claimant-satna-jabalpur-fwd`, UNPROTECTED --
+# `protection_path: []`, live-confirmed -- so `collides_with_protection` can
+# never bind for it) rerouting off its own direct satna<->jabalpur span: a
+# real, live, single-lightpath, non-inert escape exists and is picked.
+def _connected(loaded_state_path, local_server_command, local_server_env):
+    return connect_server(
+        TOPOLOGY_PATH, server_command=local_server_command,
+        env=local_server_env,
+        extra_args=["--state", str(loaded_state_path)])
+
+
+def test_both_legs_exposed_passes_on_t1a(
+        loaded_state_path, local_server_command, local_server_env):
+    scenario = load_scenario(SCENARIOS_DIR / "T1a.yaml")
+
+    async def _run():
+        async with _connected(
+                loaded_state_path, local_server_command, local_server_env
+        ) as client:
+            await assert_both_legs_exposed(
+                client, scenario, topology_path=TOPOLOGY_PATH)
+
+    asyncio.run(_run())
+
+
+def test_both_legs_exposed_rejects_t1b_whose_protection_is_barely_exposed(
+        loaded_state_path, local_server_command, local_server_env):
+    scenario = load_scenario(SCENARIOS_DIR / "T1b.yaml")
+
+    async def _run():
+        async with _connected(
+                loaded_state_path, local_server_command, local_server_env
+        ) as client:
+            with pytest.raises(PairInvalid, match="not both legs"):
+                await assert_both_legs_exposed(
+                    client, scenario, topology_path=TOPOLOGY_PATH)
+
+    asyncio.run(_run())
+
+
+# A hand-built scenario proving `assert_spend_is_real`'s PASS path against a
+# real escape: T1b's own t1-issuance t3 cone (bearing away from the
+# claimant corridor, so it never sweeps satna<->jabalpur), against the real,
+# live, UNPROTECTED claimant `claimant-satna-jabalpur-fwd` (satna->jabalpur,
+# 100 Gbps, `protection_path: []` -- confirmed live). Its own direct span
+# (`oms_satna_jabalpur`) is what the SUT would normally reroute onto for a
+# free escape, so avoiding whatever this cone's own risk group covers forces
+# a REAL, spare-consuming reroute -- unlike storm-svc-1, this service has no
+# protection to collide with, so `escape_objective`'s protection-collision
+# gate can never be the reason it fails.
+_SPEND_REAL_YAML = textwrap.dedent("""
+    id: SPEND_REAL_PASS
+    seed: 17
+    state_file: eval/states/loaded-s17.json
+    service_under_test: claimant-satna-jabalpur-fwd
+    track: hudhud
+    hours: [t0, t1, t2, t3]
+    decision_hour: t1
+    lead_time_hours: 1
+    spares_on_hand: 1
+    depot_site: satna
+    spare_inventory: {satna: 1}
+    damage_radius_km: 74
+    reference_avoid: {}
+    forecast:
+      t0:
+        t3: {cone: {type: Polygon, coordinates: []}, width_km: 90, center: {lat: 25.442800716819043, lon: 81.32777666666667}}
+      t1:
+        t3: {cone: {type: Polygon, coordinates: []}, width_km: 90, center: {lat: 25.389623000292865, lon: 81.82382629023604}}
+    realized: {}
+    gold:
+      survived: [claimant-satna-jabalpur-fwd]
+      max_spares_wasted: 0
+      decision_at_t0: wait
+      label: wait
+      rationale: assert_spend_is_real live-test fixture; not scored
+    flip_variable: [test]
+    metadata:
+      cone_width_km: 90
+      cone_motion_kmh: 20
+      n_future_claimants: 0
+      exposure_horizon_hours: 2
+      spares_on_hand: 1
+      claimant_services: []
+""")
+
+
+def _spend_real_scenario(tmp_path):
+    path = tmp_path / "SPEND_REAL_PASS.yaml"
+    path.write_text(_SPEND_REAL_YAML, encoding="utf-8")
+    return load_scenario(path)
+
+
+def test_spend_is_real_passes_on_a_real_unprotected_escape(
+        tmp_path, loaded_state_path, local_server_command, local_server_env):
+    scenario = _spend_real_scenario(tmp_path)
+
+    async def _run():
+        async with _connected(
+                loaded_state_path, local_server_command, local_server_env
+        ) as client:
+            await assert_spend_is_real(
+                client, scenario, topology_path=TOPOLOGY_PATH)
+
+    asyncio.run(_run())
+
+
+def test_spend_is_real_rejects_an_unreachable_residual_ceiling(
+        tmp_path, loaded_state_path, local_server_command, local_server_env):
+    """The same real escape as above, but a negative ceiling is unreachable
+    by construction (`p_cut` is a probability, never negative) -- proving
+    the residual check, not just the "no candidate" check, actually fires."""
+    scenario = _spend_real_scenario(tmp_path)
+
+    async def _run():
+        async with _connected(
+                loaded_state_path, local_server_command, local_server_env
+        ) as client:
+            with pytest.raises(PairInvalid, match="above the ceiling"):
+                await assert_spend_is_real(
+                    client, scenario, topology_path=TOPOLOGY_PATH,
+                    residual_ceiling=-1.0)
+
+    asyncio.run(_run())
+
+
+@pytest.mark.parametrize("half", ("T1a", "T1b"))
+def test_spend_is_real_rejects_storm_svc_1_which_has_no_escape_today(
+        half, loaded_state_path, local_server_command, local_server_env):
+    """Neither T1a nor T1b's storm-svc-1 currently has a real escape under
+    the spend decider's own avoid (see the module comment above) -- a real,
+    live-confirmed property of the CURRENT (pre-rebuild) T1 scenario, and
+    the failure mode this test documents rather than works around."""
+    scenario = load_scenario(SCENARIOS_DIR / f"{half}.yaml")
+
+    async def _run():
+        async with _connected(
+                loaded_state_path, local_server_command, local_server_env
+        ) as client:
+            with pytest.raises(PairInvalid, match="no real escape"):
+                await assert_spend_is_real(
+                    client, scenario, topology_path=TOPOLOGY_PATH)
+
+    asyncio.run(_run())

@@ -38,14 +38,18 @@ from ..geo_mapper import load_edges
 from ..mcp_client import call_tool_json
 from .agent import P_CUT_ENUMERATION_THRESHOLD
 from .baseline import BASELINE_VARIANTS, ForecastBlindBaseline, ScriptedDecider
-from .decisions import ConstraintDecision, ObjectiveDecision, TimingDecision
+from .cone import p_cut_region
+from .decisions import (
+    ConstraintDecision, ObjectiveDecision, TimingDecision, candidate_index,
+)
 from .derived import (
     DERIVED_TOLERANCE, FLIP_VARS, DerivedGeometry, FlipScalars,
     derived_geometry,
 )
-from .observation import build_observation
+from .observation import build_observation, latest_issuance
 from .runner import (
-    EVENT_TYPE, horizon_risk_group_asset_ids, run_episode, service_geometry,
+    EVENT_TYPE, horizon_risk_group_asset_ids, menu_for_prompt,
+    menu_with_path_facts, run_episode, service_geometry,
 )
 from .scenario_file import ScenarioFile
 from .scoring import decision_label, episode_metrics
@@ -1302,15 +1306,31 @@ async def assert_depot_is_the_binding_site(
 # Invariant 7.
 # The escape direction the exposure-and-depot design added a third aerial
 # edge at (satna<->jabalpur, CLAUDE.md's 2026-08-30 topology note) -- the
-# corridor T2's and T3's gold `optical_reroute` candidates escape along.
+# corridor T2's and T3's gold `optical_reroute` candidates escape along. The
+# default for every scenario that does not declare its own
+# `metadata.escape_route_node` (T1 spend-or-hold redesign, Task 9): T1 shares
+# T2/T3's topology and this same corridor, but a future scenario built
+# against a different topology, or one whose escape genuinely runs through a
+# different node, need not share T2/T3's hardcoded assumption.
 _ESCAPE_ROUTE_NODE = "jabalpur"
 
 
+def _escape_route_node(scenario: ScenarioFile) -> str:
+    """The corridor node `assert_escape_route_survives` requires an
+    `optical_reroute` candidate to touch, for THIS scenario -- declared via
+    `metadata.escape_route_node`, defaulting to `_ESCAPE_ROUTE_NODE`
+    (T2's/T3's own `jabalpur`) for every scenario that does not override
+    it."""
+    return scenario.metadata.get("escape_route_node", _ESCAPE_ROUTE_NODE)
+
+
 def _jabalpur_optical_reroute_candidate(
-    candidates, oms_nodes: dict[str, list[str]],
+    candidates, oms_nodes: dict[str, list[str]], *,
+    node: str = _ESCAPE_ROUTE_NODE,
 ) -> tuple[int | None, dict | None]:
     """The first `optical_reroute` candidate whose new lightpath's OMS route
-    touches `_ESCAPE_ROUTE_NODE`, or `(None, None)` if none exists."""
+    touches `node` (default `_ESCAPE_ROUTE_NODE`, T2's/T3's own corridor), or
+    `(None, None)` if none exists."""
     for index, candidate in enumerate(candidates):
         if candidate.get("lever") != "optical_reroute":
             continue
@@ -1318,7 +1338,7 @@ def _jabalpur_optical_reroute_candidate(
         for lightpath in candidate.get("new_lightpaths") or ():
             for oms_id in lightpath.get("oms_sequence") or ():
                 touched.update(oms_nodes.get(oms_id, ()))
-        if _ESCAPE_ROUTE_NODE in touched:
+        if node in touched:
             return index, candidate
     return None, None
 
@@ -1326,29 +1346,29 @@ def _jabalpur_optical_reroute_candidate(
 async def assert_escape_route_survives(
     client: Client, scenario: ScenarioFile,
 ) -> None:
-    """The `_ESCAPE_ROUTE_NODE` `optical_reroute` candidate T2's and T3's
-    gold decisions rely on still exists in the real menu under
+    """The `_escape_route_node(scenario)` `optical_reroute` candidate T2's
+    and T3's gold decisions rely on still exists in the real menu under
     `basis=risk_group`/`level=risk_group` (the basis those gold decisions
     actually validate under -- see `_T2_NON_FLIP_GOLD_DECISIONS`/
     `_T3_NON_FLIP_GOLD_DECISIONS` in test_episodes.py), and still validates.
     Guards the Phase 2 pins' spectrum consumption: the satna-west (SW) pins
     consume spectrum on exactly this corridor, and a future pin change could
     silently consume the last of it."""
+    node = _escape_route_node(scenario)
     menu = await call_tool_json(client, "route_service", {
         "service_id": scenario.service_under_test, "protected": False,
         "basis": "risk_group", "level": "risk_group", "best_effort": False,
         "avoid": scenario.reference_avoid})
     oms_nodes = await _oms_nodes(client)
     index, candidate = _jabalpur_optical_reroute_candidate(
-        menu.get("candidates") or (), oms_nodes)
+        menu.get("candidates") or (), oms_nodes, node=node)
     if candidate is None:
         raise PairInvalid(
-            f"{scenario.id}: no optical_reroute candidate via "
-            f"{_ESCAPE_ROUTE_NODE} exists in the real menu under "
-            f"basis=risk_group/level=risk_group, avoid="
-            f"{scenario.reference_avoid!r} -- the escape route T2's and "
-            f"T3's gold optical_reroute candidates rely on may have been "
-            f"lost to the Phase 2 spectrum pins")
+            f"{scenario.id}: no optical_reroute candidate via {node} exists "
+            f"in the real menu under basis=risk_group/level=risk_group, "
+            f"avoid={scenario.reference_avoid!r} -- the escape route T2's "
+            f"and T3's gold optical_reroute candidates rely on may have "
+            f"been lost to the Phase 2 spectrum pins")
 
     from .plans import build_topology_index, plan_from_candidate
 
@@ -1360,9 +1380,9 @@ async def assert_escape_route_survives(
         "plan": plan, "basis": "risk_group", "level": "risk_group"})
     if not report["ok"]:
         raise PairInvalid(
-            f"{scenario.id}: the {_ESCAPE_ROUTE_NODE} optical_reroute "
-            f"candidate_{index} exists but does not validate under "
-            f"basis=risk_group/level=risk_group: {report['violations']!r}")
+            f"{scenario.id}: the {node} optical_reroute candidate_{index} "
+            f"exists but does not validate under basis=risk_group/"
+            f"level=risk_group: {report['violations']!r}")
 
 
 # Invariant 8.
@@ -1409,3 +1429,193 @@ def assert_sampling_error_within_margin(
             f"only {smallest / max(measured_error, 1e-300):.2f}x -- an "
             f"order of magnitude (10x) margin is required, or the "
             f"sampler's own noise floor could flip a gold label")
+
+
+# Invariant 9 (T1 spend-or-hold redesign, Task 9). `assert_both_legs_exposed`
+# and `assert_spend_is_real` are the sanity checks a later task (Task 15)
+# runs against the actual authored T1 scenario to prove it is a REAL
+# decision -- both legs genuinely at risk, and the labeled-correct "spend"
+# escape route genuinely reduces exposure -- rather than a scenario where the
+# labeled-correct choice is trivial (protection already absorbs everything)
+# or fake (the "escape" leaves the service about as exposed as before).
+async def assert_both_legs_exposed(
+    client: Client, scenario: ScenarioFile, *, topology_path: str | Path,
+    floor: float = 0.05,
+) -> None:
+    """Both the service under test's WORKING leg (the corridor the storm
+    threatens) and its PROTECTION leg (the corridor the automatic 1:1
+    switchover falls back to) must independently read a non-trivial cut
+    probability -- at least `floor` -- at the decision-hour issuance's own
+    latest horizon (the same horizon `oracle.escape_objective` scores
+    residual exposure against). A service whose protection sat entirely
+    clear of the storm would make "the storm threatens this service" true
+    only on a technicality: protection would absorb every realistic cut
+    regardless of what the decider chooses, and the spend/hold comparison
+    would not be testing anything.
+
+    `p_cut_region`, not the joint `p_cut_service` observation.py's own
+    exposure row uses for a protected service's `p_cut` -- that quantity is
+    the probability BOTH legs are cut together, which stays small whenever
+    EITHER leg alone is barely exposed. This check needs the two legs' own,
+    separate probabilities, which is exactly what `p_cut_region` computes
+    over one span union."""
+    edges = load_edges(topology_path)
+    geometry = await service_geometry(client, topology_path, edges=edges)
+    issuance = latest_issuance(scenario, scenario.decision_hour)
+    if not issuance.horizons:
+        raise PairInvalid(
+            f"{scenario.id}: the {scenario.decision_hour!r} issuance "
+            f"publishes no horizon to check leg exposure against")
+    horizon = next(reversed(issuance.horizons))
+    cone = issuance.horizons[horizon]
+    sut = scenario.service_under_test
+    working = geometry.cuttable_spans.get(sut, ())
+    protection = geometry.protection_cuttable_spans.get(sut, ())
+    p_working = p_cut_region(working, cone.center["lat"], cone.center["lon"],
+                             cone.width_km, scenario.damage_radius_km)
+    p_protection = p_cut_region(
+        protection, cone.center["lat"], cone.center["lon"], cone.width_km,
+        scenario.damage_radius_km)
+    if p_working < floor or p_protection < floor:
+        raise PairInvalid(
+            f"{scenario.id}: {sut}'s own leg exposure at {horizon!r} of the "
+            f"{scenario.decision_hour!r} issuance is working={p_working:.4f}, "
+            f"protection={p_protection:.4f}, and at least one is below the "
+            f"floor {floor} -- not both legs are genuinely at risk, so "
+            f"'spend the spare on the SUT' is not a real bet")
+
+
+async def assert_spend_is_real(
+    client: Client, scenario: ScenarioFile, *, topology_path: str | Path,
+    residual_ceiling: float = 0.05,
+) -> None:
+    """The SPEND half of the T1 comparison must be a genuine escape, not a
+    paper one. Replays this half's realized cuts strictly before the
+    decision hour (the same discipline `menu_at_decision_hour` uses),
+    defines the decision-hour issuance's own latest-horizon risk group
+    EXACTLY as `oracle.spend_decider`'s own constraints decision would (the
+    same `f"rg_{{scenario.id}}_{{d}}_{{H}}"` id, the same avoid/basis/
+    level), reads the real menu under it, and runs `oracle.escape_objective`
+    over it -- the SAME function `oracle.spend_decider` is wired to.
+
+    The pick must exist (not `"infeasible"`), charge exactly one spare
+    transponder pair at `scenario.depot_site` (a real, single-lightpath
+    escape -- not a free reuse, and not a multi-lightpath spend the
+    episode's own `spares_on_hand` could not actually afford), and land the
+    service at a residual p_cut at or below `residual_ceiling` -- an
+    "escape" that is still nearly as exposed as before would not be a real
+    spend."""
+    from .oracle import escape_objective
+
+    edges = load_edges(topology_path)
+    geometry = await service_geometry(client, topology_path, edges=edges)
+    d = scenario.decision_hour
+    d_index = scenario.hours.index(d)
+    for hour in scenario.hours[:d_index]:
+        cuts = scenario.realized.get(hour, ())
+        if cuts:
+            await call_tool_json(client, "inject_failure",
+                                 {"asset_ids": list(cuts)})
+
+    issuance = scenario.forecast.get(d)
+    if issuance is None or not issuance.horizons:
+        raise PairInvalid(
+            f"{scenario.id}: decision hour {d!r} publishes no forecast "
+            f"issuance of its own, or that issuance has no horizon -- "
+            f"oracle.spend_decider's own risk-group id assumes both")
+    horizon = next(reversed(issuance.horizons))
+    rg_id = f"rg_{scenario.id}_{d}_{horizon}"
+
+    topo = await call_tool_json(client, "get_topology", {"layer": "optical"})
+    filter_fn = get_filter(EVENT_TYPE)
+    fiber_ids = horizon_risk_group_asset_ids(
+        issuance.horizons[horizon], scenario.damage_radius_km, edges=edges,
+        oms=topo["oms"], filter_fn=filter_fn)
+    await call_tool_json(client, "define_risk_group", {
+        "rg_id": rg_id, "asset_ids": fiber_ids,
+        "metadata": {"event_type": EVENT_TYPE, "scenario": scenario.id,
+                     "issued_at": d, "horizon": horizon}})
+
+    services = tuple(
+        (await call_tool_json(client, "get_services"))["services"])
+    demand = next(s["demand_gbps"] for s in services
+                 if s["id"] == scenario.service_under_test)
+    obs = build_observation(
+        scenario, d, service_spans=geometry.cuttable_spans, services=services,
+        spares_on_hand=scenario.spares_on_hand, risk_group_ids={horizon: rg_id},
+        endpoint_sites=geometry.endpoint_sites, depot_site=scenario.depot_site,
+        protection_spans=geometry.protection_cuttable_spans)
+
+    menu = await call_tool_json(client, "route_service", {
+        "service_id": scenario.service_under_test, "protected": False,
+        "basis": "risk_group", "level": "risk_group", "best_effort": False,
+        "avoid": {"risk_groups": [rg_id]}})
+    menu = menu_with_path_facts(
+        menu, geometry, scenario.service_under_test, issuance=issuance,
+        damage_radius_km=scenario.damage_radius_km, demand_gbps=demand)
+    menu = menu_for_prompt(menu, geometry.oms_nodes)
+
+    choice = escape_objective(obs, menu)
+    index = candidate_index(choice.choice)
+    if index is None:
+        raise PairInvalid(
+            f"{scenario.id}: oracle.escape_objective found no real escape "
+            f"in the decision-hour menu under the spend decider's own avoid "
+            f"(risk_groups=[{rg_id!r}]) -- {choice.reasoning}")
+    candidate = menu["candidates"][index]
+    needed = candidate.get("spares_needed") or {}
+    if needed.get(scenario.depot_site) != 1:
+        raise PairInvalid(
+            f"{scenario.id}: the escape_objective pick (candidate_{index}) "
+            f"charges {needed!r} at the depot, not exactly one spare "
+            f"transponder pair at {scenario.depot_site!r}")
+    residual = candidate["residual_exposure"][horizon]["p_cut"]
+    if residual > residual_ceiling:
+        raise PairInvalid(
+            f"{scenario.id}: the escape_objective pick (candidate_{index}) "
+            f"still reads a residual p_cut of {residual} at {horizon!r}, "
+            f"above the ceiling {residual_ceiling} -- not a genuine escape")
+
+
+def assert_gold_matches_outcomes(
+    scenario: ScenarioFile, outcomes: dict[str, float],
+) -> None:
+    """The oracle enumerator's cross-check (T1 spend-or-hold redesign,
+    Task 9/10): `scenario.gold.label` must be the ARGMIN of `outcomes` --
+    the actual, simulated Gbps-hours lost under each of the two scripted
+    deciders (`oracle.spend_decider`/`hold_decider`, run for real by a later
+    task) -- and the best outcome must be separated from every other by at
+    least `scenario.gold.min_margin_gbps_h`, so the label is not merely
+    correct but correct by a margin an author could not have hit by
+    accident.
+
+    A hand-authored `gold.label` is a PREDICTION about which of the two
+    scripted deciders' rollouts loses less; this is what actually checks it
+    against a simulated ANSWER, not a second guess. `outcomes` is
+    `{"spend": ..., "hold": ...}` -- the same shape `Gold.outcome_gbps_h`
+    stores -- but takes any number of keys, so a future policy set is not
+    hardcoded to exactly two.
+
+    `scenario.gold.min_margin_gbps_h` of `None` (every episode not using the
+    `spare_action_by_deadline` label rule) skips the margin check entirely --
+    there is no simulated outcome pair for those episodes to compare a
+    margin against in the first place."""
+    if not outcomes:
+        raise PairInvalid(
+            f"{scenario.id}: assert_gold_matches_outcomes given no outcomes "
+            f"to compare gold.label against")
+    best = min(outcomes, key=outcomes.get)
+    if scenario.gold.label != best:
+        raise PairInvalid(
+            f"{scenario.id}: gold.label={scenario.gold.label!r} but the "
+            f"simulated outcomes {outcomes!r} argmin to {best!r} -- the "
+            f"authored label does not match the actual best decision")
+    if scenario.gold.min_margin_gbps_h is None:
+        return
+    ordered = sorted(outcomes.values())
+    margin = ordered[1] - ordered[0] if len(ordered) > 1 else float("inf")
+    if margin < scenario.gold.min_margin_gbps_h:
+        raise PairInvalid(
+            f"{scenario.id}: outcomes {outcomes!r} separate {best!r} from "
+            f"the rest by only {margin:.3f} Gbps-h, below "
+            f"gold.min_margin_gbps_h={scenario.gold.min_margin_gbps_h!r}")

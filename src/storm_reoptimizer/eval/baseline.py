@@ -17,11 +17,14 @@ both halves of a twin pair whose enumerated scalars are held equal, which is
 in turn what makes the exactly-50% property arithmetic rather than tuning."""
 from __future__ import annotations
 
+from typing import Callable
+
 from ..events.geo import damage_footprint_radius_km
 from .decisions import (
     ConstraintDecision, ObjectiveDecision, TimingDecision, rank_by_priority,
 )
 from .observation import Observation, lead_time_hours_for
+from .runner import menu_for_prompt
 
 BASELINE_VARIANTS = ("immediate", "at_deadline")
 
@@ -143,7 +146,29 @@ class ScriptedDecider:
     """Replays decisions supplied up front. Used by the pre-flight assertion
     that the two decisions a pair is NOT testing are non-binding: replay each
     half with plausible alternatives for those decisions and require the
-    outcome not to move."""
+    outcome not to move.
+
+    `objective_fn` (T1 spend-or-hold redesign, Task 9) is an escape hatch for
+    a decider whose objective is a RULE rather than a fixed per-hour answer
+    -- `oracle.escape_objective`: pick whichever candidate in THIS hour's
+    menu actually escapes the storm. Consulted before `objective_by_hour`/
+    `default_objective`: when set, it decides EVERY hour this decider is
+    asked, since `oracle.spend_decider`/`hold_decider` need one rule for
+    "what to do with whatever menu results", not a per-hour script (they
+    cannot know the menu in advance the way a pre-flight replay's fixed
+    alternatives can).
+
+    The menu handed to `objective_fn` is run through `menu_for_prompt`
+    first, exactly as `agent.ClaudeDecider` does for its own LLM prompt:
+    `objective_fn` implementations (`oracle.escape_objective`) read a
+    candidate's `spares_needed`, which `menu_with_path_facts` -- what
+    `runner.run_episode` actually calls `objective()` with -- does not
+    carry; `menu_for_prompt` is what adds it, resolved against `oms_nodes`.
+    `oms_nodes` mirrors `agent.ClaudeDecider.oms_nodes`: `run_episode`
+    populates any decider exposing the attribute
+    (`hasattr(decider, "oms_nodes")`) once per hour, so a plain
+    ScriptedDecider with no `objective_fn` carries an unused empty dict and
+    pays nothing for it."""
 
     def __init__(self, name: str, *,
                  timing_by_hour: dict[str, TimingDecision] | None = None,
@@ -151,17 +176,23 @@ class ScriptedDecider:
                  objective_by_hour: dict[str, ObjectiveDecision] | None = None,
                  default_timing: TimingDecision | None = None,
                  default_constraints: ConstraintDecision | None = None,
-                 default_objective: ObjectiveDecision | None = None) -> None:
+                 default_objective: ObjectiveDecision | None = None,
+                 objective_fn: Callable[[Observation, dict], ObjectiveDecision]
+                               | None = None) -> None:
         self.name = name
         self._timing = timing_by_hour or {}
         self._constraints = constraints_by_hour or {}
         self._objective = objective_by_hour or {}
+        self._objective_fn = objective_fn
         self._default_timing = default_timing or TimingDecision(
             "wait", "scripted default")
         self._default_constraints = default_constraints or ConstraintDecision(
             avoid={}, reasoning="scripted default")
         self._default_objective = default_objective or ObjectiveDecision(
             "candidate_0", None, "scripted default")
+        # oms_id -> [src_node_id, dst_node_id]; see the class docstring.
+        # Only meaningful with `objective_fn` set -- harmless otherwise.
+        self.oms_nodes: dict[str, list[str]] = {}
 
     def timing(self, obs: Observation) -> TimingDecision:
         return self._timing.get(obs.hour, self._default_timing)
@@ -172,4 +203,7 @@ class ScriptedDecider:
         return self._constraints.get(obs.hour, self._default_constraints)
 
     def objective(self, obs: Observation, menu: dict) -> ObjectiveDecision:
+        if self._objective_fn is not None:
+            return self._objective_fn(
+                obs, menu_for_prompt(menu, self.oms_nodes))
         return self._objective.get(obs.hour, self._default_objective)
