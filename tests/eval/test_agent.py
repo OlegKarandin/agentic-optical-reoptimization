@@ -17,7 +17,7 @@ from storm_reoptimizer.eval.agent import (
 from storm_reoptimizer.eval.baseline import ForecastBlindBaseline
 from storm_reoptimizer.eval.decisions import (
     CONSTRAINT_JSON_SCHEMA, COST_TERMS, DecisionError, OBJECTIVE_JSON_SCHEMA,
-    TIMING_JSON_SCHEMA,
+    TIMING_JSON_SCHEMA, TimingDecision,
 )
 from storm_reoptimizer.eval.observation import Observation
 from storm_reoptimizer.eval.scenario_file import ConeAtHorizon, Issuance
@@ -322,7 +322,7 @@ def test_the_prompt_no_longer_claims_a_shared_global_depot():
 
 
 def test_a_contested_claim_must_still_name_a_service_in_exposure():
-    # Free consequence of the eligibility filter: agent._check_contested_claim's
+    # Free consequence of the eligibility filter: agent._check_named_services's
     # existing "must be in `exposure`" rule becomes exactly the right
     # depot-eligibility check, with no new validation logic. svc-d is real
     # (it is in the full Observation's `exposure`) but was filtered out of
@@ -331,7 +331,17 @@ def test_a_contested_claim_must_still_name_a_service_in_exposure():
     decision = SimpleNamespace(contested_claim={
         "service_id": "svc-d", "expected_capacity_at_risk_gbps": 90.0})
     with pytest.raises(DecisionError, match="svc-d"):
-        ClaudeDecider._check_contested_claim(decision, payload, TIMING_TOOL)
+        ClaudeDecider._check_named_services(decision, payload, TIMING_TOOL)
+
+
+def test_claim_priority_must_name_shown_services():
+    payload = {"exposure": {"s": {}, "c": {}}}
+    ok = TimingDecision("wait", "x", None, ("c",))
+    ClaudeDecider._check_named_services(ok, payload, TIMING_TOOL)
+    with pytest.raises(DecisionError):
+        ClaudeDecider._check_named_services(
+            TimingDecision("wait", "x", None, ("ghost",)),
+            payload, TIMING_TOOL)
 
 
 MENU = {
@@ -459,7 +469,8 @@ def test_strict_tool_schemas_drop_the_keywords_the_api_rejects():
     # very first real call.
     assert strict_tool_schema(TIMING_JSON_SCHEMA) == {
         "type": "object", "additionalProperties": False,
-        "required": ["action", "reasoning", "contested_claim"],
+        "required": ["action", "reasoning", "contested_claim",
+                     "claim_priority"],
         "properties": {
             "action": {"type": "string", "enum": ["act", "wait"]},
             "reasoning": {"type": "string"},
@@ -473,6 +484,8 @@ def test_strict_tool_schemas_drop_the_keywords_the_api_rejects():
                  }},
                 {"type": "null"},
             ]},
+            "claim_priority": {"type": "array",
+                               "items": {"type": "string"}},
         },
     }
     priority = strict_tool_schema(
@@ -704,6 +717,14 @@ def test_the_system_prompt_names_the_precomputed_risk_field():
     assert "expected_capacity_at_risk_gbps" in SYSTEM_PROMPT
 
 
+def test_prompt_states_schedule_deadline_priority_and_inert_rule():
+    p = SYSTEM_PROMPT
+    assert "You never see a future issuance" not in p
+    for needle in ("`issuance_schedule`", "`deadline_hour`", "`claim_priority`",
+                   "recorded as a wait"):
+        assert needle in p
+
+
 def test_the_prompt_states_that_the_depot_is_shared():
     # Rewritten for the node-local depot (2026-08-30): shared with the
     # services that terminate at the SAME site, not the whole network.
@@ -913,7 +934,8 @@ def test_the_audit_sidecar_records_what_the_model_was_shown(tmp_path):
                                         "storm-svc-1"]
     assert record["omitted_services"]["below_threshold"]["count"] == 2
     assert record["n_services_total"] == 6
-    assert record["result"] == {**TIMING_OK, "contested_claim": None}
+    assert record["result"] == {**TIMING_OK, "contested_claim": None,
+                                "claim_priority": []}
 
 
 def test_the_audit_records_how_many_attempts_a_decision_took(tmp_path):

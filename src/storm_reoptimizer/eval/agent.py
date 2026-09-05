@@ -265,13 +265,17 @@ Each request carries one observation:
 
 - `hour`, `hours_remaining` -- where you are in the event.
 - `issued_at`, `cones` -- the most recent forecast issuance and its \
-horizons. You never see a future issuance. Waiting is what buys the next \
-one; that is the entire cost-benefit of waiting.
+horizons. You never see the CONTENT of a future issuance; `issuance_schedule` \
+lists the hours at which issuances arrive, so you know whether one is still \
+coming. Waiting is what buys the next one.
 - `exposure` -- per service, per horizon: `hours_ahead`, `offset_km`, \
 `width_km`, `p_cut`, `demand_gbps`, and `expected_capacity_at_risk_gbps` -- \
 the product `p_cut * demand_gbps`, already computed for you. It is the \
 quantity that makes two competing claims on one resource comparable, and it \
-is in Gbps.
+is in Gbps. For a protected service `p_cut` is the probability BOTH its \
+working and protection paths are cut -- the probability it actually goes \
+down -- and `legs` shows, per leg, how many storm-cuttable spans it carries \
+and whether it sits inside the damage footprint.
 - `services` -- the roster for the services shown.
 - `spares_on_hand` -- spare transponders held at `depot_site`, the one site \
 whose inventory (the scenario's own `spare_inventory`, held per site) is \
@@ -292,6 +296,12 @@ simulated, but their claim on this site's inventory is real.
 `omitted_services.ineligible_for_depot`. They may be badly exposed; they are \
 not competing for this inventory, because restoring them draws on their own \
 sites' depots.
+- `claim_priority` (yours to state on the timing decision) -- an ordering of \
+the services shown, most deserving first. When a service is cut, the harness \
+restores cut services in this order with whatever spares remain, each \
+effective after its lever's lead time. Services you leave out are restored \
+after the ones you list, larger demand first. This is the one way you act on \
+behalf of a service other than the actionable one.
 - `actions_taken` and `spares_spent` -- what YOU have already committed \
 earlier in this episode: per action its hour, its lever, the spare pairs it \
 cost, the `avoid` set it was routed under, and `effective_at_hour` -- the \
@@ -306,6 +316,10 @@ being effective, per lever. An `ip_reroute` is a config change and lands \
 immediately. Lighting a new optical path is provisioning and takes the \
 scenario's lead time. Acting later than (exposure hour - lead time) means \
 the action lands after the cut.
+- `deadline_hour` -- per lever, the last hour at which an action can be \
+issued and still be effective at or before the latest published horizon, or \
+`null` if that hour has passed. Acting before the deadline forgoes \
+information; acting after it lands after the cut.
 - `damage_radius_km` -- how far damage can reach beyond the storm track \
 itself. A risk group's avoid-radius is `width_km/2 + damage_radius_km`, not \
 just the track's own half-width -- do not judge how much room a reroute has \
@@ -434,6 +448,9 @@ sometimes the right call when spares are scarce and the exposure is \
 tolerable; make it because you decided so, not because nothing told you the \
 service never moved.
 
+A committed candidate that changes no path and costs no spare is recorded as \
+a wait, not an action.
+
 ## Your reasoning
 
 `reasoning` is mandatory on all three decisions and it is read. Write the \
@@ -446,7 +463,8 @@ exchange.
 
 `contested_claim` names the strongest competing claim on the depot you are \
 aware of and its `expected_capacity_at_risk_gbps` from the observation, or \
-null if you judge there is none. Name a service that appears in `exposure`.
+null if you judge there is none. Name a service that appears in `exposure`. \
+If you stated a `claim_priority`, say why that order.
 
 Do not pad it with a checklist of terms from this prompt. A paragraph naming \
 every concept above while explaining no decision is worse than two sentences \
@@ -578,8 +596,10 @@ class ClaudeDecider:
         )
 
     @staticmethod
-    def _check_contested_claim(decision, payload, tool_name) -> None:
-        """A claim must name a service the model was actually shown.
+    def _check_named_services(decision, payload, tool_name) -> None:
+        """Every service id a decision names must be one the model was
+        actually shown -- `contested_claim.service_id`, and every id in
+        `claim_priority`.
 
         Same class of guard as the hallucinated risk-group id that burned 3 of
         5 iterations in a real T3a rollout (control-arm findings, root cause
@@ -588,13 +608,17 @@ class ClaudeDecider:
         mechanism -- from_dict cannot do this because it never sees the
         observation."""
         claim = getattr(decision, "contested_claim", None)
-        if claim is None:
-            return
-        if claim["service_id"] not in payload["exposure"]:
+        if claim is not None and claim["service_id"] not in payload["exposure"]:
             raise DecisionError(
                 f"{tool_name}: `contested_claim.service_id` "
                 f"{claim['service_id']!r} is not in this observation's "
                 f"`exposure`. Name a service you were shown, or null.")
+        for svc in getattr(decision, "claim_priority", ()):
+            if svc not in payload["exposure"]:
+                raise DecisionError(
+                    f"{tool_name}: `claim_priority` names {svc!r}, which is "
+                    f"not in this observation's `exposure`. Name only "
+                    f"services you were shown.")
 
     def _decide(self, tool_name, decision_cls, obs, payload, user_content):
         """One decision, with up to MAX_ATTEMPTS self-correction rounds.
@@ -629,7 +653,7 @@ class ClaudeDecider:
                 continue
             try:
                 decision = decision_cls.from_dict(block.input)
-                self._check_contested_claim(decision, payload, tool_name)
+                self._check_named_services(decision, payload, tool_name)
             except DecisionError as exc:
                 failure = exc
                 # Echo the assistant content back unchanged -- with adaptive

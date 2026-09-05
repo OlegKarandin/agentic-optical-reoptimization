@@ -12,7 +12,7 @@ def test_timing_decision_round_trips():
     d = TimingDecision.from_dict({"action": "wait", "reasoning": "cone is wide"})
     assert d.action == "wait"
     assert d.to_dict() == {"action": "wait", "reasoning": "cone is wide",
-                           "contested_claim": None}
+                           "contested_claim": None, "claim_priority": []}
 
 
 def test_timing_rejects_an_unknown_action():
@@ -136,6 +136,18 @@ def test_a_decision_with_no_rival_claim_says_so_explicitly():
         "contested_claim": None})
     assert d.contested_claim is None
     assert d.to_dict()["contested_claim"] is None
+    assert d.to_dict()["claim_priority"] == []
+
+
+def test_claim_priority_round_trips_and_validates():
+    d = TimingDecision.from_dict({"action": "wait", "reasoning": "hold",
+                                  "contested_claim": None,
+                                  "claim_priority": ["c", "s"]})
+    assert d.claim_priority == ("c", "s")
+    assert d.to_dict()["claim_priority"] == ["c", "s"]
+    with pytest.raises(DecisionError):
+        TimingDecision.from_dict(
+            {"action": "wait", "reasoning": "x", "claim_priority": "c"})
 
 
 def test_an_absent_contested_claim_is_the_same_as_null():

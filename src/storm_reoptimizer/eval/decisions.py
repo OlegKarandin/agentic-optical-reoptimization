@@ -91,14 +91,40 @@ def _contested_claim(payload: dict, where: str) -> dict | None:
     return {"service_id": svc, "expected_capacity_at_risk_gbps": float(ecar)}
 
 
+def _claim_priority(payload: dict, where: str) -> tuple[str, ...]:
+    """An ordering over the services shown, most deserving of the depot's
+    remaining spares first -- the one way a decision acts on behalf of a
+    service other than the actionable one (see the agent prompt). Absent
+    means "no opinion", not "nobody", so a missing key is `()`, not an
+    error.
+
+    Validated here only against SHAPE (a list of strings); that every named
+    id actually appeared in the observation shown to the decider is a
+    property of the payload, which `from_dict` never sees -- that check
+    lives in `agent._check_named_services`, same split as
+    `_contested_claim`/`_check_named_services` already draws."""
+    items = payload.get("claim_priority", [])
+    if not isinstance(items, list) or any(
+            not isinstance(item, str) for item in items):
+        raise DecisionError(
+            f"{where}: `claim_priority` must be a list of service ids")
+    return tuple(items)
+
+
 @dataclass(frozen=True)
 class TimingDecision:
     action: str          # "act" | "wait"
     reasoning: str
-    # The rival claim on the shared depot this decision weighed. Last field so
-    # every positional construction in baseline.py, assertions.py, tools/ and
-    # tests/eval/test_episodes.py keeps working untouched.
+    # The rival claim on the shared depot this decision weighed. No longer
+    # the last field -- `claim_priority` below is now -- but every existing
+    # positional construction in baseline.py, assertions.py, tools/ and
+    # tests/eval/test_episodes.py names at most these two trailing fields
+    # positionally, so both keep working untouched.
     contested_claim: dict | None = None
+    # An ordering over the services shown, most deserving first, for the
+    # harness's post-cut restoration replay to consume (Task 7). Last field
+    # so every positional construction above keeps working untouched.
+    claim_priority: tuple[str, ...] = ()
 
     @classmethod
     def from_dict(cls, payload: dict) -> "TimingDecision":
@@ -109,11 +135,13 @@ class TimingDecision:
                 f"timing: `action` must be one of {sorted(_ACTIONS)}, "
                 f"got {action!r}")
         return cls(action=action, reasoning=reasoning,
-                   contested_claim=_contested_claim(payload, "timing"))
+                   contested_claim=_contested_claim(payload, "timing"),
+                   claim_priority=_claim_priority(payload, "timing"))
 
     def to_dict(self) -> dict[str, Any]:
         return {"action": self.action, "reasoning": self.reasoning,
-                "contested_claim": self.contested_claim}
+                "contested_claim": self.contested_claim,
+                "claim_priority": list(self.claim_priority)}
 
 
 @dataclass(frozen=True)
@@ -256,11 +284,12 @@ CONTESTED_CLAIM_SCHEMA = {
 
 TIMING_JSON_SCHEMA = {
     "type": "object", "additionalProperties": False,
-    "required": ["action", "reasoning", "contested_claim"],
+    "required": ["action", "reasoning", "contested_claim", "claim_priority"],
     "properties": {
         "action": {"type": "string", "enum": sorted(_ACTIONS)},
         "reasoning": {"type": "string", "minLength": 1},
         "contested_claim": CONTESTED_CLAIM_SCHEMA,
+        "claim_priority": {"type": "array", "items": {"type": "string"}},
     },
 }
 
