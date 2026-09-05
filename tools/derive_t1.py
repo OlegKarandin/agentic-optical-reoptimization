@@ -72,8 +72,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 # tools/ is not a package (find_sut.py's own module docstring) -- this repo's
 # convention for cross-tool reuse is a plain sibling import, which resolves
-# because Python puts the RUNNING SCRIPT's own directory at sys.path[0] (and
-# tests/eval/test_derive_t1.py inserts it by hand, matching test_find_sut.py).
+# because Python puts the RUNNING SCRIPT's own directory at sys.path[0].
+# tests/eval/test_derive_t1.py inserts the `tools/` directory by hand before
+# `import derive_t1`, matching test_find_sut.py's own precedent.
 import derive_episodes as de  # noqa: E402
 
 from storm_reoptimizer.eval.cone import (               # noqa: E402
@@ -82,7 +83,7 @@ from storm_reoptimizer.eval.cone import (               # noqa: E402
 from storm_reoptimizer.eval.decisions import ConstraintDecision  # noqa: E402
 from storm_reoptimizer.eval.observation import build_observation  # noqa: E402
 from storm_reoptimizer.eval.runner import (              # noqa: E402
-    horizon_risk_group_asset_ids, service_geometry,
+    EVENT_TYPE, horizon_risk_group_asset_ids, service_geometry,
 )
 from storm_reoptimizer.eval.scenario_file import (       # noqa: E402
     ConeAtHorizon, Gold, Issuance, ScenarioFile, dump_scenario,
@@ -95,8 +96,6 @@ from storm_reoptimizer.mcp_client import call_tool_json, connect_server  # noqa:
 DEFAULT_TOPOLOGY = de.DEFAULT_TOPOLOGY
 DEFAULT_STATE = de.DEFAULT_STATE
 DEFAULT_SERVER_COMMAND = de.DEFAULT_SERVER_COMMAND
-
-EVENT_TYPE = "storm"    # matches runner.EVENT_TYPE / find_sut.py's own literal
 
 # Placeholder gold (mirrors derive_episodes.py's own `_DUMMY_GOLD` -- same
 # shape, same "not gold" intent), pending Task 15's real enumerator
@@ -345,8 +344,19 @@ async def derive(args: argparse.Namespace) -> dict:
             await call_tool_json(client, "define_risk_group", {
                 "rg_id": rg_id, "asset_ids": fiber_ids,
                 "metadata": {"tool": "derive_t1", "half": label}})
+            # basis="risk_group"/level="risk_group", NOT the physical/link
+            # default: `decisions.py`'s own `_BASES` comment states this is
+            # "load-bearing, not decorative" for exactly this avoid
+            # mechanic (T2a/T3a/T3b's gold constraint decision only
+            # validates under this basis/level pair), and T2a.yaml's own
+            # widest_avoid_feasible narration ("route_service(avoid=
+            # {risk_groups:[...]}) returns ZERO candidates under EITHER
+            # basis" -- i.e. it checked both, and risk_group is the one
+            # this field is named for) confirms this is the established
+            # convention for this exact scalar, not a free choice.
             constraints = ConstraintDecision(
-                avoid={"risk_groups": [rg_id]},
+                avoid={"risk_groups": [rg_id]}, basis="risk_group",
+                level="risk_group",
                 reasoning="derive_t1 widest-avoid probe")
             menu = await call_tool_json(
                 client, "route_service", constraints.route_service_args(args.sut))
@@ -467,7 +477,11 @@ async def derive(args: argparse.Namespace) -> dict:
     }
 
 
-def main() -> None:
+def _build_parser() -> argparse.ArgumentParser:
+    """Extracted from `main()` so `tests/eval/test_derive_t1.py` can exercise
+    the REAL parser (flag names, requiredness, defaults) without invoking
+    `main()` itself, which would go on to `asyncio.run(derive(...))` against
+    a real server."""
     parser = argparse.ArgumentParser(prog="derive_t1")
     parser.add_argument("--topology", default=DEFAULT_TOPOLOGY)
     parser.add_argument("--state", default=DEFAULT_STATE)
@@ -497,7 +511,11 @@ def main() -> None:
     parser.add_argument("--server-command", default=None,
                         help="JSON list; defaults to this workspace's "
                              "multilayer-optical-mcp conda-env workaround")
-    args = parser.parse_args()
+    return parser
+
+
+def main() -> None:
+    args = _build_parser().parse_args()
     asyncio.run(derive(args))
 
 
