@@ -248,3 +248,21 @@ def test_regret_is_total_minus_best_gold_outcome(tmp_path):
     m = episode_metrics(s, t)
     assert m["gbps_hours_lost_total"] == 100.0
     assert m["regret_gbps_h"] == pytest.approx(100.0 - 400.0)
+
+
+def test_sut_acted_too_late_against_a_realized_cut_counts_as_cut_at_c_realized(
+    tmp_path,
+):
+    # The SUT is NEVER in any hour's dropped_after_cut (the server never
+    # called it a drop -- protection likely covered it in the model), but a
+    # REAL realized cut affected it at t2 (index 2, via affected_by_hour) and
+    # the decider's own spare-spending action landed too late (effective at
+    # index 3, after c_realized). cut_index[SUT] must be set to c_realized
+    # (2) anyway -- the "acted too late" special case -- so gbps_hours_lost
+    # scores the SUT as down starting at hour 2, not as never cut.
+    s = _scenario(tmp_path, "X", "hold", label_rule="spare_action_by_deadline")
+    t = _trace(demands={"storm-svc-1": 300.0},
+               affected={"t2": ("storm-svc-1",)},
+               actions=(Action("t2", 2, "optical_reroute", 3, {"d": 1},
+                               "storm-svc-1"),))
+    assert gbps_hours_lost(s, t) == {"storm-svc-1": 300.0}
