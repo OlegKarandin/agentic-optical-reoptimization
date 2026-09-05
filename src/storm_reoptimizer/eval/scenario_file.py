@@ -279,6 +279,25 @@ def load_scenario(path: str | Path) -> ScenarioFile:
         flip_variable=tuple(raw["flip_variable"]), metadata=raw["metadata"])
 
 
+class _ScenarioDumper(yaml.SafeDumper):
+    """A `SafeDumper` that renders any MULTI-LINE string in block-literal
+    (`|`) style -- the style every hand-authored scenario file already uses
+    for `gold.rationale` -- instead of `yaml.safe_dump`'s own default for a
+    string containing `\\n` (an escaped, blank-line-separated plain scalar,
+    confirmed directly: `yaml.safe_dump({"a": "line one\\nline two\\n"})`).
+    Applied to every string, not special-cased to the `rationale` key alone,
+    since that is both simpler and robust to any other multi-line field a
+    future scenario might carry."""
+
+
+def _represent_str(dumper: yaml.SafeDumper, data: str) -> yaml.Node:
+    style = "|" if "\n" in data else None
+    return dumper.represent_scalar("tag:yaml.org,2002:str", data, style=style)
+
+
+_ScenarioDumper.add_representer(str, _represent_str)
+
+
 def dump_scenario(scenario: ScenarioFile) -> str:
     """The reverse of `load_scenario`: serialize `scenario` back to the YAML
     text the file format expects, such that `load_scenario(write(
@@ -321,7 +340,7 @@ def dump_scenario(scenario: ScenarioFile) -> str:
     }
     raw["realized"] = {hour: list(assets)
                        for hour, assets in scenario.realized.items()}
-    return yaml.safe_dump(raw, sort_keys=False)
+    return yaml.dump(raw, Dumper=_ScenarioDumper, sort_keys=False)
 
 
 def load_all_scenarios(directory: str | Path | None = None

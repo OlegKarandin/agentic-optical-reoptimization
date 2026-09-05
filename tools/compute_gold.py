@@ -14,9 +14,18 @@ same spirit as `tools/derive_episodes.py` and `tools/probe_claimants.py`
 goes over MCP via `storm_reoptimizer.mcp_client`.
 
 Prints the enumerator's own table (`gold.rationale`) either way. With
-`--write`, rewrites `--scenario`'s own `gold:` block in place via
+`--write`, builds the updated scenario via
 `scenario_file.dump_scenario(dataclasses.replace(scenario, gold=...))` --
-the reverse of `load_scenario`, so no human hand-edits the YAML.
+the reverse of `load_scenario`, so no human hand-edits the YAML -- and by
+DEFAULT writes it to a NEW sibling file, `<name>.new.yaml`, next to
+`--scenario`, never touching the original. `dump_scenario` round-trips the
+file's DATA, not its YAML COMMENTS (`yaml.safe_load`/`safe_dump` have no
+comment-preservation mechanism, confirmed directly), and every shipped
+scenario carries load-bearing derivation-provenance comments (e.g. T1a.yaml's
+"GEOMETRY FROZEN ... re-run the tool to reproduce every number below digit
+for digit") that overwriting the original in place would silently destroy.
+Pass `--in-place` to overwrite `--scenario` itself anyway once you've
+manually carried forward (or deliberately dropped) whatever comments it had.
 
 Run (from repo root, this repo's own env):
 
@@ -85,8 +94,22 @@ async def run(args: argparse.Namespace) -> None:
 
     if args.write:
         updated = dataclasses.replace(scenario, gold=gold)
-        Path(args.scenario).write_text(dump_scenario(updated), encoding="utf-8")
-        print(f"wrote gold: block to {args.scenario}")
+        dumped = dump_scenario(updated)
+        scenario_path = Path(args.scenario)
+        if args.in_place:
+            print(f"WARNING: overwriting {scenario_path} IN PLACE -- this "
+                  f"permanently drops any YAML comments it had "
+                  f"(dump_scenario round-trips data only, never comments).")
+            out_path = scenario_path
+        else:
+            out_path = scenario_path.with_name(
+                f"{scenario_path.stem}.new{scenario_path.suffix}")
+        out_path.write_text(dumped, encoding="utf-8")
+        print(f"wrote the updated scenario (gold: block replaced) to "
+             f"{out_path}"
+             + ("" if args.in_place else
+                f" -- {scenario_path} itself was left untouched; pass "
+                f"--in-place to overwrite it directly"))
 
 
 def main() -> None:
@@ -96,8 +119,21 @@ def main() -> None:
                         "outcomes for (must use the spare_action_by_"
                         "deadline label rule)")
     parser.add_argument("--write", action="store_true",
-                        help="rewrite the scenario file's own gold: block "
-                        "with the freshly computed one")
+                        help="write the scenario with its gold: block "
+                        "replaced by the freshly computed one. By DEFAULT "
+                        "this writes a NEW sibling file, <name>.new.yaml, "
+                        "next to --scenario, rather than the original -- "
+                        "dump_scenario round-trips the file's data but "
+                        "DROPS every YAML comment, and the shipped scenario "
+                        "files carry load-bearing derivation-provenance "
+                        "comments. Pass --in-place to overwrite --scenario "
+                        "itself instead.")
+    parser.add_argument("--in-place", action="store_true",
+                        help="with --write, overwrite --scenario itself "
+                        "instead of writing a <name>.new.yaml sibling. "
+                        "PERMANENTLY DROPS any YAML comments the original "
+                        "had -- make sure it's committed to git (or "
+                        "otherwise safe to lose comments from) first.")
     parser.add_argument("--topology", default=DEFAULT_TOPOLOGY)
     parser.add_argument("--server-command", default=None,
                         help="JSON list; defaults to this workspace's "
