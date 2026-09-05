@@ -72,12 +72,6 @@ MENU_CANDIDATES = [
 ]
 
 
-def _scenario(tmp_path):
-    path = tmp_path / "REPLAY_TEST.yaml"
-    path.write_text(REPLAY_SCENARIO_YAML, encoding="utf-8")
-    return load_scenario(path)
-
-
 def _geometry():
     empty_path = {"working": (), "protection": ()}
     return ServiceGeometry(
@@ -161,8 +155,9 @@ def _ledger():
                        oms_nodes={"oms_new": ["tirupati", "nellore"]})
 
 
-def _run(tmp_path, *, affected, priority):
-    scenario = _scenario(tmp_path)
+def _run(write_scenario, *, affected, priority):
+    scenario = load_scenario(
+        write_scenario(REPLAY_SCENARIO_YAML, "REPLAY_TEST.yaml"))
     counting = _FakeCounting()
     ledger = _ledger()
     return asyncio.run(restore_after_cuts(
@@ -172,8 +167,8 @@ def _run(tmp_path, *, affected, priority):
         index_factory=_index_factory(counting)))
 
 
-def test_the_stated_priority_wins_the_last_spare(tmp_path):
-    actions, records = _run(tmp_path, affected=["c-fwd", "s"],
+def test_the_stated_priority_wins_the_last_spare(write_scenario):
+    actions, records = _run(write_scenario, affected=["c-fwd", "s"],
                             priority=("c-fwd",))
     by_service = {r["service_id"]: r for r in records}
     assert by_service.keys() == {"c-fwd", "s"}
@@ -187,15 +182,29 @@ def test_the_stated_priority_wins_the_last_spare(tmp_path):
     assert action.effective_at_index == 3
 
 
-def test_reversing_priority_swaps_who_gets_restored(tmp_path):
-    _actions, records = _run(tmp_path, affected=["c-fwd", "s"],
+def test_reversing_priority_swaps_who_gets_restored(write_scenario):
+    _actions, records = _run(write_scenario, affected=["c-fwd", "s"],
                              priority=("s",))
     by_service = {r["service_id"]: r for r in records}
     assert by_service["s"]["outcome"] == "restored"
     assert by_service["c-fwd"]["outcome"] == "unaffordable"
 
 
-def test_a_service_not_actually_dropped_gets_no_record(tmp_path):
-    _actions, records = _run(tmp_path, affected=["s"], priority=())
+def test_a_service_not_actually_dropped_gets_no_record(write_scenario):
+    _actions, records = _run(write_scenario, affected=["s"], priority=())
     assert {r["service_id"] for r in records} == {"s"}
     assert records[0]["outcome"] == "restored"
+
+
+def test_a_duplicated_priority_id_is_attempted_only_once(write_scenario):
+    # decisions._claim_priority only validates SHAPE, never uniqueness -- a
+    # real decider can legally repeat an id. Without deduping in
+    # `_ordered_scope`, "c-fwd" would be attempted twice: once (correctly)
+    # restored, and a second time re-running route_service/try_commit
+    # against a service that is no longer down, producing two records for
+    # the same service_id (violating the documented "one record per
+    # attempted service" contract) and wasting a redundant reroute attempt.
+    actions, records = _run(write_scenario, affected=["c-fwd", "s"],
+                            priority=("c-fwd", "c-fwd"))
+    assert [r["service_id"] for r in records] == ["c-fwd", "s"]
+    assert len(actions) == 1

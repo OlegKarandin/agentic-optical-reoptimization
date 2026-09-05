@@ -41,8 +41,17 @@ def _ordered_scope(scope: set[str], priority: tuple[str, ...],
     names some OTHER service the decider was shown) and is silently
     ignored -- `decisions._claim_priority`'s own validation is only that the
     id was SHOWN to the decider, not that it is in this episode's claimant
-    roster."""
-    listed = [svc for svc in priority if svc in scope]
+    roster.
+
+    `priority` itself is deduplicated first-occurrence-wins:
+    `decisions._claim_priority` only validates SHAPE (a list of strings),
+    never uniqueness, so a decider -- including the real LLM-driven
+    `ClaudeDecider` -- can legally repeat an id. Without the dedupe here, a
+    repeated id would appear twice in the returned order and the caller's
+    loop would attempt to restore the same, already-restored service a
+    second time."""
+    deduped_priority = dict.fromkeys(priority)
+    listed = [svc for svc in deduped_priority if svc in scope]
     unlisted = sorted(scope - set(listed),
                       key=lambda svc: (-demand_by_service.get(svc, 0.0), svc))
     return listed + unlisted
@@ -58,7 +67,7 @@ async def restore_after_cuts(
     counting, *, scenario, hour: str, hour_index: int, affected: list[str],
     priority: tuple[str, ...], ledger, geometry, issuance, rg_for_cut_hour,
     index_factory,
-) -> tuple[list, list[dict]]:
+) -> tuple[list["Action"], list[dict]]:
     """Restore whichever of `{scenario.service_under_test} ∪
     metadata.claimant_services` this hour's realized cut actually dropped
     (`affected`, the runner's `dropped_after_cut` for this hour), spending
@@ -114,9 +123,16 @@ async def restore_after_cuts(
     dropped = set(affected)
     index = await index_factory()
 
-    actions: list = []
+    actions: list["Action"] = []
     records: list[dict] = []
 
+    # Built ONCE, from this initial index, even though `index` is reassigned
+    # after every commit below. Safe: a demand_gbps figure is a property of
+    # the SERVICE, not of the topology a commit changes, and nothing in this
+    # replay (or the plan ops try_commit issues) creates or removes a
+    # service -- only reroutes one -- so a service present in the initial
+    # index stays present, with the same demand, through every later commit
+    # in this same hour.
     demand_by_service = {svc: index.service_by_id[svc]["demand_gbps"]
                          for svc in scope if svc in index.service_by_id}
 
@@ -158,9 +174,8 @@ async def restore_after_cuts(
             prefix=f"restore-{hour}-{service}", basis="physical",
             level="link")
         if rejection is not None:
-            records.append({"hour": hour, "service_id": service,
-                            "outcome": "rejected", "lever": candidate["lever"],
-                            "spares": {}, "effective_at_hour": None,
+            records.append({**_empty_record(hour, service, "rejected"),
+                            "lever": candidate["lever"],
                             "rejection": rejection})
             continue
 
@@ -175,10 +190,9 @@ async def restore_after_cuts(
         effective_at_hour = (scenario.hours[effective_at_index]
                              if effective_at_index < len(scenario.hours)
                              else None)
-        records.append({"hour": hour, "service_id": service,
-                        "outcome": "restored", "lever": candidate["lever"],
-                        "spares": spares, "effective_at_hour": effective_at_hour,
-                        "rejection": None})
+        records.append({**_empty_record(hour, service, "restored"),
+                        "lever": candidate["lever"], "spares": spares,
+                        "effective_at_hour": effective_at_hour})
         # The next service in this SAME replay must see what this commit
         # just did -- a new lightpath/IP-link id, spectrum now occupied.
         index = await index_factory()
