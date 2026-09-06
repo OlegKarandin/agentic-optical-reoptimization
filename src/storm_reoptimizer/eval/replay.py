@@ -174,7 +174,11 @@ async def restore_after_cuts(
         # reaching this line is ALREADY DOWN, and a two-op restoration plan
         # for a down service is refused wholesale for the outage it is
         # repairing. See `runner.try_commit`'s docstring for the full
-        # mechanism and the live evidence. The hourly decision loop keeps
+        # mechanism and the live evidence, and
+        # `docs/superpowers/plans/notes/2026-09-05-t1-authoring.md`'s "Known
+        # follow-up: `split_transient_outage` has no rollback on
+        # partial-commit failure" for the tracked record of its one open
+        # gap. The hourly decision loop keeps
         # the default (False): a decider acting PRE-EMPTIVELY is not
         # repairing an outage, so a transient drop there would be damage
         # its own plan introduced.

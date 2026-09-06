@@ -752,7 +752,10 @@ async def try_commit(counting, index, candidate: dict, service_id: str, *,
     **Why this exists** (found live, 2026-09-05, Task 15). `baseline=
     "standing"` moves a violation the standing state already carries into
     `pre_existing` -- but only a NON-transient one (`validate.py`: `if not
-    v.transient and (v.type, v.asset_id) in standing_keys`). A plan that
+    v.transient and (v.type, v.asset_id, _freeze(v.detail)) in
+    standing_keys`; the detail became part of that key in
+    multilayer-optical-network v0.2.2, which does not affect the reasoning
+    here -- a TRANSIENT finding is never suppressed under any key). A plan that
     restores an ALREADY-DROPPED service is always at least two ops
     (`plans.plan_from_candidate`: one or more `provision_lightpath`, then
     `reroute_service`), so the outage is still present after op 0 and gone
@@ -773,7 +776,14 @@ async def try_commit(counting, index, candidate: dict, service_id: str, *,
     The split is not free of risk and is deliberately opt-in: if part 1
     commits and part 2 is then refused, the network keeps a provisioned but
     unused lightpath (spectrum consumed) and the caller sees a rejection
-    with no ledger debit. That is reported as an ordinary rejection."""
+    with no ledger debit. That is reported as an ordinary rejection.
+
+    That atomicity gap -- its formal safety argument (the split provably
+    cannot let through anything atomic validation would have caught) and the
+    four follow-up items left open -- is recorded in a TRACKED file:
+    `docs/superpowers/plans/notes/2026-09-05-t1-authoring.md`, "Known
+    follow-up: `split_transient_outage` has no rollback on partial-commit
+    failure"."""
     try:
         plan = plan_from_candidate(index, candidate, service_id, prefix=prefix)
     except PlanTranslationError as exc:
