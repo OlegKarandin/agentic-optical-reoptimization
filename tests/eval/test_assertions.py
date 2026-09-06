@@ -936,7 +936,7 @@ def test_an_empty_group_with_nothing_measurably_at_risk_is_fine():
 # Sentinel, so `min_margin_gbps_h=None` means "declare NO floor" rather than
 # "leave the scenario's own floor alone". It used to be safe to conflate the
 # two only because the shipped T1a carried no floor at all; Task 15's
-# enumerated gold gives it one (127.0), which made the no-floor test below
+# enumerated gold gives it one (175.0), which made the no-floor test below
 # silently assert against a real floor.
 _KEEP = object()
 
