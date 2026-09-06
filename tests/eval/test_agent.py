@@ -1015,6 +1015,20 @@ def test_naming_a_model_without_the_flag_still_runs_baselines_only():
         "baseline:immediate", "baseline:at_deadline"]
 
 
+def test_only_and_runs_default_to_unset_and_the_module_constant():
+    args = build_arg_parser().parse_args([])
+    assert args.only is None
+    from storm_reoptimizer.eval.suite import RUNS_PER_EPISODE
+    assert args.runs == RUNS_PER_EPISODE
+
+
+def test_only_and_runs_are_parsed_from_the_command_line():
+    args = build_arg_parser().parse_args(
+        ["--include-agent", "--only", "T1a,T1b", "--runs", "1"])
+    assert args.only == "T1a,T1b"
+    assert args.runs == 1
+
+
 def test_the_agent_decider_is_not_collapsed_to_a_single_rollout():
     # collapse_deterministic special-cases ForecastBlindBaseline only, which
     # is what gives the agent its intended N=3 runs per episode for free.

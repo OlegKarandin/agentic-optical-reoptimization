@@ -6,10 +6,12 @@ import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import pytest
+
 from storm_reoptimizer.eval.baseline import ForecastBlindBaseline
 from storm_reoptimizer.eval.scenario_file import load_all_scenarios
 from storm_reoptimizer.eval.suite import (
-    RUNS_PER_EPISODE, render_results_table, run_suite,
+    RUNS_PER_EPISODE, render_results_table, run_suite, select_episodes,
 )
 from storm_reoptimizer.mcp_client import connect_server
 
@@ -21,6 +23,44 @@ TOPOLOGY_PATH = (
 
 def test_the_budget_is_three_runs_per_episode():
     assert RUNS_PER_EPISODE == 3
+
+
+def test_select_episodes_with_no_filter_returns_the_same_object():
+    # main()'s whole-suite gates rely on getting the IDENTICAL full roster
+    # back (not just an equal-by-value copy) when --only is absent, so a
+    # plain suite run's behavior is provably unchanged by this flag's
+    # existence.
+    all_episodes = load_all_scenarios()
+    assert select_episodes(all_episodes, None) is all_episodes
+    assert select_episodes(all_episodes, "") is all_episodes
+
+
+def test_select_episodes_filters_to_the_named_ids_in_the_given_order():
+    all_episodes = load_all_scenarios()
+    filtered = select_episodes(all_episodes, "T1b,T1a")
+    assert list(filtered) == ["T1b", "T1a"]
+    assert filtered["T1a"] is all_episodes["T1a"]
+
+
+def test_select_episodes_rejects_an_unknown_id():
+    all_episodes = load_all_scenarios()
+    with pytest.raises(SystemExit, match="nonexistent-id"):
+        select_episodes(all_episodes, "T1a,nonexistent-id")
+
+
+def test_select_episodes_does_not_mutate_the_full_roster():
+    # Regression lock for the bug this flag shipped with: `main()` used the
+    # `--only`-filtered dict for `assert_no_global_policy_solves_the_suite`
+    # too, and a 2-episode subset with different gold labels is ALWAYS
+    # trivially separable by a threshold on the flip variable -- found live,
+    # `--only T1a,T1b` crashed that gate with "a fixed global policy solves
+    # the suite 2/2" before any agent call was made. The fix is that the
+    # full roster passed in must come back unmodified and distinct from
+    # whatever a caller does with the filtered result.
+    all_episodes = load_all_scenarios()
+    original_ids = set(all_episodes)
+    select_episodes(all_episodes, "T1a,T1b")
+    assert set(all_episodes) == original_ids
 
 
 def _connect_factory(state_path, server_command, server_env):

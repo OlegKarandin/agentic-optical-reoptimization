@@ -223,6 +223,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--agent-model", default=DEFAULT_MODEL,
         help=f"Model for --include-agent (default: {DEFAULT_MODEL}).")
+    p.add_argument(
+        "--only", default=None,
+        help="Comma-separated scenario ids to run (e.g. T1a,T1b). Restricts "
+             "both the pre-flight gates and the rollouts to this subset. "
+             "Default: every scenario `load_all_scenarios` finds.")
+    p.add_argument(
+        "--runs", type=int, default=RUNS_PER_EPISODE, dest="runs",
+        help=f"Rollouts per episode per (non-collapsed) decider (default: "
+             f"{RUNS_PER_EPISODE}). Scoped low for a paid --include-agent "
+             f"run; a deterministic baseline still collapses to one "
+             f"rollout regardless (see collapse_deterministic).")
     return p
 
 
@@ -236,6 +247,31 @@ def build_deciders(args: argparse.Namespace) -> list:
         deciders.append(ClaudeDecider(
             model=args.agent_model, audit_path=AGENT_AUDIT_PATH))
     return deciders
+
+
+def select_episodes(all_episodes: dict[str, ScenarioFile],
+                    only: str | None) -> dict[str, ScenarioFile]:
+    """`--only`'s own filter, pulled out of `main()` so it is unit-testable
+    without a live server: a comma-separated allowlist of scenario ids, or
+    `all_episodes` itself unchanged when `only` is falsy. Never mutates
+    `all_episodes` -- `main()` relies on that to keep passing the FULL
+    roster to the two whole-suite gates
+    (`assert_no_single_variable_rule_solves`,
+    `assert_no_global_policy_solves_the_suite`) regardless of this filter;
+    see `main()`'s own comment on why those two must never see a narrowed
+    set (a two-episode subset with different labels is trivially separable
+    by construction, so scoping them down fails the build for a reason that
+    has nothing to do with a real confound -- found live the first time
+    `--only T1a,T1b` was run)."""
+    if not only:
+        return all_episodes
+    wanted = [s.strip() for s in only.split(",") if s.strip()]
+    missing = [s for s in wanted if s not in all_episodes]
+    if missing:
+        raise SystemExit(
+            f"--only names scenario id(s) not found by load_all_scenarios: "
+            f"{missing}. Known ids: {sorted(all_episodes)}")
+    return {sid: all_episodes[sid] for sid in wanted}
 
 
 async def _groups_for(client, scenario: ScenarioFile, *,
@@ -362,13 +398,26 @@ def main(argv: list[str] | None = None) -> None:
 
     topology = (Path(__file__).parent.parent / "data"
                 / "toy_india_topology.json")
-    episodes = load_all_scenarios()
+    # `all_episodes` is the FULL roster and is never narrowed by `--only`: the
+    # two whole-suite gates below (`assert_no_single_variable_rule_solves`,
+    # `assert_no_global_policy_solves_the_suite`) ask whether any rule
+    # separates every episode's gold label, and that question is only
+    # meaningful over the full suite -- any two-episode subset with
+    # different labels is TRIVIALLY separable by a threshold on whatever
+    # scalar happens to differ between them (that's what makes them a valid
+    # flipped pair at all), so scoping these two checks down to `--only`
+    # would make them fail by construction, not find a real confound. Found
+    # live: `--only T1a,T1b` crashed `assert_no_global_policy_solves_the_
+    # suite` with "a fixed global policy solves the suite 2/2" the first
+    # time this flag was wired up, before this comment existed.
+    all_episodes = load_all_scenarios()
     # state_file is recorded relative to the repo root (see scenario_file.py's
     # module docstring and every scenario YAML's "eval/states/..." value), not
     # relative to the current working directory -- resolve it against
     # REPO_ROOT so `python -m storm_reoptimizer.eval.suite` works regardless
     # of the caller's cwd.
-    state = REPO_ROOT / episodes["D1"].state_file
+    state = REPO_ROOT / all_episodes["D1"].state_file
+    episodes = select_episodes(all_episodes, args.only)
 
     # A real install puts `multilayer-optical-mcp` on PATH and
     # connect_server()'s own default handles it. This workspace's sibling
@@ -393,20 +442,23 @@ def main(argv: list[str] | None = None) -> None:
     async def _derived_scalars() -> dict[str, dict[str, float]]:
         async with _connect() as client:
             return await derived_scalars_for(
-                client, list(episodes.values()), topology_path=topology)
+                client, list(all_episodes.values()), topology_path=topology)
 
     async def _flip_scalars() -> dict[str, FlipScalars]:
         async with _connect() as client:
             return await flip_scalars_for(
-                client, list(episodes.values()), topology_path=topology)
+                client, list(all_episodes.values()), topology_path=topology)
 
     # Widened with DERIVED (not just author-declared) geometry -- the
     # declared-only check is exactly what missed T1's p_cut confound for
     # three rounds of review (whole-branch review, finding C2). The entry
     # point that prints Claim 2 below must be backed by the same enumeration
     # that closed the finding, not the weaker one that missed it.
+    #
+    # Both this and the next check run over `all_episodes`, NOT the
+    # `--only`-filtered `episodes` -- see all_episodes' own comment above.
     assert_no_single_variable_rule_solves(
-        list(episodes.values()), asyncio.run(_derived_scalars()))
+        list(all_episodes.values()), asyncio.run(_derived_scalars()))
 
     # ...alongside the existing per-pair check. Two checks, two questions:
     # the per-pair one asks whether any scalar the halves SHARE differs; this
@@ -415,7 +467,7 @@ def main(argv: list[str] | None = None) -> None:
     flip_values = {sid: f.values()
                   for sid, f in asyncio.run(_flip_scalars()).items()}
     assert_no_global_policy_solves_the_suite(
-        list(episodes.values()), flip_values)
+        list(all_episodes.values()), flip_values)
 
     # Invariant 8 (Task 12's own numbering; wired here in Task 14 against the
     # real, frozen per-episode numbers, per the exposure-and-depot plan) --
@@ -433,7 +485,8 @@ def main(argv: list[str] | None = None) -> None:
         _connect, episodes, topology_path=topology))
 
     results = asyncio.run(run_suite(
-        _connect, topology_path=topology, deciders=build_deciders(args)))
+        _connect, topology_path=topology, deciders=build_deciders(args),
+        scenarios=episodes, runs_per_episode=args.runs))
     print(render_results_table(results))
 
 
