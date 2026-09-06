@@ -141,7 +141,9 @@ def main() -> None:
     parser.add_argument("--min-margin-fraction", type=float, default=0.25,
                         dest="min_margin_fraction",
                         help="gold.min_margin_gbps_h = this fraction of the "
-                        "smaller of the two totals, floored at 1.0")
+                        "smaller of the two SCOPE-ONLY totals (the service "
+                        "under test plus its declared claimants, not the "
+                        "network-wide total), floored at 1.0")
     args = parser.parse_args()
     asyncio.run(run(args))
 

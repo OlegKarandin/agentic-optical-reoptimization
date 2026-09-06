@@ -79,9 +79,17 @@ class Gold:
     # enumerator; None for every episode not using the
     # `spare_action_by_deadline` label rule.
     outcome_gbps_h: dict[str, float] | None = None
-    # The smallest of the two outcomes' margin over the other, in Gbps-hours
-    # -- a diagnostic scalar the oracle enumerator records alongside
-    # outcome_gbps_h; not consumed by scoring.py itself.
+    # The REQUIRED margin floor, in Gbps-hours: the best outcome in
+    # outcome_gbps_h must beat every other by at least this much, or the
+    # episode is invalid. Enforced -- not merely recorded -- by
+    # `assertions.assert_gold_matches_outcomes`, which raises PairInvalid
+    # when the measured margin falls below it, so that a gold label is not
+    # merely correct but correct by a margin an author could not have hit by
+    # accident. `gold.gold_from_outcomes` computes it as a fraction of the
+    # smaller SCOPE-ONLY total (the SUT plus its declared claimants),
+    # floored at 1.0. None (every episode not using the
+    # `spare_action_by_deadline` label rule) declares NO floor and skips the
+    # check.
     min_margin_gbps_h: float | None = None
 
 

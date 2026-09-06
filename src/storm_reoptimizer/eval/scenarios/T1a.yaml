@@ -160,7 +160,7 @@ gold:
   outcome_gbps_h:
     spend: 13000.0
     hold: 12700.0
-  min_margin_gbps_h: 127.0
+  min_margin_gbps_h: 175.0
 flip_variable:
 - spend
 - hold

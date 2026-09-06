@@ -127,20 +127,44 @@ def gold_from_outcomes(
     `outcome_gbps_h` is the flat `{choice: total}` map `Gold.outcome_gbps_h`
     stores (and `assertions.assert_gold_matches_outcomes` re-checks against
     a fresh enumeration). `min_margin_gbps_h` is `min_margin_fraction` of
-    the smaller total, floored at 1.0 Gbps-hour so a near-zero optimal loss
-    cannot demand a near-zero margin (spec 4.6's own open-question proposal:
-    "the smaller of the two halves' margins must be at least 25% of that
-    half's optimal loss"). `survived` is every service in `_scope` whose
-    loss under the GOLD choice is exactly zero -- not necessarily every
-    service in `scope`, since the gold choice itself may still cost the SUT
-    or a claimant something. `rationale` is `_rationale_table`'s own text,
-    not hand-written prose, per spec 4.6."""
+    the smaller SCOPE-ONLY total -- the sum of the losses borne by `_scope`
+    (the service under test and its declared claimants) alone, NOT the
+    network-wide total -- floored at 1.0 Gbps-hour so a near-zero optimal
+    loss cannot demand a near-zero margin (spec 4.6's own open-question
+    proposal: "the smaller of the two halves' margins must be at least 25%
+    of that half's optimal loss").
+
+    The scope-only denominator is the point (whole-branch review 2026-09-05,
+    Important finding 1; the fix the authoring note's own "Why
+    `--min-margin-fraction 0.01`" section recommended). A `total` is the
+    WHOLE harness's loss, and is dominated by background services that ride
+    the cut fibres under BOTH choices -- ~12000 Gbps-h identical in both
+    columns, carrying no information about the decision. Scaling the floor
+    off that demands a margin thousands of Gbps-h wide from a policy
+    difference whose entire scale is hundreds, which no geometry can meet;
+    scaling it off the scope total asks exactly what the spec asks, of
+    exactly the services the decision moves.
+
+    `label` is deliberately still the argmin of the NETWORK-WIDE `totals`
+    (unchanged): the gold answer is which choice costs the network less, and
+    only the FLOOR's denominator was ever wrong.
+
+    `survived` is every service in `_scope` whose loss under the GOLD choice
+    is exactly zero -- not necessarily every service in `scope`, since the
+    gold choice itself may still cost the SUT or a claimant something.
+    `rationale` is `_rationale_table`'s own text, not hand-written prose,
+    per spec 4.6."""
     totals = {choice: data["total"] for choice, data in outcomes.items()}
     label = min(totals, key=totals.get)
-    min_total = min(totals.values())
-    min_margin_gbps_h = max(min_margin_fraction * min_total, 1.0)
 
     scope = _scope(scenario)
+    scope_totals = {
+        choice: sum(data["gbps_hours_lost"].get(sid, 0.0) for sid in scope)
+        for choice, data in outcomes.items()
+    }
+    min_margin_gbps_h = max(
+        min_margin_fraction * min(scope_totals.values()), 1.0)
+
     gold_losses = outcomes[label]["gbps_hours_lost"]
     survived = tuple(sid for sid in scope if gold_losses.get(sid, 0.0) == 0.0)
 
