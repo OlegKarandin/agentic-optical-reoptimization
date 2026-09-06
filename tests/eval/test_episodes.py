@@ -10,7 +10,7 @@ import pytest
 
 from storm_reoptimizer.eval import oracle
 from storm_reoptimizer.eval.assertions import (
-    PairInvalid, assert_both_legs_exposed, assert_flip_dominates,
+    assert_both_legs_exposed, assert_flip_dominates,
     assert_pair_derived_geometry_is_equal,
     assert_each_baseline_variant_ties, assert_gold_choices_differ,
     assert_gold_matches_outcomes, assert_gold_spare_action_is_grounded,
@@ -371,7 +371,9 @@ def test_t2_non_flip_decisions_are_non_binding(
     scenario = load_all_scenarios()[half]
     timing, constraints, objective = _T2_NON_FLIP_GOLD_DECISIONS[half]
     # T2a/T2b both declare `gold.decision_at_t0: wait`: gold HOLDS at t0 and
-    # acts at t1. See _T1_NON_FLIP_GOLD_DECISIONS' comment.
+    # acts at t1, so the "act" belongs in `gold_by_hour` at the decision hour,
+    # never as a bare default -- see `_t1_gold_replay`'s comment above, which
+    # states the same rule for T1's own gold replay.
     gold_decisions = {
         "timing": TimingDecision("wait", "gold: hold at t0, per "
                                          "gold.decision_at_t0"),
@@ -848,48 +850,61 @@ def _unwrap_lone_exception(exc: BaseException) -> BaseException:
     nested `ExceptionGroup`s on cleanup -- confirmed live (Finding #3,
     2026-08-26 re-review): a bare `PairInvalid` raised by an assertion inside
     that body reaches `asyncio.run(_run())`'s caller as `ExceptionGroup(
-    ExceptionGroup(PairInvalid))`, not a plain `PairInvalid`. Without this
-    unwrap, `pytest.mark.xfail(raises=PairInvalid)` can never match ANYTHING
-    in this environment -- it isn't narrowing to the known finding, it is
-    unconditionally converting the xfail into a hard FAIL, the opposite of
-    what Finding #3 asked for. Peel off only SINGLE-exception nesting (a
-    concurrent failure -- more than one exception in a group -- is a
-    genuinely different situation and is left as the group, unmatched by
-    `raises=PairInvalid`, exactly as it should be)."""
+    ExceptionGroup(PairInvalid))`, not a plain `PairInvalid`. It was added so
+    the caller's then-`pytest.mark.xfail(raises=PairInvalid)` could match at
+    all; that marker is gone (2026-09-05, Task 15 review -- see the comment on
+    `test_a_conserve_gold_has_no_free_escape`), and the unwrap is kept because
+    it is still what makes a real assertion failure legible in the report
+    instead of a two-deep ExceptionGroup traceback. Peel off only
+    SINGLE-exception nesting: a concurrent failure -- more than one exception
+    in a group -- is a genuinely different situation and is left as the
+    group."""
     while isinstance(exc, BaseExceptionGroup) and len(exc.exceptions) == 1:
         exc = exc.exceptions[0]
     return exc
 
 
-# Kept as xfail (not skip): the check is correct and should keep running live
-# so an eventual fix (e.g. exempting a genuine protection-switch from "moves
-# the service", or reshaping reference_avoid/the menu so the escape isn't
-# offered) shows up as an unexpected XPASS instead of silently vanishing.
-# `raises=PairInvalid` (Finding #3, 2026-08-26 re-review) so an UNRELATED
-# failure here -- a launch/protocol error from `connect_server`, or
-# `_current_working_lightpaths` raising `PairInvalid` because "the server
-# reports no service X" -- surfaces as a real failure instead of being
-# silently absorbed as "the expected known finding". The bare decorator only
-# narrows by exception TYPE; `test_the_raised_message_names_the_specific_
-# lightpath_and_reason` (test_assertions.py) pins the exact message content
-# at the pure-unit level, since xfail's own `raises=` cannot match on it.
-# `_unwrap_lone_exception` is required for `raises=` to work at all here --
-# see its own docstring; confirmed live that without it this test hard-FAILs
-# instead of xfailing, on the very finding it is supposed to track.
-@pytest.mark.xfail(
-    reason="W1.6 finding (task 5, 2026-08-26; narrowed by Finding #5, "
-           "2026-08-26 re-review): T1a offers a free ip_reroute onto "
-           "storm-svc-1's own static protection lightpath under "
-           "reference_avoid={}, and committing it reads label 'act' where "
-           "gold says 'wait' -- a real, structural free escape, independent "
-           "of forecast geometry. Flagged for W2/W3/W4; not this dispatch's "
-           "scope to repair the scenario/menu.",
-    strict=False, raises=PairInvalid)
+# THE `xfail` MARKER IS GONE (2026-09-05, Task 15 review) -- and the reason it
+# is gone matters more than the fact, because this test now looks trivial and
+# a future reader must not mistake that for an oversight.
+#
+# The W1.6 finding this used to track was specific to T1's OLD `label_rule`,
+# `timing_at_decision_hour`: under that rule `assertions._label_if_committed`
+# returns "act" for ANY commit, so a free (0-pair) ip_reroute onto
+# storm-svc-1's own static protection lightpath read "act" against a gold of
+# "wait" and really was an exploitable escape.
+#
+# T1's redesigned label rule is `spare_action_by_deadline`, under which
+# `_label_if_committed` returns `"spend" if depot_spares_needed else "hold"`.
+# `_check_no_free_escape`'s outer gate only ever reaches candidates whose
+# TOTAL `spares_needed` is 0, so `depot_spares_needed` is necessarily 0 too
+# and the label is necessarily "hold" -- which IS T1a's gold. The condition
+# this check hunts for is therefore structurally IMPOSSIBLE for a
+# `spare_action_by_deadline` conserve half, not merely absent from today's
+# menu: a candidate that costs nothing cannot read "spend", and "spend" is the
+# only label that would differ from gold here.
+#
+# So the test cannot fail on the finding any more, and keeping `xfail(strict=
+# False, raises=PairInvalid)` would be actively harmful: an XPASS every run
+# (noise that reads as "the finding is fixed" when it is really "unreachable"),
+# and -- worse -- any genuinely UNRELATED `PairInvalid`, e.g.
+# `_current_working_lightpaths` raising because the server reports no such
+# service, would be silently absorbed as "expected". Running it unmarked keeps
+# the live plumbing (menu fetch, current-lightpath resolution) exercised and
+# makes any future breakage a hard failure. `_unwrap_lone_exception` below
+# stays for the same reason it was added (Finding #3, 2026-08-26): anyio wraps
+# whatever is raised inside `stdio_client` in nested ExceptionGroups, and the
+# unwrap is what makes a real `PairInvalid` legible in the report.
+#
+# If a later pair re-introduces a conserve half on a label rule where a
+# zero-pair commit CAN change the graded label, this check becomes meaningful
+# again with no change to it.
 def test_a_conserve_gold_has_no_free_escape(
     loaded_state_path, local_server_command, local_server_env,
 ):
     """W1.6, T1a only -- see the module-level comment above for why T2b/T3b
-    were split out into their own, non-xfail test."""
+    were split out into their own test, and the comment directly above for
+    why this one is unmarked and currently unfalsifiable."""
     scenario = load_scenario(SCENARIOS / "T1a.yaml")
 
     async def _run():
@@ -912,12 +927,19 @@ def test_a_conserve_gold_has_no_free_escape(
 # the one that actually gets committed; `None` for a half whose gold never
 # commits anything at all (a pure-wait timing half). See `assert_gold_spare_
 # action_is_grounded`'s docstring for the full investigation: T2a/T3a/T2b/T3b
-# already tie this down structurally via test_episodes.py's own non-flip gold
-# fixtures and their scenario YAMLs' rationale prose; T1 did not, and T1b in
-# particular declares "spend" while `_T1_NON_FLIP_GOLD_DECISIONS` uses
-# candidate_0 (an ip_reroute, 0 pairs) for BOTH halves -- a deliberate,
-# non-representative placeholder for testing that T1's objective decision is
-# non-binding, not a claim about what T1b's real committed action costs.
+# tie this down structurally via test_episodes.py's own non-flip gold fixtures
+# and their scenario YAMLs' rationale prose.
+#
+# T1 did NOT, at the time of that finding: its non-flip fixture then used a
+# fixed `candidate_0` (an ip_reroute costing 0 pairs) for BOTH halves -- a
+# deliberate, non-representative placeholder, not a claim about what T1b's
+# real committed action costs. That gap is closed since the 2026-09-05
+# redesign (Task 15): T1's gold replay is now `_t1_gold_replay` above, which
+# builds the spend half's objective from `oracle.escape_objective` -- the same
+# RULE `oracle.spend_decider` (and therefore the enumerator that computed
+# `gold.label`) is wired to, so it necessarily picks a candidate that changes
+# the working path, clears the SUT's own protection, and charges a real
+# transponder pair. `test_t1_spend_is_real` checks that exact pick live.
 _GOLD_COMMITTED_LEVER = {
     "T1a": None,                 # gold label "hold": the gold rollout never
                                   # acts on the SUT at all, so it commits no
@@ -974,13 +996,21 @@ FROZEN_SCALARS_PATH = (
 
 # RE-FROZEN 2026-09-05 (Task 15), and un-skipped with it. Tasks 3/4 of this
 # plan moved `p_cut` to a joint (working-AND-protection) probability for
-# protected services, which moved derived.py's scalars for EVERY protected
-# episode -- so the pre-Task-3 snapshot this test read was stale for D1/T2/T3
-# as well as for T1, and Task 11 skipped the test rather than re-freeze it
-# mid-plan. Task 15 re-froze it against the rebuilt state
+# protected services, which moved `sut_p_cut_at_exposure_horizon` for T2 and
+# T3 as well as for T1 -- so the pre-Task-3 snapshot this test read was stale
+# beyond T1's own rebuild, and Task 11 skipped the test rather than re-freeze
+# it mid-plan. Task 15 re-froze it against the rebuilt state
 # (`tools/freeze_derived_scalars.py --state eval/states/loaded-s17.json`),
-# which also picks up T1's brand-new SUT/claimant pins. The guarantee below
-# is unchanged and now bites again from this snapshot forward.
+# which also picks up T1's brand-new SUT/claimant pins.
+#
+# Exactly what moved, diffed entry by entry against the pre-Task-15 snapshot:
+# `derived` for T1a/T1b/T2a/T2b/T3a/T3b (the joint-p_cut change, plus T1's new
+# geometry) and `flip` for T1a/T1b only (T2/T3's claimant aggregates are
+# unchanged). D1 moved in NEITHER section -- both its scalars are saturated
+# (`sut_p_cut_at_exposure_horizon: 1.0`, claimant aggregates 1100.0/200.0), so
+# the model change could not shift them.
+#
+# The guarantee below is unchanged and bites again from this snapshot forward.
 def test_the_probability_model_scalars_are_unmoved(
     loaded_state_path, local_server_command, local_server_env,
 ):
