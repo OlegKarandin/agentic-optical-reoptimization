@@ -879,8 +879,19 @@ function renderScrubber(episode, run) {
 
         const strip = document.createElement('div');
         const acted = actionsByHour[h.hour] || [];
+        // gold_spare_action judges the DECIDER's own timing choice, not what
+        // the hour ended up doing overall: replay.restore_after_cuts mints
+        // origin="harness" Actions (runner.py's actions.extend(restore_
+        // actions)) that land in this SAME per-hour list whenever a cut this
+        // hour is restored -- e.g. a harness restoration of some OTHER
+        // affected service, in the same hour the decider itself chose to
+        // conserve. Without this filter that harness spend renders as the
+        // decider's own "spend", a false positive. scoring.py filters the
+        // identical way (`a.origin == "decider"`) for the equivalent
+        // judgment -- same convention, same field (Task 16 fix-report).
+        const decided = acted.filter(a => a.origin === 'decider');
         let cls = 'unknown';
-        if (gold.gold_spare_action && acted.length) {
+        if (gold.gold_spare_action && decided.length) {
             // Any site charged (a non-empty, non-zero `spares` dict) spends
             // a physical spare (optical_reroute); an empty dict does not
             // (ip_reroute / rate-reduce) -- that split is what
@@ -890,7 +901,7 @@ function renderScrubber(episode, run) {
             // `a.pairs` here always evaluated to `(undefined || 0) > 0` ->
             // false, silently misreporting every action as "conserve"
             // (whole-branch final review, finding 2).
-            const spent = acted.some(
+            const spent = decided.some(
                 a => Object.values(a.spares || {}).some(n => n > 0));
             const agentAction = spent ? 'spend' : 'conserve';
             cls = agentAction === gold.gold_spare_action ? 'match' : 'mismatch';

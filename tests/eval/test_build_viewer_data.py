@@ -212,6 +212,20 @@ def test_the_html_is_one_self_contained_file(folded):
         assert banned not in html
 
 
+def test_the_scrubber_filters_the_spend_hold_strip_to_decider_actions(folded):
+    # Task 16 fix-report: renderScrubber's spend/conserve match indicator
+    # must judge only the DECIDER's own actions, the same convention
+    # scoring.py uses (`a.origin == "decider"`) -- a harness restoration
+    # (replay.restore_after_cuts mints origin="harness" Actions into the
+    # SAME per-hour list) must not be able to render as the decider's own
+    # "spend". This is JS embedded in the generated HTML, so it is checked
+    # as a string assertion on the rendered output rather than executed.
+    html = bvd.render_html(folded)
+    assert "a.origin === 'decider'" in html
+    assert "decided.length" in html
+    assert "decided.some(" in html
+
+
 def test_the_payload_survives_a_script_close_in_the_data(folded):
     folded["episodes"]["T3b"]["gold"]["rationale"] = "</script><b>x</b>"
     html = bvd.render_html(folded)
