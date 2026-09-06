@@ -135,8 +135,9 @@ def gold_from_outcomes(
     of that half's optimal loss").
 
     The scope-only denominator is the point (whole-branch review 2026-09-05,
-    Important finding 1; the fix the authoring note's own "Why
-    `--min-margin-fraction 0.01`" section recommended). A `total` is the
+    Important finding 1; see `docs/superpowers/plans/notes/2026-09-05-t1-
+    authoring.md`, "The margin floor's denominator", for the numbers and the
+    workaround this replaced). A `total` is the
     WHOLE harness's loss, and is dominated by background services that ride
     the cut fibres under BOTH choices -- ~12000 Gbps-h identical in both
     columns, carrying no information about the decision. Scaling the floor
