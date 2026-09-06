@@ -69,6 +69,84 @@ def test_the_results_table_reports_both_claims_separately(
         assert results["pairs"][variant]["pair_solved"] == 0.0
 
 
+def test_the_results_table_reports_regret_and_inert_commits():
+    # A fabricated results dict -- no server, no rollout -- exercising only
+    # render_results_table's own aggregation (Task 16): regret_gbps_h is the
+    # MEAN over every run's episode_metrics entry, inert_commits is the SUM.
+    results = {
+        "episodes": {
+            "T1a": {"baseline:immediate": {
+                "runs": [], "label_correct_mean": 1.0,
+                "label_correct_spread": 0.0,
+                "metrics": [{"regret_gbps_h": 10.0, "inert_commits": 1},
+                            {"regret_gbps_h": 20.0, "inert_commits": 3}]}},
+            "T1b": {"baseline:immediate": {
+                "runs": [], "label_correct_mean": 0.0,
+                "label_correct_spread": 0.0,
+                "metrics": [{"regret_gbps_h": 30.0, "inert_commits": 0}]}},
+        },
+        "pairs": {"baseline:immediate": {"pair_solved": 0.0, "detail": {}}},
+        "budget": {"seeds": [17], "episodes": 2, "runs_per_episode": 1,
+                  "rollouts": 2},
+    }
+    table = render_results_table(results)
+    assert "regret_gbps_h" in table
+    assert "inert_commits" in table
+    # mean([10.0, 20.0, 30.0]) == 20.0; sum([1, 3, 0]) == 4
+    header, _, row = table.splitlines()[:3]
+    cells = [c.strip() for c in row.strip("|").split("|")]
+    assert cells[3] == "20.0"
+    assert cells[4] == "4"
+
+
+def test_the_results_table_tolerates_episodes_with_no_regret_figure():
+    # scoring.episode_metrics reports regret_gbps_h=None on any episode not
+    # graded on `spare_action_by_deadline` (today: everything but T1a/T1b --
+    # D1/T2/T3 have no gold.outcome_gbps_h to regret against). Found live
+    # running the FULL 7-episode suite: statistics.fmean over a generator
+    # that includes a None crashes with TypeError -- this test is the
+    # regression lock for that fix, reproducing the exact shape (some runs
+    # None, some real) rather than only the all-real fixture above.
+    results = {
+        "episodes": {
+            "T1a": {"baseline:immediate": {
+                "runs": [], "label_correct_mean": 1.0,
+                "label_correct_spread": 0.0,
+                "metrics": [{"regret_gbps_h": 10.0, "inert_commits": 1}]}},
+            "D1": {"baseline:immediate": {
+                "runs": [], "label_correct_mean": 1.0,
+                "label_correct_spread": 0.0,
+                "metrics": [{"regret_gbps_h": None, "inert_commits": 0}]}},
+        },
+        "pairs": {"baseline:immediate": {"pair_solved": 0.0, "detail": {}}},
+        "budget": {"seeds": [17], "episodes": 2, "runs_per_episode": 1,
+                  "rollouts": 2},
+    }
+    row = render_results_table(results).splitlines()[2]
+    cells = [c.strip() for c in row.strip("|").split("|")]
+    # mean over the ONE real value (10.0), the None is skipped, not averaged
+    # in; inert_commits is a plain sum across both episodes (1 + 0).
+    assert cells[3] == "10.0"
+    assert cells[4] == "1"
+
+
+def test_the_results_table_reports_n_a_when_no_run_has_a_regret_figure():
+    results = {
+        "episodes": {
+            "D1": {"baseline:immediate": {
+                "runs": [], "label_correct_mean": 1.0,
+                "label_correct_spread": 0.0,
+                "metrics": [{"regret_gbps_h": None, "inert_commits": 0}]}},
+        },
+        "pairs": {"baseline:immediate": {"pair_solved": 0.0, "detail": {}}},
+        "budget": {"seeds": [17], "episodes": 1, "runs_per_episode": 1,
+                  "rollouts": 1},
+    }
+    row = render_results_table(results).splitlines()[2]
+    cells = [c.strip() for c in row.strip("|").split("|")]
+    assert cells[3] == "n/a"
+
+
 def test_traces_land_on_disk(
     tmp_path, loaded_state_path, local_server_command, local_server_env,
 ):

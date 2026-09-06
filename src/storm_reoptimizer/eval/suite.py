@@ -132,15 +132,48 @@ async def run_suite(connect, *, topology_path, deciders,
     return results
 
 
+def _decider_metrics(results: dict, name: str) -> list[dict]:
+    """Every per-run `episode_metrics` dict recorded for `name`, across every
+    episode -- what the table's regret/inert_commits columns aggregate over.
+    Not every decider necessarily ran every episode (e.g. a scenarios= subset
+    passed to run_suite), so this skips episodes `name` is absent from rather
+    than assuming a uniform roster."""
+    return [m for ep in results["episodes"].values() if name in ep
+           for m in ep[name]["metrics"]]
+
+
 def render_results_table(results: dict) -> str:
     """The README's table, plus the two claims stated separately -- they carry
-    different weight and must not be blurred."""
-    lines = ["| decider | pair_solved | episodes correct | notes |",
-             "|---|---|---|---|"]
+    different weight and must not be blurred.
+
+    `regret_gbps_h` and `inert_commits` (Task 8/6's `episode_metrics` keys)
+    are surfaced here as one number per decider: the mean over every
+    recorded run for `regret_gbps_h` (a per-episode outcome gap, so mean is
+    the natural rollup), and the plain sum for `inert_commits` (a count of
+    free no-op commits -- T1's finding that a candidate changing no path and
+    spending no spare is otherwise indistinguishable from a real action).
+
+    `regret_gbps_h` is `None` on any run whose episode is not graded on the
+    `spare_action_by_deadline` label rule (scoring.episode_metrics: today
+    that's every episode but T1a/T1b -- D1/T2/T3 have no `gold.
+    outcome_gbps_h` to regret against). The mean is over the runs that DO
+    carry a real value; a decider with none at all reports "n/a" rather than
+    crashing statistics.fmean on a generator of Nones (found live running
+    the full 7-episode suite -- --scenario-scoped tests only ever saw T1a/
+    T1b and never hit this)."""
+    lines = ["| decider | pair_solved | episodes correct | regret_gbps_h | "
+             "inert_commits | notes |",
+             "|---|---|---|---|---|---|"]
     for name, summary in sorted(results["pairs"].items()):
         correct = sum(
             1 for ep in results["episodes"].values()
             if name in ep and ep[name]["label_correct_mean"] >= 0.5)
+        metrics = _decider_metrics(results, name)
+        regrets = [m["regret_gbps_h"] for m in metrics
+                  if m["regret_gbps_h"] is not None]
+        regret_str = (f"{statistics.fmean(regrets):.1f}" if regrets
+                     else "n/a")
+        inert_total = sum(m["inert_commits"] for m in metrics)
         if name.startswith("baseline:"):
             note = ("fixed policy: same input in both halves, so exactly one "
                     "half per pair")
@@ -149,7 +182,8 @@ def render_results_table(results: dict) -> str:
         else:
             note = ""
         lines.append(f"| {name} | {summary['pair_solved']:.2f} | "
-                     f"{correct}/{len(results['episodes'])} | {note} |")
+                     f"{correct}/{len(results['episodes'])} | "
+                     f"{regret_str} | {inert_total} | {note} |")
     budget = results["budget"]
     lines += [
         "",

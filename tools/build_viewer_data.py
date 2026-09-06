@@ -158,6 +158,12 @@ def load_run(path: Path) -> dict:
             "actions": trace.get("actions") or [],
             "oms_nodes": trace.get("oms_nodes") or {},
             "tool_calls": trace.get("tool_calls"),
+            # EpisodeTrace.restorations (Task 7): every service the harness's
+            # deterministic post-cut replay attempted to restore, flattened
+            # across the whole episode. Optional, like every other key added
+            # since the 21 archived control rollouts (§6.2 above) -- a
+            # pre-Task-7 trace has none.
+            "restorations": trace.get("restorations") or [],
             "hours": hours}
 
 

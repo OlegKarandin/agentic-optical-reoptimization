@@ -42,6 +42,14 @@ FIXTURE_TRACE = {
                  "spares": {"satna": 1, "allahabad": 1},
                  "service_id": "storm-svc-1", "avoid": {}}],
     "oms_nodes": {"oms_sj": ["satna", "jhansi"]},
+    # EpisodeTrace.restorations (Task 7): the deterministic post-cut replay's
+    # own records, flattened across the episode -- replay._empty_record's
+    # shape plus the "restored" outcome's real lever/spares/effective_at_hour
+    # (replay.py line ~202).
+    "restorations": [
+        {"hour": "t1", "service_id": "d0462", "outcome": "restored",
+         "lever": "optical_reroute", "spares": {"satna": 1},
+         "effective_at_hour": "t2", "rejection": None}],
     "affected_by_hour": {}, "tool_calls": 61, "wall_clock_s": 1.0,
     "final_routing": {},
     "hours": [{
@@ -157,6 +165,13 @@ def test_the_committed_candidate_is_marked(folded):
     assert it["menu"]["candidates"][0]["committed"] is True
 
 
+def test_restorations_survive_load_run(folded):
+    # EpisodeTrace.restorations (Task 7) -- the replay's own records, passed
+    # through by build_viewer_data.load_run untouched.
+    run = folded["episodes"]["T3b"]["runs"][0]
+    assert run["restorations"] == FIXTURE_TRACE["restorations"]
+
+
 def test_the_gold_label_and_spare_action_travel_with_the_episode(folded):
     gold = folded["episodes"]["T3b"]["gold"]
     assert gold["label"] == "B"
@@ -166,7 +181,8 @@ def test_the_gold_label_and_spare_action_travel_with_the_episode(folded):
 def test_a_pre_change_trace_folds_without_the_new_keys(tmp_path):
     # The 21 archived control rollouts have no observation/projected/menu and
     # spell it `service_under_test` (run-viewer design, §6.2).
-    old = {k: v for k, v in FIXTURE_TRACE.items() if k != "oms_nodes"}
+    old = {k: v for k, v in FIXTURE_TRACE.items()
+          if k not in ("oms_nodes", "restorations")}
     old["hours"] = [{k: v for k, v in FIXTURE_TRACE["hours"][0].items()
                      if k not in ("observation", "projected", "service_points",
                                   "service_paths", "unmapped_nodes")}]
@@ -180,9 +196,11 @@ def test_a_pre_change_trace_folds_without_the_new_keys(tmp_path):
         / "eval" / "scenarios",
         Path(__file__).parent.parent.parent / "src" / "storm_reoptimizer"
         / "data" / "toy_india_topology.json")
-    hour = payload["episodes"]["T3b"]["runs"][0]["hours"][0]
+    run = payload["episodes"]["T3b"]["runs"][0]
+    hour = run["hours"][0]
     assert hour["exposure_rows"] == []
     assert hour["service_paths"] == {}
+    assert run["restorations"] == []
 
 
 def test_the_html_is_one_self_contained_file(folded):
