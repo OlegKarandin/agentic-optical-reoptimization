@@ -398,18 +398,28 @@ def main(argv: list[str] | None = None) -> None:
 
     topology = (Path(__file__).parent.parent / "data"
                 / "toy_india_topology.json")
-    # `all_episodes` is the FULL roster and is never narrowed by `--only`: the
-    # two whole-suite gates below (`assert_no_single_variable_rule_solves`,
-    # `assert_no_global_policy_solves_the_suite`) ask whether any rule
-    # separates every episode's gold label, and that question is only
-    # meaningful over the full suite -- any two-episode subset with
-    # different labels is TRIVIALLY separable by a threshold on whatever
-    # scalar happens to differ between them (that's what makes them a valid
-    # flipped pair at all), so scoping these two checks down to `--only`
-    # would make them fail by construction, not find a real confound. Found
-    # live: `--only T1a,T1b` crashed `assert_no_global_policy_solves_the_
-    # suite` with "a fixed global policy solves the suite 2/2" the first
-    # time this flag was wired up, before this comment existed.
+    # `all_episodes` is the FULL roster and is never narrowed by `--only`:
+    # every build-time gate below (the two whole-suite checks,
+    # `assert_no_single_variable_rule_solves` and `assert_no_global_policy_
+    # solves_the_suite`, AND `_run_dimensional_coherence_invariants`) runs
+    # against it, not against `--only`'s subset. For the two whole-suite
+    # checks this is load-bearing correctness, not just consistency: they
+    # ask whether any rule separates every episode's gold label, and that
+    # question is only meaningful over the full suite -- any two-episode
+    # subset with different labels is TRIVIALLY separable by a threshold on
+    # whatever scalar happens to differ between them (that's what makes
+    # them a valid flipped pair at all), so scoping these two checks down to
+    # `--only` would make them fail by construction, not find a real
+    # confound. Found live: `--only T1a,T1b` crashed
+    # `assert_no_global_policy_solves_the_suite` with "a fixed global policy
+    # solves the suite 2/2" the first time this flag was wired up, before
+    # this comment existed. `_run_dimensional_coherence_invariants` is
+    # widened here for a different reason -- consistency with its own
+    # docstring's promise of a full-suite build-time gate, not because a
+    # narrowed run would spuriously fail the way the other two would (its
+    # checks are per-episode, not cross-episode separability). `--only`
+    # narrows exactly one thing: the actual rollout (`episodes`, below) --
+    # never any of these three validation gates.
     all_episodes = load_all_scenarios()
     # state_file is recorded relative to the repo root (see scenario_file.py's
     # module docstring and every scenario YAML's "eval/states/..." value), not
@@ -480,9 +490,16 @@ def main(argv: list[str] | None = None) -> None:
 
     # Task 12 (exposure-and-depot plan): the eight dimensional-coherence
     # invariants, over the full episode set. Same build-time-gate contract
-    # as the two checks above -- they fire before tokens are spent.
+    # as the two checks above -- they fire before tokens are spent. Also
+    # over `all_episodes`, NOT the `--only`-filtered `episodes`: this
+    # function's own docstring promises "the FULL episode set... a
+    # build-time gate, exactly like the two checks above it in main()", and
+    # `--only` exists to scope the PAID rollout below, not to silently skip
+    # validating invariants 1-8 for episodes outside the subset (found in
+    # review: the first fix here only widened the two checks immediately
+    # above, leaving this third one still narrowed).
     asyncio.run(_run_dimensional_coherence_invariants(
-        _connect, episodes, topology_path=topology))
+        _connect, all_episodes, topology_path=topology))
 
     results = asyncio.run(run_suite(
         _connect, topology_path=topology, deciders=build_deciders(args),

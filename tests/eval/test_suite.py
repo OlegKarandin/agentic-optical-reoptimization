@@ -187,6 +187,50 @@ def test_the_results_table_reports_n_a_when_no_run_has_a_regret_figure():
     assert cells[3] == "n/a"
 
 
+def test_only_narrowed_main_does_not_crash_the_whole_suite_gates(
+    monkeypatch, capsys, loaded_state_path, local_server_command,
+):
+    """Integration-level regression lock for the `--only` bug (2026-09-06,
+    T1 spend-or-hold redesign plan, Task 17): `main()` initially routed the
+    `--only`-narrowed episode dict into the two whole-suite "no rule solves
+    it" gates (`assert_no_single_variable_rule_solves`,
+    `assert_no_global_policy_solves_the_suite`). A 2-episode subset with
+    different gold labels is ALWAYS trivially separable by a threshold on
+    whatever scalar differs between them -- that is what makes them a valid
+    flipped pair at all -- so this crashed `main()` outright the first time
+    `--only T1a,T1b` was run, before any agent call was made:
+    `PairInvalid: a fixed global policy solves the suite 2/2`.
+
+    The unit tests above (`test_select_episodes_*`) exercise the extracted
+    `select_episodes()` helper's own mechanics, but the actual bug lived in
+    `main()`'s OWN WIRING -- which dict gets passed to which gate call --
+    and nothing short of running `main()` itself catches a future edit that
+    swaps `all_episodes`/`episodes` back at one of those call sites (or at
+    `_run_dimensional_coherence_invariants`'s). This test runs the REAL
+    `main()`, scoped to `--only T1a,T1b` (the exact command line the bug was
+    found under), with no `--include-agent` so it stays free -- only the two
+    deterministic baselines roll out. `main()` itself reads
+    `STORM_REOPTIMIZER_MCP_SERVER_CMD` via `os.environ.get(...)` and then
+    forwards `dict(os.environ)` to the server subprocess (the same pattern
+    `conftest.py`'s `local_server_env` fixture uses standalone), so setting
+    the var via `monkeypatch` before calling `main()` is the whole setup
+    needed -- no fixture-provided env dict has to be threaded through."""
+    monkeypatch.setenv(
+        "STORM_REOPTIMIZER_MCP_SERVER_CMD", json.dumps(local_server_command))
+
+    from storm_reoptimizer.eval.suite import main
+
+    main(["--only", "T1a,T1b", "--runs", "1"])  # must not raise
+
+    out = capsys.readouterr().out
+    assert "pair_solved" in out
+    # Confirms `--only` genuinely scoped the ROLLOUT (2 episodes), which is
+    # the one thing it's supposed to narrow -- distinguishing "ran narrowed
+    # and passed" from some accidental full-suite fallback silently masking
+    # the regression this test exists to catch.
+    assert "x 2 episodes x" in out
+
+
 def test_traces_land_on_disk(
     tmp_path, loaded_state_path, local_server_command, local_server_env,
 ):
