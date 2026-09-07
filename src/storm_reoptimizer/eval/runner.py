@@ -914,10 +914,24 @@ async def run_episode(
             answer_probe, counting.call, geometry=geometry,
             issuance=issuance, damage_radius_km=scenario.damage_radius_km,
             demands=record["demands"])
+        # Spec §5.1: `service_id` must be in the PROJECTED `exposure` -- the
+        # same rule `agent._check_named_services` applies to `claim_priority`
+        # -- not the raw, unprojected `obs.exposure` (potentially hundreds of
+        # services, most never shown to the decider). Recompute the same
+        # projection `ClaudeDecider._project` would build from this hour's
+        # `obs`, at the SAME threshold that decider uses if it exposes one
+        # (only `ClaudeDecider` does; a baseline never calls the probe at
+        # all, so its default threshold here is inert either way).
+        from .agent import P_CUT_ENUMERATION_THRESHOLD, project_observation
+        projected_exposure = project_observation(
+            obs, p_cut_threshold=getattr(
+                decider, "_p_cut_threshold", P_CUT_ENUMERATION_THRESHOLD),
+        )["exposure"]
         probe = ProbeBinding(
             answer=lambda service_id, risk_group_id: _probe_answer(
                 service_id=service_id, risk_group_id=risk_group_id),
-            service_ids=set(obs.exposure), risk_group_ids=set(rg_ids.values()))
+            service_ids=set(projected_exposure),
+            risk_group_ids=set(rg_ids.values()))
         if hasattr(decider, "bind_probe"):
             decider.bind_probe(probe)
         record.update(observation_record(obs, geometry))

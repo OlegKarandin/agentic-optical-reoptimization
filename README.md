@@ -79,10 +79,19 @@ T2/T3 probe redesign (`docs/superpowers/specs/2026-09-06-t2-t3-probe-redesign-de
 alone), `T2` grades whether the claimant can be RESTORED AT ALL after its
 cut (decidable only by a `probe_restorability` call, since the observation
 alone points the wrong way in `T2`'s spend half), and `T3` grades whether
-that restoration NEEDS the spare (same probe; the observation is exhausted
--- both halves show the decider the identical claim size, 114.8 G, and only
-the probe distinguishes them). Two distinct static checks back this claim,
-and they ask opposite questions:
+that restoration NEEDS the spare. `T3`'s two halves show the decider the
+same NAMED claim size, 114.8 G, both times, but its two claimants' own
+exposure is not tied -- whichever claimant is more exposed this half is
+always the one whose (constant, identity-determined) restorability status
+decides the pair, so the observation does say WHICH claimant matters. What
+it cannot say is WHY: the probe is what confirms the more-exposed claimant
+is genuinely isolated there, not merely bigger, so a policy keyed on
+exposure magnitude alone (in either orientation) still fails the same way
+it fails on `T1`/`T2` -- a narrower, claimant-identity-keyed rule would
+solve `T3` from the observation alone, but that is a different, more
+specific kind of "lookup table" than the ones `T1`/`T2` defeat, not proof
+`T3` adds nothing. Two distinct static checks back this claim, and they ask
+opposite questions:
 
 - `assertions.assert_no_single_variable_rule_solves` -- per pair, over the
   variables both halves are supposed to SHARE (`rules.OBSERVABLE_VARS` and
@@ -213,70 +222,64 @@ the test.
 
 ### Reading `episodes correct` honestly
 
-The `episodes correct` column above is 2/7 for both baseline variants
-(re-measured 2026-08-31, Task 15, against the corrected exposure model --
-it was 1/7 before Task 14's rebuild, and the change is `D1` becoming correct,
-not a change within any pair; see below), not the "roughly half" a naive
-reading of "both baselines tie every pair at exactly one half" might predict.
-This is not a bug in the harness or a
-confounded pair — both `T1a`/`T1b` (`test_each_baseline_variant_scores_
-exactly_one_half`) and `T2`/`T3`'s equivalent checks already pass in
+The `episodes correct` column above is 4/7 for both baseline variants
+(re-measured 2026-09-07, T2/T3 probe redesign plan, Task 14, against the
+rebuilt T2/T3 pairs) — exactly the "roughly half, plus `D1`" a reading of
+"both baselines tie every pair at exactly one half" predicts, not the 2/7
+an earlier revision of this section reported. This is not a bug in the
+harness or a confounded pair — `T1a`/`T1b` (`test_each_baseline_variant_
+scores_exactly_one_half`) and `T2`/`T3`'s equivalent checks already pass in
 `tests/eval/test_episodes.py`, which is the pre-flight signal that would
-have caught a genuinely confounded twin. What actually happens, documented
-in `docs/superpowers/rehearsals/T2.md` and `T3.md` (their own "Q3" section):
+have caught a genuinely confounded twin. What actually happens:
 
-- **T1** is scored by `timing_at_decision_hour`, which reads the raw
-  act/wait choice off the trace regardless of whether anything committed.
-  `ForecastBlindBaseline` genuinely discriminates here: it answers T1's two
-  halves identically (by construction — same observable input) and gets
-  exactly one of the two labels right, exactly as Claim 1 requires.
-- **T2** and **T3** are scored by `avoid_horizon_at_decision_hour` and
-  `chosen_lever_at_decision_hour`, both of which require a **committed**
-  candidate and return `None` otherwise. `ForecastBlindBaseline` pins its
-  constraints to `basis="physical"`, and on this loaded network every
-  reachable candidate for `storm-svc-1` collides with its own static
-  protection leg under a physical-basis check — so the baseline never
-  actually commits anything in T2 or T3, in either half, for either
-  variant. `decision_label` reads `None` on all four of those halves, which
-  never equals a real gold label, so those four halves score as *not*
-  correct rather than the "exactly one of two" pattern T1 shows.
+- **T1** is scored by `spare_action_by_deadline` (`scoring.decision_label`),
+  which reads whether a decider-origin spend debit lands at or before the
+  relevant deadline, off the trace, regardless of which specific candidate
+  got committed. `ForecastBlindBaseline` genuinely discriminates here: it
+  answers T1's two halves identically (by construction — same observable
+  input) and gets exactly one of the two labels right, exactly as Claim 1
+  requires.
+- **T2** and **T3** are now scored by that SAME `spare_action_by_deadline`
+  rule — not by `avoid_horizon_at_decision_hour` or
+  `chosen_lever_at_decision_hour`, the two rules an earlier revision of this
+  section described. Both of those were RETIRED by the T2/T3 probe redesign
+  (`scoring.LABEL_RULES` no longer lists either name; `decision_label` now
+  raises `ValueError` if a scenario's `metadata.label_rule` names one) along
+  with the `storm-svc-1`-based pair they were built for. `T2` and `T3` are
+  also no longer built on `storm-svc-1`: both SUTs are now jalgaon-homed
+  services whose escape route is a genuinely disjoint `optical_reroute` over
+  the buried `jalgaon <-> aurangabad` spur, so `ForecastBlindBaseline`'s
+  `basis="physical"` constraint no longer collides with a static protection
+  leg the way it did against the old `storm-svc-1`-based pair. The baseline
+  now commits normally in both halves of both pairs, exactly as it does on
+  `T1`, and lands exactly one correct half per pair for the identical
+  reason Claim 1 gives for `T1`.
 
-So the true count is: 2 halves discriminating (both baselines correctly
-land 1/2 on T1, as Claim 1 requires) and 4 halves where the baseline never
-commits at all (T2, T3) — 2/12 raw label-correct halves across both
-variants, not 6/12. **Claim 1 still holds exactly as stated**: it is a claim
-about `pair_solved` (a fixed policy that reads only current exposure can
-never get *both* halves of a well-built pair right, whether by scoring 1/2
-or 0/2), not about hitting 50% raw label accuracy — and `pair_solved` is
-`0.00` for both variants over all three pairs, confirmed by the run above.
-A baseline that never commits also never solves a pair; it just fails
-differently than one that commits and picks wrong.
+So the true count is: 6 halves discriminating (all three pairs correctly
+land 1/2, as Claim 1 requires) plus `D1` — 6/12 raw label-correct halves
+across the three pairs' six halves, plus `D1` correct in both variants, for
+4/7 raw episodes correct per variant (`T1b`, one of `T2a`/`T2b`, one of
+`T3a`/`T3b`, and `D1`). **Claim 1 still holds exactly as stated**: it is a
+claim about `pair_solved` (a fixed policy that reads only current exposure
+can never get *both* halves of a well-built pair right), not about hitting
+any particular raw label-accuracy fraction — and `pair_solved` is `0.00`
+for both variants over all three pairs, confirmed by the run above. See
+`docs/superpowers/rehearsals/T2.md` and `T3.md` §8 for the live, per-pair
+numbers this section summarizes.
 
-`D1` (the seventh episode, and not part of any pair) is now CORRECT for both
-baseline variants, and this is the entire reason `episodes correct` moved
-from 1/7 to 2/7 — verified live for this rewrite, not inferred from the model
-change alone (`ForecastBlindBaseline` run for real against the current server
-state: both variants' `timing.action` at `t0` is `"act"`, matching
-`gold.label`). This reverses the pre-Task-14 finding this section used to
-report. `ForecastBlindBaseline._nearest_exposed_horizon` is a crude "is the
-offset inside the cone's own half-width" geometric test, and under the OLD
-midpoint-based exposure model, D1's cone centre made `storm-svc-1`'s offset
-(58.4 km) exceed that half-width (7.5 km) even though the probabilistic cut
-probability at that offset was 0.976 — the baseline read "wait" against a
-gold "act". Task 3's corrected model redefines `offset_km` as the distance to
-the NEAREST POINT OF THE REAL CUTTABLE SPAN, and D1's cone is centred exactly
-on `satna`, which is a literal endpoint of `storm-svc-1`'s own real span — so
-the corrected offset is `0.000000 km`, which DOES satisfy the containment
-test. `decision_label` for D1 (`timing_at_decision_hour`) reads the raw
-timing action regardless of whether anything later commits, and it is now
-`"act"` in both variants, matching gold. (A second, independent finding,
-recorded in `docs/superpowers/rehearsals/D1.md`'s rewritten Q3: the baseline
-still never physically COMMITS anything here, for the identical
-buried-protection-leg/`basis="physical"` reason T2 and T3 document — but that
-does not change `decision_label`, which is scored on the raw timing action.)
-This is not a discriminating twin and is not counted in `pair_solved`, but it
-is why the two correct episodes out of seven are `T1b` and `D1` together, not
-`T1b` alone.
+`D1` (the seventh episode, and not part of any pair) is CORRECT for both
+baseline variants (`ForecastBlindBaseline` run for real against the current
+server state: both variants' `timing.action` at `t0` is `"act"`, matching
+`gold.label`). `decision_label` for `D1` (`timing_at_decision_hour`) reads
+the raw timing action regardless of whether anything later commits.
+(`docs/superpowers/rehearsals/D1.md`'s Q3 records a second, independent
+finding: the baseline still never physically COMMITS anything in `D1`
+either, for a `basis="physical"`/static-protection-leg reason specific to
+`storm-svc-1` — but that does not change `decision_label`, which is scored
+on the raw timing action, not on whether a candidate committed.) This is
+not a discriminating twin and is not counted in `pair_solved`, but it is
+why the total lands on 4/7 rather than the 3/7 a "one correct half per
+pair, nothing else" count alone would give.
 
 ### The one tension the three pairs share
 
@@ -284,12 +287,17 @@ After rebuilding all three pairs on the same underlying comparison rule, they
 share one shape: a scarce resource, two claims on it, and an answer that
 depends on comparing the claims. That convergence is not accidental — it is
 CLAUDE.md's storm-scarcity story, "the strongest single story" — but it
-narrows what the suite demonstrates. What genuinely varies is the *decision
-the contention lands on*: when to act (T1), how much to constrain (T2), which
-candidate to take (T3). What does not vary is the *kind* of judgement.
-Breadth comes from the interpretation axis (free-text operator reports, novel
-event types), not from more pairs of this shape — that axis is a separate
-spec.
+narrows what the suite demonstrates. What genuinely varies is the *fact the
+decider must establish to get it right*: `T1` how EXPOSED the claimant is
+(readable from the observation alone), `T2` whether the claimant can be
+RESTORED AT ALL after its cut (readable only via `probe_restorability`,
+since the observation alone points the wrong way in `T2`'s spend half), and
+`T3` whether that restoration NEEDS the spare (the observation says which
+claimant is more exposed, but only the probe says whether that claimant's
+loss is real). What does not vary is the underlying *kind* of judgement --
+comparing two claims on one scarce resource. Breadth comes from the
+interpretation axis (free-text operator reports, novel event types), not
+from more pairs of this shape — that axis is a separate spec.
 
 ## Demo: the LLM decider on `D1`
 

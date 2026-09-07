@@ -135,16 +135,22 @@ EVAL_STATE_PIN_SETS = {
 def eval_state_paths(loaded_state_path, local_server_command,
                      local_server_env) -> dict[str, Path]:
     """Every state file a shipped scenario may name, built if missing or
-    older than the base it is pinned onto (a rebuilt base invalidates the
-    pinned states). Keyed by the scenario's own `state_file` string."""
+    older than EITHER the base it is pinned onto (a rebuilt base invalidates
+    the pinned states) OR `build_eval_state.py` itself (editing `T2_PINS`/
+    `T3_PINS` without touching the base would otherwise leave a stale pinned
+    state on disk that the live suite then silently runs against -- whole-
+    branch final review, T2/T3 probe redesign plan). Keyed by the scenario's
+    own `state_file` string."""
     script = REPO_ROOT / "tools" / "build_eval_state.py"
+    script_mtime = script.stat().st_mtime
     paths: dict[str, Path] = {}
     for state_file, pin_set in EVAL_STATE_PIN_SETS.items():
         out = REPO_ROOT / state_file
         if pin_set is None:
             assert out.resolve() == loaded_state_path.resolve()
         elif (not out.exists()
-              or out.stat().st_mtime < loaded_state_path.stat().st_mtime):
+              or out.stat().st_mtime < loaded_state_path.stat().st_mtime
+              or out.stat().st_mtime < script_mtime):
             proc = subprocess.run(
                 [local_server_command[0], str(script),
                  "--topology", str(TOY_INDIA_TOPOLOGY_PATH), "--out", str(out),

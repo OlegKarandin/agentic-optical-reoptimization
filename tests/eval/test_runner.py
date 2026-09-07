@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from storm_reoptimizer.eval import runner
+from storm_reoptimizer.eval.agent import project_observation
 from storm_reoptimizer.eval.baseline import ForecastBlindBaseline, ScriptedDecider
 from storm_reoptimizer.eval.decisions import (
     ConstraintDecision,
@@ -17,6 +18,7 @@ from storm_reoptimizer.eval.decisions import (
     TimingDecision,
 )
 from storm_reoptimizer.eval.observation import Observation
+from storm_reoptimizer.eval.probe import ProbeError
 from storm_reoptimizer.eval.runner import (
     MAX_ITERATIONS,
     Action,
@@ -434,7 +436,14 @@ class _ProbingDecider:
 
     async def timing(self, obs):
         probe = self.bound[-1]
-        others = [s for s in obs.exposure if s != obs.service_under_test]
+        # The runner's `ProbeBinding` now guards `service_id` against the
+        # PROJECTED exposure (spec 5.1: same rule `claim_priority` follows),
+        # not the raw, unprojected `obs.exposure` -- so pick a target from
+        # the projected set here too, or a genuinely-shown claimant would be
+        # rejected the same way an unshown background demand should be (see
+        # test_the_probe_rejects_a_service_outside_the_projected_exposure).
+        others = [s for s in project_observation(obs)["exposure"]
+                 if s != obs.service_under_test]
         if others and obs.risk_group_ids:
             horizon = list(obs.risk_group_ids)[-1]
             self.answers.append(await probe(others[0], obs.risk_group_ids[horizon]))
@@ -467,6 +476,67 @@ def test_the_runner_binds_a_probe_per_hour_and_records_every_call(
     assert record["answer"] == decider.answers[0]
     # The probe's route_service call is counted like every other tool call.
     assert trace.tool_calls > 0
+
+
+class _ProbesRawExposureOnlyDecider:
+    """Deliberately probes a service that is in the RAW `obs.exposure` but
+    NOT in the PROJECTED exposure (`agent.project_observation`) -- proves
+    the runner's `ProbeBinding` guards `service_id` against the same
+    projected set `agent._check_named_services` checks `claim_priority`
+    against (design spec §5.1), not the full, unprojected roster. SMOKE's
+    own state (`loaded-s17.json`) carries hundreds of background demands
+    the decider is never shown; only `storm-svc-1` and the depot-eligible,
+    above-threshold `claimant-satna-jabalpur-*` pair clear the projection."""
+
+    def __init__(self, inner):
+        self.inner = inner
+        self.name = inner.name
+        self.rejections = []          # (service_id, error) for each attempt
+
+    def bind_probe(self, probe):
+        self._probe = probe
+
+    async def timing(self, obs):
+        projected = set(project_observation(obs)["exposure"])
+        raw_only = [s for s in obs.exposure
+                   if s != obs.service_under_test and s not in projected]
+        if raw_only and obs.risk_group_ids:
+            horizon = list(obs.risk_group_ids)[-1]
+            try:
+                await self._probe(raw_only[0], obs.risk_group_ids[horizon])
+            except ProbeError as exc:
+                self.rejections.append((raw_only[0], str(exc)))
+        return await self.inner.timing(obs)
+
+    async def constraints(self, obs, unconstrained_menu=None):
+        return await self.inner.constraints(obs, unconstrained_menu)
+
+    async def objective(self, obs, menu):
+        return await self.inner.objective(obs, menu)
+
+
+def test_the_probe_rejects_a_service_outside_the_projected_exposure(
+    tmp_path, loaded_state_path, local_server_command, local_server_env,
+):
+    """Whole-branch final review, Item 4: the runner's `ProbeBinding` used to
+    be bound with `service_ids=set(obs.exposure)` -- the full, unprojected
+    roster -- rather than the projected subset `_check_named_services`
+    actually validates `claim_priority`/`contested_claim` against. A service
+    that is exposed in the raw observation but never shown to the decider
+    (e.g. a background demand not eligible for this depot, or below the
+    p_cut enumeration threshold) must be rejected by the probe guard exactly
+    as an unshown `claim_priority` name is rejected by `_check_named_
+    services` -- not silently answered."""
+    decider = _ProbesRawExposureOnlyDecider(ScriptedDecider("hold"))
+    asyncio.run(_run(
+        _scenario(tmp_path), decider,
+        loaded_state_path, local_server_command, local_server_env))
+    assert decider.rejections, (
+        "no raw-exposure-but-not-projected service was available to probe "
+        "-- SMOKE's fixture no longer carries one")
+    service_id, error = decider.rejections[0]
+    assert "is not in this observation" in error
+    assert service_id in error
 
 
 def test_the_constraints_step_is_shown_the_menu_it_is_about_to_narrow(

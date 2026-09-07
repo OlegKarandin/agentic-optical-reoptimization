@@ -87,12 +87,19 @@ CLAIMANT_SERVICES = [
 # eval is the HARNESS ledger's concern (eval design spec, "spare_inventory is
 # not in the model"), not the builder's. A build that failed to place a
 # stage-2 pin for want of inventory would be a setup artifact. Widened to
-# cover jabalpur alongside satna/allahabad for the claimant pair above, and
-# (2026-09-05, Task 15) jalgaon/indore/dhulia for the T1 pins below.
+# cover jabalpur alongside satna/allahabad for the claimant pair above,
+# (2026-09-05, Task 15) jalgaon/indore/dhulia for the T1 pins below, and
+# (2026-09-06, Task 7) nagpur/khandwa/aurangabad for the T2/T3 pins below --
+# `_default_pin_inventory` auto-widens any OTHER pin endpoint (e.g. T3's
+# `buldhana`) with the same default 4, so this dict need not be exhaustive.
+# `ahmednagar`/`nasik` were listed here for T3's original "survivor" pins
+# (single-hop demands along the buried jalgaon-aurangabad-ahmednagar-nasik-
+# dhulia alternative path) -- those pins were dropped (see the comment above
+# `T3_PINS` below) and nothing pins to either site any more, so both entries
+# were removed rather than left dead.
 PIN_SPARE_INVENTORY = {"satna": 4, "allahabad": 4, "jabalpur": 4,
                        "jalgaon": 4, "indore": 4, "dhulia": 4,
-                       "nagpur": 4, "khandwa": 4, "aurangabad": 4,
-                       "ahmednagar": 4, "nasik": 4}
+                       "nagpur": 4, "khandwa": 4, "aurangabad": 4}
 # The REDESIGNED T1 pair's own service under test and claimant corridor
 # (T1 spend-or-hold redesign spec 2026-09-05 §4.1-4.2; plan Task 15). The old
 # T1 graded storm-svc-1, whose protection leg (satna<->jhansi) sat outside
@@ -136,11 +143,17 @@ T1_PINS: list[dict] = [
 # The T2/T3 probe redesign's pins (spec 2026-09-06, §4.1/§4.2; plan Task 7).
 # Each pair gets its OWN state file built from loaded-s17.json with
 # --base-state, so T1's state, menus, gold and frozen scalars are untouched
-# and T3's survivor lightpaths never appear in T2's or T1's menus as free
-# grooms. jalgaon still needs no mount-type change: both SUTs' first hops
-# (buldhana/dhulia, read back live in the authoring note) and the claimant
-# corridors (khandwa, dhulia) are aerial, the escape (surat/aurangabad) is
-# buried.
+# and T3's (dropped) survivor lightpaths never appear in T2's or T1's menus
+# as free grooms. jalgaon still needs no mount-type change: both SUTs' first
+# hops (T2's dhulia/buldhana, T3's dhulia -- read back live in the authoring
+# note) are aerial, and so are the claimant corridors -- T2's `khandwa`;
+# T3's `khandwa` AND `buldhana` (`dhulia` was T3's ORIGINAL second claimant
+# per spec 4.2, but the live solve gives the T3 SUT's own working leg that
+# same `dhulia` corridor, so a `dhulia` claimant would be perfectly
+# correlated with the SUT and never a real contest -- `buldhana` replaced it,
+# see the comment above `T3_PINS` below). The escape node for both pairs is
+# `aurangabad`, not `surat` -- `surat` has no live `optical_reroute`
+# candidate for either SUT (found live, `assert_escape_route_survives`).
 T2_PINS: list[dict] = [
     {"id": "t2-svc-jalgaon-nagpur", "src": "jalgaon", "dst": "nagpur",
      "demand_gbps": 300.0, "protected": True},

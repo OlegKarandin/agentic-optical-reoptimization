@@ -822,8 +822,8 @@ def test_finds_the_jabalpur_optical_reroute_candidate():
 
 def test_an_ip_reroute_via_jabalpur_does_not_count():
     """The escape route must be an optical_reroute -- an ip_reroute lights
-    nothing and cannot be the corridor the Phase 2 pins consume spectrum
-    on."""
+    nothing and cannot be the escape corridor T2's/T3's gold spend halves
+    rely on."""
     candidates = [{"lever": "ip_reroute",
                    "new_lightpaths": [{"oms_sequence": ["oms_a"]}]}]
     oms_nodes = {"oms_a": ["satna", "jabalpur"]}

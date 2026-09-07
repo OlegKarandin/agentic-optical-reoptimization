@@ -121,9 +121,11 @@ T3_DEFAULTS = dict(
     # none touches `surat`; candidates 2 and 4 route via `aurangabad`, and
     # the assertion (menu + `validate_plan`) passes on it in BOTH halves.
     # T1's own SUT does have a surat candidate, which is why `surat` works
-    # there. NOTE for the controller: T2a/T2b declare `surat` and FAIL this
-    # same assertion today (reproduced at HEAD, before this task's changes)
-    # -- that is a pre-existing T2 defect, not one T3 introduces.
+    # there. T2a/T2b originally declared `surat` too and FAILED this same
+    # assertion for the identical reason -- fixed (commit 8c4b22d,
+    # "T2's escape_route_node moved off surat"): `T2a.yaml`/`T2b.yaml` now
+    # declare `aurangabad`, same as T3, since `surat` has no live
+    # `optical_reroute` candidate for either SUT.
     escape_node="aurangabad", sut_posture="unprotected",
     half_a_cuts="claimant:t3-claimant-jalgaon-khandwa",
     half_b_cuts="claimant:t3-claimant-jalgaon-buldhana,sut",

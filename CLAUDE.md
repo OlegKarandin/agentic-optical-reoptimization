@@ -321,8 +321,14 @@ an agent that chooses to call the new read-only `probe_restorability` tool:
 `T2` asks whether the claimant CAN be restored at all after its cut (the
 observation alone points the wrong way in `T2`'s spend half -- it shows a
 *bigger* claim where holding the spare is worthless); `T3` asks whether that
-restoration NEEDS the spare (both halves show the decider the identical
-claim size, 114.8 G, and only the probe distinguishes them).
+restoration NEEDS the spare. `T3`'s two NAMED claims are the same size both
+halves (114.8 G), but its two claimants' own exposure is not tied at all --
+whichever one is more exposed this half is always the one whose
+restorability status decides the pair, so the observation does say WHICH
+claimant to look at. What it cannot say is WHY that claimant's loss is
+real: the probe is what confirms the more-exposed claimant is genuinely
+isolated there, not just larger, so a policy keyed on exposure magnitude
+alone (in either orientation) still fails the same way it fails `T1`/`T2`.
 
 Each pair gets its OWN state file, built from `eval/states/loaded-s17.json`
 with `tools/build_eval_state.py --pin-set {t2,t3}` --
@@ -341,7 +347,7 @@ this summary:**
 - `T2_PINS`: the SUT, `t2-svc-jalgaon-nagpur` (`jalgaon <-> nagpur`, 300 G,
   protected), plus ONE claimant, `t2-claimant-jalgaon-khandwa`
   (`jalgaon <-> khandwa`, 200 G, unprotected). Both SUT legs are aerial out
-  of jalgaon (working via `khandwa`, protection via `buldhana` -- the solver
+  of jalgaon (working via `dhulia`, protection via `buldhana` -- the solver
   assigns these the OPPOSITE way round from the design spec's own GIS
   pre-check, confirmed live and recorded in the authoring note below); the
   claimant's flip is whether `khandwa`'s only other link

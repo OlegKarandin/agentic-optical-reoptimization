@@ -626,31 +626,33 @@ async def assert_gold_spare_action_is_grounded(
     "conserve" declaration against what the harness's own gold-decision
     replay would actually commit.
 
-    **Why this was missing, and why T2/T3 do not need it as badly.**
+    **Why this was missing, and what actually grounds it now.**
     `assert_no_global_policy_solves_the_suite` scores every episode against
     `metadata.gold_spare_action`, but that field is author-typed and nothing
-    ever verified it against reality. T2/T3 tie it down structurally anyway:
-    `test_episodes.py`'s own non-flip gold fixtures
-    (`_T2_NON_FLIP_GOLD_DECISIONS`, `_T3_NON_FLIP_GOLD_DECISIONS`) NAME the
-    exact committed candidate for each half (T2a candidate_2 / T3a
-    candidate_4, both `optical_reroute`, 1 pair; T2b/T3b candidate_0, both
-    `ip_reroute`, 0 pairs), and each scenario's own YAML `gold.rationale`
-    spells out that candidate's lever and cost in prose -- confirmed by
-    reading every one of the six halves' rationale text. T1 has no such
-    anchor: `_T1_NON_FLIP_GOLD_DECISIONS` uses `candidate_0` for BOTH T1a and
-    T1b, but that is a deliberate, ARBITRARY placeholder -- T1's `label_rule`
-    is `timing_at_decision_hour`, so the objective decision provably cannot
-    bind T1's grade (see that constant's own comment and
-    `assert_non_flip_decisions_non_binding`'s docstring on why T1 is
-    "structurally vacuous" for the objective/constraints decisions) -- it is
-    NOT a claim about what T1b's real committed action costs. T1b's own
-    `gold.rationale` says otherwise: "an optical_reroute committed at t1 is
-    effective at t2, strictly before the t3 cut", describing a LEVER, not
-    `candidate_0`'s `ip_reroute`. Investigated rather than assumed: searched
-    the whole module and runner/scoring for any OTHER place that reads
-    `gold_spare_action` or checks `pairs_needed` against it -- there is none;
-    `assert_no_global_policy_solves_the_suite` is the only consumer, and it
-    trusts the declaration verbatim.
+    ever verified it against reality. This assertion is the check, called by
+    `test_episodes.py::test_gold_spare_action_is_grounded_in_a_real_candidate`
+    for all six halves, driven by that module's own `_GOLD_COMMITTED_LEVER`
+    dict (NOT the `_T1_NON_FLIP_GOLD_DECISIONS`/`_T2_NON_FLIP_GOLD_DECISIONS`/
+    `_T3_NON_FLIP_GOLD_DECISIONS` candidate-index fixtures an earlier revision
+    of this docstring described -- Task 12 of the T2/T3 probe redesign plan
+    deleted all three along with the retired pre-redesign T2/T3 pair they
+    supported). As of the redesign, all three pairs share ONE shape:
+    `T1a`/`T2a`/`T3a` (gold `hold`) commit `None` -- the gold rollout never
+    acts on the SUT at all in the hold half of any pair -- and `T1b`/`T2b`/
+    `T3b` (gold `spend`) each commit `optical_reroute` at ONE transponder
+    pair, over a new lightpath on a buried escape spur (T1b's `jhansi`-side
+    escape, T2b's and T3b's `jalgaon <-> aurangabad`). Each scenario's own
+    YAML `gold.rationale` spells out that lever and cost in prose --
+    confirmed by reading every one of the six halves' rationale text. T1's
+    entry needed no placeholder to make this true, unlike an earlier revision
+    of the pre-redesign fixtures this docstring used to cite: T1's
+    `gold.rationale` for the spend half already says "an optical_reroute
+    committed at t1 is effective at t2, strictly before the t3 cut", the same
+    lever `_GOLD_COMMITTED_LEVER["T1b"]` declares. Investigated rather than
+    assumed: searched the whole module and runner/scoring for any OTHER place
+    that reads `gold_spare_action` or checks `pairs_needed` against it --
+    there is none; `assert_no_global_policy_solves_the_suite` is the only
+    consumer, and it trusts the declaration verbatim.
 
     `committed_lever` is the LEVER gold's own rationale names as the one that
     actually gets committed in this half, supplied by the caller per half (not
@@ -1422,11 +1424,19 @@ async def assert_escape_route_survives(
     """The `_escape_route_node(scenario)` `optical_reroute` candidate T2's
     and T3's gold decisions rely on still exists in the real menu under
     `basis=risk_group`/`level=risk_group` (the basis those gold decisions
-    actually validate under -- see `_T2_NON_FLIP_GOLD_DECISIONS`/
-    `_T3_NON_FLIP_GOLD_DECISIONS` in test_episodes.py), and still validates.
-    Guards the Phase 2 pins' spectrum consumption: the satna-west (SW) pins
-    consume spectrum on exactly this corridor, and a future pin change could
-    silently consume the last of it."""
+    actually validate under -- grounded live by
+    `test_gold_spare_action_is_grounded_in_a_real_candidate`'s
+    `_GOLD_COMMITTED_LEVER` dict in test_episodes.py, which names
+    `optical_reroute` as T2b's/T3b's committed lever), and still validates.
+    `metadata.escape_route_node` is `aurangabad` for both T2 and T3 (moved
+    off `surat`, which carries no live `optical_reroute` candidate for
+    either SUT -- see CLAUDE.md's "T2/T3 pairs live on their own state
+    files" section and `tools/build_eval_state.py`'s `T2_PINS`/`T3_PINS`
+    comments). Guards the jalgaon pin set's spectrum consumption on that one
+    buried spur: `T2_PINS`/`T3_PINS` and their claimant corridors all draw
+    on the same `jalgaon` depot, and a future pin change that adds more
+    demand over `jalgaon <-> aurangabad` could silently consume the last of
+    the spare capacity this escape candidate needs."""
     node = _escape_route_node(scenario)
     menu = await call_tool_json(client, "route_service", {
         "service_id": scenario.service_under_test, "protected": False,
