@@ -168,7 +168,7 @@ flip_variable:
 metadata:
   label_rule: spare_action_by_deadline
   exposure_legs: both
-  escape_route_node: surat
+  escape_route_node: aurangabad
   claimant_services:
   - t2-claimant-jalgaon-khandwa
   cone_width_km: 60.0

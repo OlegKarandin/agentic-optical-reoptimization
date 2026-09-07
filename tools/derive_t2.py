@@ -17,7 +17,7 @@ T2_DEFAULTS = dict(
     hours="t0,t1,t2,t3,t4,t5,t6,t7", decision_hour="t1", lead_time=2,
     state="eval/states/t2-jalgaon-s17.json",
     sut="t2-svc-jalgaon-nagpur", depot="jalgaon",
-    claimants="t2-claimant-jalgaon-khandwa", escape_node="surat",
+    claimants="t2-claimant-jalgaon-khandwa", escape_node="aurangabad",
     sut_posture="protected", half_a_cuts="claimants", half_b_cuts="claimants,sut",
     alt_span=["khandwa:dhar:out:in"],
     probe_flip=("A:restorable:t2-claimant-jalgaon-khandwa:restorable,"
