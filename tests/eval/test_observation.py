@@ -265,7 +265,7 @@ def test_p_cut_is_the_region_probability_not_a_point_one(scenario):
                             services=SERVICES, spares_on_hand=1)
     expected = p_cut_region(SPANS["svc-b"], 25.2, 81.0, 90.0, 74.0)
     assert obs.exposure["svc-b"]["t3"]["p_cut"] == pytest.approx(
-        round(expected, 4), abs=1e-9)
+        round(expected, 3), abs=1e-9)
 
 
 ENDPOINT_SITES = {"storm-svc-1": ("satna", "allahabad"),
@@ -325,7 +325,8 @@ def test_the_observation_carries_the_episodes_damage_radius(
     assert obs.to_dict()["damage_radius_km"] == 74.0
 
 
-def test_protected_service_p_cut_is_joint_and_legs_are_categorical(scenario, services):
+def test_protected_service_p_cut_is_joint_rounded_to_3_and_has_no_per_leg_entry(
+        scenario, services):
     working = {"storm-svc-1": (((24.6, 80.8), (24.5, 81.3)),)}
     protection = {"storm-svc-1": (((24.6, 80.8), (24.9, 80.6)),)}
     obs = build_observation(scenario, "t1", service_spans=working, services=services,
@@ -334,10 +335,11 @@ def test_protected_service_p_cut_is_joint_and_legs_are_categorical(scenario, ser
     cone = latest_issuance(scenario, "t1").horizons["t3"]
     assert row["p_cut"] == round(p_cut_service(working["storm-svc-1"], protection["storm-svc-1"],
                                                cone.center["lat"], cone.center["lon"],
-                                               cone.width_km, scenario.damage_radius_km), 4)
-    assert set(row["legs"]) == {"working", "protection"}
-    assert set(row["legs"]["working"]) == {"cuttable_spans", "in_footprint"}
-    assert "p_cut" not in row["legs"]["working"]
+                                               cone.width_km, scenario.damage_radius_km), 3)
+    assert row["expected_capacity_at_risk_gbps"] == round(row["p_cut"] * 300.0, 3)
+    # Spec 5.3 (decided 2026-09-06): no per-leg display at all; the joint
+    # probability is the only exposure number a protected service shows.
+    assert "legs" not in row
 
 
 def test_issuance_schedule_and_deadline(scenario, services):

@@ -1472,7 +1472,11 @@ async def assert_both_legs_exposed(
     the probability BOTH legs are cut together, which stays small whenever
     EITHER leg alone is barely exposed. This check needs the two legs' own,
     separate probabilities, which is exactly what `p_cut_region` computes
-    over one span union."""
+    over one span union.
+
+    Applies to protected SUTs (`metadata.exposure_legs: both`, the default)
+    in full; for `exposure_legs: working` only the working leg is checked
+    (spec 5.3)."""
     from .oracle import latest_horizon
 
     edges = load_edges(topology_path)
@@ -1492,6 +1496,20 @@ async def assert_both_legs_exposed(
     p_protection = p_cut_region(
         protection, cone.center["lat"], cone.center["lon"], cone.width_km,
         scenario.damage_radius_km)
+    legs = scenario.metadata.get("exposure_legs", "both")
+    if legs == "working":
+        # Unprotected SUT (T3, spec 4.2): the working leg alone must carry
+        # the exposure; there is no protection leg to check.
+        if p_working < floor:
+            raise PairInvalid(
+                f"{scenario.id}: {sut}'s working-leg exposure at {horizon!r} "
+                f"of the {scenario.decision_hour!r} issuance is "
+                f"{p_working:.4f}, below the floor {floor}")
+        return
+    if legs != "both":
+        raise PairInvalid(
+            f"{scenario.id}: metadata.exposure_legs must be 'both' or "
+            f"'working', got {legs!r}")
     if p_working < floor or p_protection < floor:
         raise PairInvalid(
             f"{scenario.id}: {sut}'s own leg exposure at {horizon!r} of the "
@@ -1632,3 +1650,155 @@ def assert_gold_matches_outcomes(
             f"{scenario.id}: outcomes {outcomes!r} separate {best!r} from "
             f"the rest by only {margin:.3f} Gbps-h, below "
             f"gold.min_margin_gbps_h={scenario.gold.min_margin_gbps_h!r}")
+
+
+# T2/T3 probe redesign (2026-09-06, spec 5.3): the pair's flip lives in the
+# probe's answer, so the gate that proves the flip exists runs the SAME
+# code path that answers the agent (`probe.answer_probe`) and compares.
+PROBE_FLIP_KINDS = ("restorable", "spares_needed")
+
+
+def probe_reading(kind: str, answer: dict) -> str:
+    """The categorical fact one probe answer states, for one `probe_flip`
+    kind: `restorable`/`not_restorable`, or (`spares_needed`) `spare`/`free`
+    when a full restore exists and `not_restorable` when none does."""
+    if kind not in PROBE_FLIP_KINDS:
+        raise ValueError(f"unknown probe_flip kind {kind!r}")
+    if answer["full_restore_candidates"] == 0:
+        return "not_restorable"
+    if kind == "restorable":
+        return "restorable"
+    needed = answer["min_spares_needed_by_site"] or {}
+    return "free" if sum(needed.values()) == 0 else "spare"
+
+
+def probe_flip_mismatches(a: ScenarioFile, answers_a: dict[str, dict],
+                          b: ScenarioFile, answers_b: dict[str, dict]
+                          ) -> list[str]:
+    """The pure half of `assert_probe_flips`: given each half's probe answer
+    for every declared claimant, everything that is not the declared flip.
+
+    Each half declares `metadata.probe_flip = {kind, claimant, expected}`.
+    Checked: (1) both halves declare the same kind; (2) each half's reading
+    on ITS OWN named claimant equals its declared expectation; (3) the two
+    expectations differ (that is the flip); (4) every claimant named by
+    NEITHER half answers identically in both halves. T2 names the same
+    claimant in both halves (restorable vs not); T3 names a different
+    claimant per half (the exposed one: spare vs free), so (4) is vacuous
+    there and (2)+(3) carry the check."""
+    problems: list[str] = []
+    if a.metadata.get("probe_flip") is None and b.metadata.get("probe_flip") is None:
+        # A pair whose flip is NOT in the probe (T1: the fact is in the
+        # observation). The probe must then say the same thing about every
+        # claimant in both halves, or the probe carries an undeclared flip.
+        for claimant in sorted(set(answers_a) | set(answers_b)):
+            if answers_a.get(claimant) != answers_b.get(claimant):
+                problems.append(
+                    f"{claimant!r}: neither half declares a probe_flip, yet "
+                    f"the probe answers differently: {answers_a.get(claimant)!r} "
+                    f"({a.id}) vs {answers_b.get(claimant)!r} ({b.id})")
+        return problems
+    flips = {}
+    for half in (a, b):
+        flip = half.metadata.get("probe_flip")
+        if not isinstance(flip, dict) or not {"kind", "claimant", "expected"} <= set(flip):
+            problems.append(f"{half.id}: metadata.probe_flip must be "
+                            f"{{kind, claimant, expected}}, got {flip!r}")
+            continue
+        flips[half.id] = flip
+    if len(flips) < 2:
+        return problems
+    fa, fb = flips[a.id], flips[b.id]
+    if fa["kind"] != fb["kind"]:
+        problems.append(f"probe_flip kinds differ: {fa['kind']!r} ({a.id}) vs "
+                        f"{fb['kind']!r} ({b.id})")
+        return problems
+    kind = fa["kind"]
+    for half, flip, answers in ((a, fa, answers_a), (b, fb, answers_b)):
+        answer = answers.get(flip["claimant"])
+        if answer is None:
+            problems.append(f"{half.id}: probe_flip names {flip['claimant']!r}, "
+                            f"which is not a declared claimant with an answer")
+            continue
+        reading = probe_reading(kind, answer)
+        if reading != flip["expected"]:
+            problems.append(
+                f"{half.id}: the probe reads {reading!r} for "
+                f"{flip['claimant']!r} under its own decision-hour group, but "
+                f"metadata.probe_flip expects {flip['expected']!r} "
+                f"(answer: {answer!r})")
+    if fa["expected"] == fb["expected"]:
+        problems.append(
+            f"{a.id}/{b.id}: both halves expect {fa['expected']!r}; the "
+            f"expectations must differ or there is no probe flip")
+    named = {fa["claimant"], fb["claimant"]}
+    for claimant in sorted(set(answers_a) | set(answers_b)):
+        if claimant in named:
+            continue
+        if answers_a.get(claimant) != answers_b.get(claimant):
+            problems.append(
+                f"{claimant!r} is named by neither half's probe_flip but "
+                f"answers differently: {answers_a.get(claimant)!r} ({a.id}) "
+                f"vs {answers_b.get(claimant)!r} ({b.id})")
+    return problems
+
+
+async def claimant_probe_answers(client: Client, scenario: ScenarioFile, *,
+                                 topology_path: str | Path) -> dict[str, dict]:
+    """Every declared claimant's probe answer under the decision-hour
+    issuance's own latest-horizon risk group, defined EXACTLY as
+    `oracle.spend_risk_group` + `runner.horizon_risk_group_asset_ids` define
+    it (the same discipline `assert_spend_is_real` follows). Pre-decision
+    realized cuts are replayed first, as `menu_at_decision_hour` does."""
+    import functools
+    from .oracle import spend_risk_group
+    from .probe import answer_probe
+
+    edges = load_edges(topology_path)
+    d = scenario.decision_hour
+    for hour in scenario.hours[:scenario.hours.index(d)]:
+        cuts = scenario.realized.get(hour, ())
+        if cuts:
+            await call_tool_json(client, "inject_failure",
+                                 {"asset_ids": list(cuts)})
+    try:
+        horizon, rg_id = spend_risk_group(scenario)
+    except ValueError as e:
+        raise PairInvalid(str(e)) from e
+    issuance = scenario.forecast[d]
+    geometry = await service_geometry(client, topology_path, edges=edges)
+    topo = await call_tool_json(client, "get_topology", {"layer": "optical"})
+    await call_tool_json(client, "define_risk_group", {
+        "rg_id": rg_id,
+        "asset_ids": horizon_risk_group_asset_ids(
+            issuance.horizons[horizon], scenario.damage_radius_km,
+            edges=edges, oms=topo["oms"], filter_fn=get_filter(EVENT_TYPE)),
+        "metadata": {"event_type": EVENT_TYPE, "scenario": scenario.id,
+                     "issued_at": d, "horizon": horizon}})
+    services = (await call_tool_json(client, "get_services"))["services"]
+    demands = {s["id"]: float(s["demand_gbps"]) for s in services}
+    call = functools.partial(call_tool_json, client)
+    answers = {}
+    for claimant in scenario.metadata.get("claimant_services", ()):
+        answer = await answer_probe(
+            call, service_id=claimant, risk_group_id=rg_id, geometry=geometry,
+            issuance=issuance, damage_radius_km=scenario.damage_radius_km,
+            demands=demands)
+        answers[claimant] = answer.to_dict()
+    return answers
+
+
+async def assert_probe_flips(client_a: Client, client_b: Client,
+                             a: ScenarioFile, b: ScenarioFile, *,
+                             topology_path: str | Path) -> None:
+    """Spec 5.3: the scripted probe for each declared claimant under the
+    decision-hour issuance's latest-horizon group differs between the halves
+    in the declared way (`metadata.probe_flip`) and is identical for every
+    other claimant. Each client must be freshly connected against the
+    half's own state file."""
+    answers_a = await claimant_probe_answers(client_a, a, topology_path=topology_path)
+    answers_b = await claimant_probe_answers(client_b, b, topology_path=topology_path)
+    problems = probe_flip_mismatches(a, answers_a, b, answers_b)
+    if problems:
+        raise PairInvalid(f"{a.id}/{b.id}: the probe does not flip as declared:\n  "
+                          + "\n  ".join(problems))

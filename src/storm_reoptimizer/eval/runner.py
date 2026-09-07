@@ -244,13 +244,13 @@ def _residual_exposure(candidate_oms: tuple[str, ...],
     for horizon, cone in issuance.horizons.items():
         lat, lon = cone.center["lat"], cone.center["lon"]
         p_cut = round(p_cut_region(spans, lat, lon, cone.width_km,
-                                   damage_radius_km), 4)
+                                   damage_radius_km), 3)
         per_horizon[horizon] = {
             "offset_km": (round(nearest_span_offset_km(spans, lat, lon), 1)
                          if spans else None),
             "p_cut": p_cut,
             "ecar_gbps": round(
-                expected_capacity_at_risk_gbps(p_cut, demand_gbps), 2),
+                expected_capacity_at_risk_gbps(p_cut, demand_gbps), 3),
         }
     return per_horizon
 

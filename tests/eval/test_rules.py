@@ -33,7 +33,7 @@ def test_the_enumerated_observables_are_the_five_the_spec_names():
 def test_distinct_within_tolerance_collapses_float_noise_not_real_gaps():
     """Regression for the failure mode found rebuilding T1's geometry
     (whole-branch fix, Step 2): two derived values that agree to ~1e-13 --
-    well inside DERIVED_TOLERANCE=1e-6, real float slack from a numerical
+    well inside the tolerance passed here (1e-6), real float slack from a numerical
     solve, not a real difference -- must collapse to ONE split-point
     candidate, or a threshold rule can sit on the noise and falsely "solve"
     a pair that was built to be unsolvable. A gap that is actually
@@ -60,6 +60,14 @@ def test_the_enumeration_includes_parameter_free_greedy_policies():
     names = {r.name for r in candidate_rules(episodes)}
     assert "greedy:widest_feasible_avoid" in names
     assert "greedy:always_lo" in names
+
+
+def test_the_default_tolerance_is_one_thousandth():
+    # Spec 5.3: p_cut is a 1/65535-quantum step function; float-identical
+    # equality forced nested solves for no evaluative gain.
+    from storm_reoptimizer.eval.derived import DERIVED_TOLERANCE
+    assert DERIVED_TOLERANCE == 1e-3
+    assert split_points([0.2480, 0.2485, 0.9]) == [pytest.approx((0.2480 + 0.9) / 2)]
 
 
 def test_the_check_rejects_the_discarded_drafts(tmp_path):

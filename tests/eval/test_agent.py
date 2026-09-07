@@ -1208,3 +1208,8 @@ def test_the_prompt_describes_the_probe_without_saying_when_to_use_it():
 
 def test_the_prompt_states_that_a_restoration_may_cost_zero_spares():
     assert "may cost zero spares" in SYSTEM_PROMPT
+
+
+def test_the_prompt_keeps_the_joint_p_cut_sentence_and_drops_legs():
+    assert "BOTH its working and protection paths are cut" in SYSTEM_PROMPT
+    assert "`legs`" not in SYSTEM_PROMPT

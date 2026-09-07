@@ -83,12 +83,17 @@ TWIN = textwrap.dedent("""
 """)
 
 
-def _half(tmp_path, sid, *, label, t0_lat=25.0, t1_lat=25.0):
+def _half(tmp_path, sid, *, label="wait", t0_lat=25.0, t1_lat=25.0,
+         metadata=None):
     path = tmp_path / f"{sid}.yaml"
     path.write_text(
         TWIN.format(id=sid, label=label, t0_lat=t0_lat, t1_lat=t1_lat),
         encoding="utf-8")
-    return load_scenario(path)
+    scenario = load_scenario(path)
+    if metadata:
+        scenario = dataclasses.replace(
+            scenario, metadata={**scenario.metadata, **metadata})
+    return scenario
 
 
 def test_a_valid_pair_passes_the_static_checks(tmp_path):
@@ -872,9 +877,14 @@ def test_no_jabalpur_candidate_returns_none():
 
 # Invariant 8 (`assert_sampling_error_within_margin`).
 def test_a_flip_margin_within_10x_of_the_sampling_error_fails_the_build():
+    # The gap must clear DERIVED_TOLERANCE (1e-3, spec 5.3) or
+    # `_distinct_within_tolerance` collapses the two values into one and no
+    # margin is computed at all -- so 0.0015, not the pre-redesign 0.0002,
+    # is the smallest gap that is both a real (non-noise) distinction and
+    # still within 10x of measured_error (2.56e-4 * 10 = 2.56e-3).
     flip_values = {
         "T1a": {"largest_restorable_group_ecar_gbps": 100.0},
-        "T1b": {"largest_restorable_group_ecar_gbps": 100.0002},
+        "T1b": {"largest_restorable_group_ecar_gbps": 100.0015},
     }
     with pytest.raises(PairInvalid, match="sampling error"):
         assert_sampling_error_within_margin(
@@ -1158,3 +1168,86 @@ def test_spend_is_real_rejects_storm_svc_1_which_had_no_escape(
                     client, scenario, topology_path=TOPOLOGY_PATH)
 
     asyncio.run(_run())
+
+
+from storm_reoptimizer.eval.assertions import probe_flip_mismatches, probe_reading
+
+RESTORABLE = {"status": "solution", "full_restore_candidates": 2,
+              "min_spares_needed_by_site": {"jalgaon": 1, "khandwa": 1},
+              "levers": ["optical_reroute"]}
+FREE = {"status": "solution", "full_restore_candidates": 1,
+        "min_spares_needed_by_site": {}, "levers": ["ip_reroute"]}
+DEAD = {"status": "no_solution", "full_restore_candidates": 0,
+        "min_spares_needed_by_site": None, "levers": []}
+
+
+def test_probe_reading_names_the_fact_each_kind_asks_about():
+    assert probe_reading("restorable", RESTORABLE) == "restorable"
+    assert probe_reading("restorable", DEAD) == "not_restorable"
+    assert probe_reading("spares_needed", RESTORABLE) == "spare"
+    assert probe_reading("spares_needed", FREE) == "free"
+    assert probe_reading("spares_needed", DEAD) == "not_restorable"
+
+
+def _twin_with_probe_flip(tmp_path, a_flip, b_flip, claimants=("c1",)):
+    a = _half(tmp_path, "A", metadata=dict(claimant_services=list(claimants),
+                                           probe_flip=a_flip))
+    b = _half(tmp_path, "B", metadata=dict(claimant_services=list(claimants),
+                                           probe_flip=b_flip))
+    return a, b
+
+
+def test_a_t2_shaped_pair_flips_on_restorability(tmp_path):
+    a, b = _twin_with_probe_flip(
+        tmp_path,
+        {"kind": "restorable", "claimant": "c1", "expected": "restorable"},
+        {"kind": "restorable", "claimant": "c1", "expected": "not_restorable"})
+    assert probe_flip_mismatches(a, {"c1": RESTORABLE}, b, {"c1": DEAD}) == []
+
+
+def test_a_half_whose_reading_disagrees_with_its_declaration_is_reported(tmp_path):
+    a, b = _twin_with_probe_flip(
+        tmp_path,
+        {"kind": "restorable", "claimant": "c1", "expected": "restorable"},
+        {"kind": "restorable", "claimant": "c1", "expected": "not_restorable"})
+    problems = probe_flip_mismatches(a, {"c1": RESTORABLE}, b, {"c1": RESTORABLE})
+    assert any("B" in p and "not_restorable" in p for p in problems)
+
+
+def test_a_t3_shaped_pair_flips_on_spares_needed_across_two_claimants(tmp_path):
+    a, b = _twin_with_probe_flip(
+        tmp_path,
+        {"kind": "spares_needed", "claimant": "ck", "expected": "spare"},
+        {"kind": "spares_needed", "claimant": "cd", "expected": "free"},
+        claimants=("ck", "cd"))
+    answers = {"ck": RESTORABLE, "cd": FREE}
+    assert probe_flip_mismatches(a, answers, b, answers) == []
+
+
+def test_an_unnamed_claimant_must_answer_identically_in_both_halves(tmp_path):
+    a, b = _twin_with_probe_flip(
+        tmp_path,
+        {"kind": "restorable", "claimant": "c1", "expected": "restorable"},
+        {"kind": "restorable", "claimant": "c1", "expected": "not_restorable"},
+        claimants=("c1", "c2"))
+    problems = probe_flip_mismatches(
+        a, {"c1": RESTORABLE, "c2": FREE}, b, {"c1": DEAD, "c2": RESTORABLE})
+    assert any("c2" in p for p in problems)
+
+
+def test_a_pair_with_no_declared_probe_flip_must_probe_identically(tmp_path):
+    # T1's shape: the flip is in the observation, so the probe must not
+    # carry one. Identical answers pass; a difference is an undeclared flip.
+    a = _half(tmp_path, "A", metadata=dict(claimant_services=["c1"]))
+    b = _half(tmp_path, "B", metadata=dict(claimant_services=["c1"]))
+    assert probe_flip_mismatches(a, {"c1": RESTORABLE}, b, {"c1": RESTORABLE}) == []
+    assert probe_flip_mismatches(a, {"c1": RESTORABLE}, b, {"c1": DEAD})
+
+
+def test_the_two_halves_must_declare_different_expectations(tmp_path):
+    a, b = _twin_with_probe_flip(
+        tmp_path,
+        {"kind": "restorable", "claimant": "c1", "expected": "restorable"},
+        {"kind": "restorable", "claimant": "c1", "expected": "restorable"})
+    problems = probe_flip_mismatches(a, {"c1": RESTORABLE}, b, {"c1": RESTORABLE})
+    assert any("differ" in p for p in problems)

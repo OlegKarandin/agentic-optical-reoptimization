@@ -216,11 +216,13 @@ if TYPE_CHECKING:                    # pragma: no cover
 DERIVED_VARS = ("sut_p_cut_at_exposure_horizon",)
 
 # Two halves' derived geometry must agree to this many km / probability
-# units. Not a modelling tolerance -- the halves are supposed to be EXACTLY
-# equal on every one of these, so this is only float slack. It is
-# deliberately tight enough to catch T2's documented +0.2 km width epsilon,
-# which propagates into a 4.4e-4 p_cut difference.
-DERIVED_TOLERANCE = 1e-6
+# units. Raised 1e-6 -> 1e-3 on 2026-09-06 (T2/T3 probe redesign, §2): p_cut
+# is a 1/65535-quantum step function, so float-identical equality forced
+# nested bearing/radius solves (the 2026-09-05 T1 authoring note's two-stage
+# search) for no evaluative gain -- the observation shows 3 decimals, and a
+# difference below 1e-3 is invisible to every reader of it. rules.split_points
+# inherits this, so the per-pair rule search collapses the same values.
+DERIVED_TOLERANCE = 1e-3
 
 
 class DerivedGeometryError(ValueError):

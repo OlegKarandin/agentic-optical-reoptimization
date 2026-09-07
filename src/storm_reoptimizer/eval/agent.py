@@ -143,7 +143,7 @@ def project_observation(
             "count": len(svcs) + extra_count,
             "max_p_cut": round(
                 max((_peak_p_cut(exposure[svc]) for svc in svcs),
-                   default=0.0), 4),
+                   default=0.0), 3),
             "summed_expected_capacity_at_risk_gbps": round(
                 sum(_peak_capacity_at_risk_gbps(exposure[svc])
                     for svc in svcs), 3),
@@ -277,8 +277,7 @@ the product `p_cut * demand_gbps`, already computed for you. It is the \
 quantity that makes two competing claims on one resource comparable, and it \
 is in Gbps. For a protected service `p_cut` is the probability BOTH its \
 working and protection paths are cut -- the probability it actually goes \
-down -- and `legs` shows, per leg, how many storm-cuttable spans it carries \
-and whether it sits inside the damage footprint.
+down.
 - `services` -- the roster for the services shown.
 - `spares_on_hand` -- spare transponders held at `depot_site`, the one site \
 whose inventory (the scenario's own `spare_inventory`, held per site) is \

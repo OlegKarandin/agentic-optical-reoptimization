@@ -609,12 +609,11 @@ def test_exposure_follows_the_service_after_it_reroutes(
     # The baseline avoids the exposed risk group, so the committed path's
     # WORKING leg genuinely moves away from the cone -- its own offset more
     # than doubles (47.6 -> 95.1 km) and it exits the damage footprint
-    # outright. `in_footprint` (Task 4's per-leg categorical fact) is the
-    # cleanest way to see that: it flips True -> False on exactly the leg
-    # that moved.
+    # outright.
     assert after["offset_km"] > before["offset_km"]
-    assert before["legs"]["working"]["in_footprint"] is True
-    assert after["legs"]["working"]["in_footprint"] is False
+    # Spec 5.3 (2026-09-06): no per-leg display at all any more -- the joint
+    # `p_cut` below is the only exposure number a protected service shows.
+    assert "legs" not in after
     # `p_cut` is the JOINT (both-legs-cut) probability (Task 4), not the
     # working leg's own, and it does NOT reliably fall here -- verified NOT
     # to be a fixture accident (Task 4 investigation, 2026-09-05): satna's
@@ -633,8 +632,8 @@ def test_exposure_follows_the_service_after_it_reroutes(
     # sampling-noise floor. So this is a structural property of the joint
     # metric under this real topology, not something a different
     # EXPOSURE_SMOKE cone could fix. `p_cut` still changing at all (rather
-    # than being reused stale) is exactly what the offset/in_footprint
-    # assertions above already prove.
+    # than being reused stale) is exactly what the offset_km assertion above
+    # already proves.
 
 
 def test_a_baseline_rollout_completes_and_records_every_hour(

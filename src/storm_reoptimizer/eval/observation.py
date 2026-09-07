@@ -22,7 +22,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..events.geo import damage_footprint_radius_km
 from .cone import (
     Segment, expected_capacity_at_risk_gbps, nearest_span_offset_km,
     p_cut_service,
@@ -286,7 +285,6 @@ def build_observation(
     endpoint_sites: dict[str, tuple[str, str]] | None = None,
     depot_site: str | None = None,
     protection_spans: dict[str, tuple[Segment, ...]] | None = None,
-    footprint_membership: dict[str, dict[str, dict[str, bool]]] | None = None,
 ) -> Observation:
     """The observation for one hour. `service_spans` maps a service id to the
     spans of its working path that the event's own filter admits -- the
@@ -307,32 +305,16 @@ def build_observation(
     `protection_spans` (service id -> storm-cuttable spans of that service's
     PROTECTION path) is what makes a protected service's `p_cut` the JOINT
     both-legs-cut probability (`cone.p_cut_service`) instead of the working
-    leg's alone -- the whole architectural point of this redesign. A service
-    present in this dict also gets a `"legs"` entry in its exposure row:
-    `{"working": {...}, "protection": {...}}`, each a per-leg CATEGORICAL
-    fact (`cuttable_spans` count, `in_footprint` bool), never a second
-    numeric probability -- an agent shown a second `p_cut` could substitute
-    a threshold rule on it for the comparison it is meant to reason through.
-    Defaulted to None so every existing caller with no protection geometry to
-    offer keeps constructing exactly as before (`p_cut_service(spans, None,
-    ...)` is `p_cut_region(spans, ...)`, unchanged).
-
-    `footprint_membership` (service id -> horizon -> leg name -> bool)
-    optionally OVERRIDES a leg's computed `in_footprint` fact -- for a caller
-    that already knows containment from its own geometry pass and wants the
-    observation to agree with it bit-for-bit rather than recompute it.
-    Defaulted to None, in which case every leg's `in_footprint` is computed
-    fresh from its own spans."""
+    leg's alone. It is the ONLY exposure number a protected service shows:
+    the per-leg entry this row used to carry (`legs`, categorical
+    `cuttable_spans`/`in_footprint`) was removed 2026-09-06 (T2/T3 probe
+    redesign, §5.3) because a number that carries no information about the
+    SUT's own risk answered T1 2/2 by a bare threshold. Defaulted to None so
+    every existing caller with no protection geometry to offer keeps
+    constructing exactly as before (`p_cut_service(spans, None, ...)` is
+    `p_cut_region(spans, ...)`, unchanged)."""
     issuance = latest_issuance(scenario, hour)
     hour_index = scenario.hours.index(hour)
-
-    def _in_footprint(svc_id: str, horizon: str, leg: str, leg_spans, lat,
-                      lon, footprint_radius_km: float) -> bool:
-        override = (footprint_membership or {}).get(svc_id, {}).get(
-            horizon, {}).get(leg)
-        if override is not None:
-            return override
-        return nearest_span_offset_km(leg_spans, lat, lon) <= footprint_radius_km
 
     exposure: dict[str, dict[str, dict[str, float]]] = {}
     for svc in services:
@@ -351,7 +333,7 @@ def build_observation(
             offset = nearest_span_offset_km(spans, lat, lon)
             p_cut = round(p_cut_service(spans, protection_leg, lat, lon,
                                         cone.width_km,
-                                        scenario.damage_radius_km), 4)
+                                        scenario.damage_radius_km), 3)
             entry = {
                 "hours_ahead": scenario.hours.index(horizon) - hour_index,
                 # Distance from the cone centre to the NEAREST CUTTABLE SPAN
@@ -368,31 +350,17 @@ def build_observation(
                 # arithmetic in code and leaves the comparison to the agent
                 # (remediation spec, W3.1).
                 #
-                # Derived from the ROUNDED p_cut one line above, NOT from the
-                # raw probability, so the payload is internally consistent: a
-                # reader who multiplies the two numbers shown gets the number
-                # shown. That makes it deliberately NOT bit-identical to
+                # Derived from the p_cut one line above, ROUNDED TO 3
+                # DECIMALS, NOT from the raw probability, so the payload is
+                # internally consistent: a reader who multiplies the two
+                # numbers shown gets the number shown. That makes it
+                # deliberately NOT bit-identical to
                 # derived.py's FlipScalars, which use the unrounded value and
                 # feed the static suite assertions -- those must not move.
                 "expected_capacity_at_risk_gbps": round(
                     expected_capacity_at_risk_gbps(
                         p_cut, svc["demand_gbps"]), 3),
             }
-            if protected:
-                footprint_radius = damage_footprint_radius_km(
-                    cone.width_km, scenario.damage_radius_km)
-                entry["legs"] = {
-                    "working": {
-                        "cuttable_spans": len(spans),
-                        "in_footprint": _in_footprint(
-                            svc["id"], horizon, "working", spans, lat, lon,
-                            footprint_radius)},
-                    "protection": {
-                        "cuttable_spans": len(protection_leg),
-                        "in_footprint": _in_footprint(
-                            svc["id"], horizon, "protection", protection_leg,
-                            lat, lon, footprint_radius)},
-                }
             per_horizon[horizon] = entry
         exposure[svc["id"]] = per_horizon
 
