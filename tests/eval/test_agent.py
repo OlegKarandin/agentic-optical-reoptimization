@@ -21,6 +21,9 @@ from storm_reoptimizer.eval.decisions import (
     TIMING_JSON_SCHEMA, TimingDecision,
 )
 from storm_reoptimizer.eval.observation import Observation
+from storm_reoptimizer.eval.probe import (
+    MAX_PROBES_PER_DECISION, PROBE_TOOL, ProbeBinding, ProbeError,
+)
 from storm_reoptimizer.eval.scenario_file import ConeAtHorizon, Issuance
 from storm_reoptimizer.eval.suite import build_arg_parser, build_deciders
 
@@ -517,7 +520,7 @@ def test_timing_forces_its_own_tool_and_parses_the_action():
     assert decision.action == "wait"
     assert decision.reasoning == "the far cone is 2h out"
     assert client.messages.calls[0]["tool_choice"] == {
-        "type": "tool", "name": TIMING_TOOL, "disable_parallel_tool_use": True}
+        "type": "any", "disable_parallel_tool_use": True}
 
 
 def test_constraints_forces_its_own_tool_and_parses_the_posture():
@@ -527,7 +530,6 @@ def test_constraints_forces_its_own_tool_and_parses_the_posture():
     assert decision.avoid == {"risk_groups": ["rg_T3a_t1_t3"]}
     assert (decision.protected, decision.best_effort, decision.basis,
             decision.level) == (False, False, "physical", "link")
-    assert client.messages.calls[0]["tool_choice"]["name"] == CONSTRAINT_TOOL
 
 
 def test_objective_forces_its_own_tool_and_parses_the_choice():
@@ -536,7 +538,6 @@ def test_objective_forces_its_own_tool_and_parses_the_choice():
     decision = _run(decider.objective(_obs(others=CLAIMANTS), MENU))
     assert decision.choice == "candidate_1"
     assert decision.priority == ("transponders", "dropped_traffic")
-    assert client.messages.calls[0]["tool_choice"]["name"] == OBJECTIVE_TOOL
 
 
 def test_every_request_declares_all_three_tools_so_one_cache_prefix_serves():
@@ -552,7 +553,7 @@ def test_every_request_declares_all_three_tools_so_one_cache_prefix_serves():
     _run(decider.constraints(obs))
     first, second = client.messages.calls
     assert [t["name"] for t in first["tools"]] == [
-        TIMING_TOOL, CONSTRAINT_TOOL, OBJECTIVE_TOOL]
+        TIMING_TOOL, CONSTRAINT_TOOL, OBJECTIVE_TOOL, PROBE_TOOL]
     assert first["tools"] == second["tools"]
     assert first["system"] == second["system"]
 
@@ -852,6 +853,9 @@ def test_a_tool_use_block_naming_a_different_tool_is_not_accepted():
         FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)))
     assert _run(decider.timing(_obs(others=CLAIMANTS))).action == "wait"
     assert len(client.messages.calls) == 2
+    correction = client.messages.calls[1]["messages"][2]["content"][0]
+    assert correction["type"] == "tool_result" and correction["is_error"] is True
+    assert TIMING_TOOL in correction["content"]
 
 
 def test_a_claim_naming_an_unshown_service_is_retried_not_accepted():
@@ -1098,3 +1102,109 @@ def test_last_projection_is_telemetry_and_never_reaches_a_request():
     first = fake.messages.calls[-1]
     _run(decider.timing(_obs(others=CLAIMANTS)))
     assert fake.messages.calls[-1]["messages"] == first["messages"]
+
+
+PROBE_OK = {"service_id": CLAIMANTS[0][0], "risk_group_id": "rg_T3a_t1_t3"}
+PROBE_ANSWER = {"status": "solution", "full_restore_candidates": 1,
+                "min_spares_needed_by_site": {"satna": 1, "x": 1},
+                "levers": ["optical_reroute"]}
+
+
+def _bound(decider, *, fail_with=None):
+    """Bind a fake probe that answers PROBE_ANSWER (or raises)."""
+    seen = []
+
+    async def probe(service_id, risk_group_id):
+        seen.append((service_id, risk_group_id))
+        if fail_with:
+            raise ProbeError(fail_with)
+        return dict(PROBE_ANSWER)
+    decider.bind_probe(probe)
+    return seen
+
+
+def test_every_request_declares_the_probe_tool_last():
+    decider, client = _decider(FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)))
+    _run(decider.timing(_obs(others=CLAIMANTS)))
+    call = client.messages.calls[0]
+    assert [t["name"] for t in call["tools"]] == [
+        TIMING_TOOL, CONSTRAINT_TOOL, OBJECTIVE_TOOL, PROBE_TOOL]
+    assert call["tool_choice"] == {"type": "any",
+                                   "disable_parallel_tool_use": True}
+
+
+def test_a_probe_call_is_answered_and_the_decision_still_arrives():
+    decider, client = _decider(
+        FakeResponse(FakeToolUse(PROBE_TOOL, PROBE_OK, block_id="toolu_p")),
+        FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)))
+    seen = _bound(decider)
+    assert _run(decider.timing(_obs(others=CLAIMANTS))).action == "wait"
+    assert seen == [(CLAIMANTS[0][0], "rg_T3a_t1_t3")]
+    second = client.messages.calls[1]["messages"]
+    assert [m["role"] for m in second] == ["user", "assistant", "user"]
+    result = second[2]["content"][0]
+    assert result["type"] == "tool_result"
+    assert result["tool_use_id"] == "toolu_p"
+    assert result["is_error"] is False
+    assert json.loads(result["content"]) == PROBE_ANSWER
+
+
+def test_accepted_probes_do_not_consume_attempts():
+    decider, client = _decider(
+        *[FakeResponse(FakeToolUse(PROBE_TOOL, PROBE_OK))
+          for _ in range(MAX_ATTEMPTS + 1)],
+        FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)))
+    _bound(decider)
+    assert _run(decider.timing(_obs(others=CLAIMANTS))).action == "wait"
+    assert len(client.messages.calls) == MAX_ATTEMPTS + 2
+
+
+def test_a_rejected_probe_is_an_error_result_and_consumes_an_attempt():
+    decider, client = _decider(
+        *[FakeResponse(FakeToolUse(PROBE_TOOL, PROBE_OK))
+          for _ in range(MAX_ATTEMPTS)])
+    _bound(decider, fail_with="probe cap reached")
+    with pytest.raises(DecisionError, match="probe"):
+        _run(decider.timing(_obs(others=CLAIMANTS)))
+    assert len(client.messages.calls) == MAX_ATTEMPTS
+    result = client.messages.calls[1]["messages"][2]["content"][0]
+    assert result["is_error"] is True and "cap" in result["content"]
+
+
+def test_a_probe_with_nothing_bound_is_rejected_not_crashed():
+    decider, client = _decider(
+        FakeResponse(FakeToolUse(PROBE_TOOL, PROBE_OK)),
+        FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)))
+    assert _run(decider.timing(_obs(others=CLAIMANTS))).action == "wait"
+    result = client.messages.calls[1]["messages"][2]["content"][0]
+    assert result["is_error"] is True
+    assert "not available" in result["content"]
+
+
+def test_the_audit_sidecar_records_probes(tmp_path):
+    audit = tmp_path / "audit.jsonl"
+    decider, _ = _decider(
+        FakeResponse(FakeToolUse(PROBE_TOOL, PROBE_OK)),
+        FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)),
+        audit_path=audit)
+    _bound(decider)
+    _run(decider.timing(_obs(others=CLAIMANTS)))
+    record = json.loads(audit.read_text().splitlines()[-1])
+    assert record["probes"] == [
+        {"arguments": PROBE_OK, "answer": PROBE_ANSWER, "error": None}]
+
+
+def test_the_prompt_describes_the_probe_without_saying_when_to_use_it():
+    p = SYSTEM_PROMPT
+    assert f"`{PROBE_TOOL}`" in p
+    for needle in ("full_restore_candidates", "min_spares_needed_by_site",
+                   "changes nothing", str(MAX_PROBES_PER_DECISION)):
+        assert needle in p
+    lowered = p.lower()
+    for banned in ("probe before", "you should probe", "always probe",
+                   "probe when", "use the probe if"):
+        assert banned not in lowered
+
+
+def test_the_prompt_states_that_a_restoration_may_cost_zero_spares():
+    assert "may cost zero spares" in SYSTEM_PROMPT

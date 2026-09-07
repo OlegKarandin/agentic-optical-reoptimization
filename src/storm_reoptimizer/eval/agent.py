@@ -37,6 +37,9 @@ from .decisions import (
     TimingDecision,
 )
 from .observation import Observation
+from .probe import (
+    MAX_PROBES_PER_DECISION, PROBE_JSON_SCHEMA, PROBE_TOOL, ProbeError,
+)
 from .runner import menu_for_prompt as _menu_for_prompt
 
 # See the module docstring: scenarios/T3a.yaml's t3 cone comment. Keyed on
@@ -299,9 +302,11 @@ sites' depots.
 - `claim_priority` (yours to state on the timing decision) -- an ordering of \
 the services shown, most deserving first. When a service is cut, the harness \
 restores cut services in this order with whatever spares remain, each \
-effective after its lever's lead time. Services you leave out are restored \
-after the ones you list, larger demand first. This is the one way you act on \
-behalf of a service other than the actionable one.
+effective after its lever's lead time. Such a restoration may cost zero \
+spares when an existing lightpath with headroom can carry the service, and \
+one spare pair otherwise. Services you leave out are restored after the \
+ones you list, larger demand first. This is the one way you act on behalf \
+of a service other than the actionable one.
 - `actions_taken` and `spares_spent` -- what YOU have already committed \
 earlier in this episode: per action its hour, its lever, the spare pairs it \
 cost, the `avoid` set it was routed under, and `effective_at_hour` -- the \
@@ -451,6 +456,18 @@ service never moved.
 A committed candidate that changes no path and costs no spare is recorded as \
 a wait, not an action.
 
+## One question you may ask
+
+`""" + PROBE_TOOL + """` takes a `service_id` from `exposure` and a \
+`risk_group_id` from `risk_group_ids`, and returns what the routing tools \
+would offer that service if every asset in that risk group were unusable: \
+`status`, `full_restore_candidates` (how many candidates restore its full \
+demand on a genuinely different path), `min_spares_needed_by_site` (the \
+cheapest such candidate's spare transponders per site, or null if there is \
+none) and `levers`. It computes and changes nothing. You may call it up to \
+""" + str(MAX_PROBES_PER_DECISION) + """ times per decision, before the \
+decision tool; the answer comes back as a tool result.
+
 ## Your reasoning
 
 `reasoning` is mandatory on all three decisions and it is read. Write the \
@@ -501,6 +518,17 @@ TOOLS = [
           "comparing the candidates on the terms that matter for this "
           "service and this event state.",
           OBJECTIVE_JSON_SCHEMA),
+    _tool(PROBE_TOOL,
+          "Ask what the routing tools would offer one service shown in "
+          "`exposure` if every asset in one of `risk_group_ids` were "
+          "unusable. Read-only: it computes and changes nothing on the "
+          "network. Returns `status`, `full_restore_candidates` (how many "
+          "candidates restore the service's full demand on a genuinely "
+          "different path), `min_spares_needed_by_site` (the cheapest such "
+          "candidate's spare transponders per site, null if there is none) "
+          f"and `levers`. At most {MAX_PROBES_PER_DECISION} calls per "
+          "decision.",
+          PROBE_JSON_SCHEMA),
 ]
 
 TIMING_INSTRUCTION = (
@@ -558,6 +586,14 @@ class ClaudeDecider:
         # -- decisions.py's `Decider` protocol is shared by every decider,
         # including baselines that never touch spares_needed at all.
         self.oms_nodes: dict[str, list[str]] = oms_nodes or {}
+        # Bound by runner.run_episode per hour; see bind_probe below.
+        self._probe = None
+
+    def bind_probe(self, probe) -> None:
+        """runner.run_episode binds one ProbeBinding per hour before
+        `timing` and unbinds (None) after the hour; outside a rollout there
+        is nothing to call and a probe is answered with an error result."""
+        self._probe = probe
 
     @property
     def _api(self):
@@ -580,7 +616,7 @@ class ClaudeDecider:
         rendered = json.dumps(body, indent=2, sort_keys=True, default=str)
         return f"{rendered}\n\n{instruction}"
 
-    def _create(self, messages: list[dict], tool_name: str):
+    def _create(self, messages: list[dict]):
         return self._api.messages.create(
             model=self.model,
             max_tokens=MAX_TOKENS,
@@ -590,8 +626,7 @@ class ClaudeDecider:
             # top_k -- any of them is a 400.
             thinking={"type": "adaptive"},
             tools=TOOLS,
-            tool_choice={"type": "tool", "name": tool_name,
-                         "disable_parallel_tool_use": True},
+            tool_choice={"type": "any", "disable_parallel_tool_use": True},
             messages=messages,
         )
 
@@ -621,26 +656,34 @@ class ClaudeDecider:
                     f"services you were shown.")
 
     async def _decide(self, tool_name, decision_cls, obs, payload, user_content):
-        """One decision, with up to MAX_ATTEMPTS self-correction rounds.
+        """One decision, with up to MAX_ATTEMPTS self-correction rounds and
+        any number of ACCEPTED probe rounds in between.
+
+        `tool_choice: any` lets the model call `probe_restorability` before
+        the decision tool. An accepted probe is answered as a tool_result and
+        costs no attempt; a REJECTED probe (unshown service, unknown group,
+        over the cap, nothing bound) is answered as an error tool_result and
+        costs one attempt, the same class of failure as a hallucinated
+        claim_priority id -- otherwise a model that keeps probing past the
+        cap could loop forever. A tool_use naming the wrong decision tool is
+        answered with an error tool_result (an unanswered tool_use is an API
+        error, so the correction cannot be a plain user turn any more); a
+        response with no tool_use at all still gets a plain user turn.
 
         Only schema/validation failures are retried here. Transient API
-        failures (429, 5xx, connection errors) belong to the SDK's own
-        `max_retries` and are deliberately not caught: this loop exists for
-        the class of failure the SDK cannot see.
-
-        On the final failure the DecisionError propagates. run_episode never
-        catches a decider exception, so a decider that cannot produce a valid
-        decision kills the rollout visibly instead of silently substituting a
-        degraded default that would then be scored as if it were a
-        judgement."""
+        failures belong to the SDK's own `max_retries`. On the final failure
+        the DecisionError propagates: run_episode never catches a decider
+        exception, so a decider that cannot decide kills the rollout visibly."""
         messages: list[dict] = [{"role": "user", "content": user_content}]
         failure: DecisionError | None = None
-        for attempt in range(MAX_ATTEMPTS):
-            response = self._create(messages, tool_name)
+        probes: list[dict] = []
+        attempt = 0
+        while attempt < MAX_ATTEMPTS:
+            response = self._create(messages)
             block = next((b for b in response.content
-                          if getattr(b, "type", None) == "tool_use"
-                          and b.name == tool_name), None)
+                          if getattr(b, "type", None) == "tool_use"), None)
             if block is None:
+                attempt += 1
                 failure = DecisionError(
                     f"{tool_name}: no tool_use block in response")
                 # No tool_use id to answer, so the correction cannot be a
@@ -651,10 +694,42 @@ class ClaudeDecider:
                     f"That response contained no `{tool_name}` tool call. "
                     f"Call `{tool_name}` with your decision.")})
                 continue
+            if block.name == PROBE_TOOL:
+                answer, error = await self._run_probe(dict(block.input))
+                probes.append({"arguments": dict(block.input),
+                               "answer": answer, "error": error})
+                # Echo the assistant content back unchanged -- with adaptive
+                # thinking it carries a thinking block that must survive the
+                # turn -- then answer its tool_use with the probe's result.
+                messages.append(
+                    {"role": "assistant", "content": response.content})
+                messages.append({"role": "user", "content": [{
+                    "type": "tool_result", "tool_use_id": block.id,
+                    "is_error": error is not None,
+                    "content": json.dumps(answer) if error is None else error}]})
+                if error is not None:
+                    attempt += 1
+                    failure = DecisionError(
+                        f"{tool_name}: probe rejected -- {error}")
+                continue
+            if block.name != tool_name:
+                attempt += 1
+                failure = DecisionError(
+                    f"{tool_name}: the model called {block.name!r} instead")
+                messages.append(
+                    {"role": "assistant", "content": response.content})
+                messages.append({"role": "user", "content": [{
+                    "type": "tool_result", "tool_use_id": block.id,
+                    "is_error": True,
+                    "content": (f"This request needs `{tool_name}`, not "
+                                f"`{block.name}`. Call `{tool_name}` with "
+                                f"your decision.")}]})
+                continue
             try:
                 decision = decision_cls.from_dict(block.input)
                 self._check_named_services(decision, payload, tool_name)
             except DecisionError as exc:
+                attempt += 1
                 failure = exc
                 # Echo the assistant content back unchanged -- with adaptive
                 # thinking it carries a thinking block that must survive the
@@ -665,11 +740,23 @@ class ClaudeDecider:
                     "type": "tool_result", "tool_use_id": block.id,
                     "is_error": True, "content": str(exc)}]})
                 continue
-            self._audit(obs, payload, tool_name, decision, attempt + 1)
+            self._audit(obs, payload, tool_name, decision, attempt + 1, probes)
             return decision
         raise failure
 
-    def _audit(self, obs, payload, tool_name, decision, attempts) -> None:
+    async def _run_probe(self, arguments: dict) -> tuple[dict | None, str | None]:
+        """`(answer, None)` or `(None, error_text)`; never raises."""
+        if self._probe is None:
+            return None, (f"`{PROBE_TOOL}` is not available in this context: "
+                          f"no rollout is in progress")
+        try:
+            answer = await self._probe(arguments.get("service_id"),
+                                       arguments.get("risk_group_id"))
+        except ProbeError as exc:
+            return None, str(exc)
+        return answer, None
+
+    def _audit(self, obs, payload, tool_name, decision, attempts, probes) -> None:
         """Write-only telemetry: exactly what this call showed the model.
 
         It cannot ride inside the decision itself -- tests/eval/
@@ -687,6 +774,7 @@ class ClaudeDecider:
             "iteration": obs.iteration,
             "decision": tool_name,
             "attempts": attempts,
+            "probes": probes,
             "shown_services": sorted(payload["exposure"]),
             # Not just WHICH services were shown but at what magnitude --
             # otherwise the sidecar cannot answer "was the claimant this
