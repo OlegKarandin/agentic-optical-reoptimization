@@ -333,14 +333,18 @@ class Decider(Protocol):
     `menu` argument rather than riding on the Observation, because an
     Observation field would enter the timing prompt too, and a timing
     decision made against a costed menu is a different experiment
-    (remediation spec, W3.3)."""
+    (remediation spec, W3.3).
+
+    All three are coroutine functions (T2/T3 probe redesign, §5.2): a
+    decider may `await` the harness probe it was bound with before
+    answering."""
 
     name: str
 
-    def timing(self, obs: Observation) -> TimingDecision: ...
+    async def timing(self, obs: Observation) -> TimingDecision: ...
 
-    def constraints(self, obs: Observation,
-                    unconstrained_menu: dict | None = None
-                    ) -> ConstraintDecision: ...
+    async def constraints(self, obs: Observation,
+                          unconstrained_menu: dict | None = None
+                          ) -> ConstraintDecision: ...
 
-    def objective(self, obs: Observation, menu: dict) -> ObjectiveDecision: ...
+    async def objective(self, obs: Observation, menu: dict) -> ObjectiveDecision: ...

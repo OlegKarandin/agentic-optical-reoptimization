@@ -5,11 +5,17 @@ already-annotated menus (the exact shape `runner.menu_with_path_facts` /
 examples); `spend_decider`/`hold_decider` are exercised through their public
 `Decider` interface (`.timing`/`.constraints`), never through their private
 attributes, mirroring test_baseline.py's own style."""
+import asyncio
 import textwrap
 
 from storm_reoptimizer.eval.oracle import escape_objective, hold_decider, spend_decider
 from storm_reoptimizer.eval.observation import Observation
 from storm_reoptimizer.eval.scenario_file import ConeAtHorizon, Issuance, load_scenario
+
+
+def _run(coro):
+    return asyncio.run(coro)
+
 
 ORACLE_SCENARIO_YAML = textwrap.dedent("""
     id: ORACLE_TEST
@@ -183,39 +189,39 @@ def test_escape_objective_scores_at_the_latest_horizon_not_the_first():
 
 def test_spend_decider_acts_only_at_the_decision_hour(write_scenario):
     decider = spend_decider(_scenario(write_scenario))
-    assert decider.timing(_dummy_obs("t0")).action == "wait"
-    assert decider.timing(_dummy_obs("t1")).action == "act"
-    assert decider.timing(_dummy_obs("t2")).action == "wait"
-    assert decider.timing(_dummy_obs("t3")).action == "wait"
+    assert _run(decider.timing(_dummy_obs("t0"))).action == "wait"
+    assert _run(decider.timing(_dummy_obs("t1"))).action == "act"
+    assert _run(decider.timing(_dummy_obs("t2"))).action == "wait"
+    assert _run(decider.timing(_dummy_obs("t3"))).action == "wait"
 
 
 def test_hold_decider_waits_at_every_hour(write_scenario):
     decider = hold_decider(_scenario(write_scenario))
     for hour in ("t0", "t1", "t2", "t3"):
-        assert decider.timing(_dummy_obs(hour)).action == "wait"
+        assert _run(decider.timing(_dummy_obs(hour))).action == "wait"
 
 
 def test_spend_decider_claim_priority_puts_the_sut_first(write_scenario):
     decider = spend_decider(_scenario(write_scenario))
     expected = ("storm-svc-1", "claim-a", "claim-b")
-    assert decider.timing(_dummy_obs("t1")).claim_priority == expected
+    assert _run(decider.timing(_dummy_obs("t1"))).claim_priority == expected
     # The bias is stated the same way even on an hour it waits, since
     # runner.run_episode reads THIS hour's own timing decision for restore
     # ordering, not only the decision-hour one.
-    assert decider.timing(_dummy_obs("t0")).claim_priority == expected
+    assert _run(decider.timing(_dummy_obs("t0"))).claim_priority == expected
 
 
 def test_hold_decider_claim_priority_puts_claimants_first(write_scenario):
     decider = hold_decider(_scenario(write_scenario))
     expected = ("claim-a", "claim-b", "storm-svc-1")
     for hour in ("t0", "t1", "t2", "t3"):
-        assert decider.timing(_dummy_obs(hour)).claim_priority == expected
+        assert _run(decider.timing(_dummy_obs(hour))).claim_priority == expected
 
 
 def test_spend_decider_constraints_avoid_the_latest_horizon_risk_group(
         write_scenario):
     decider = spend_decider(_scenario(write_scenario))
-    decision = decider.constraints(_dummy_obs("t1"))
+    decision = _run(decider.constraints(_dummy_obs("t1")))
     # t1's own issuance publishes t2 AND t3 -- the LATEST (t3) is the one
     # avoided, not the nearer t2.
     assert decision.avoid == {"risk_groups": ["rg_ORACLE_TEST_t1_t3"]}
@@ -241,5 +247,5 @@ def test_spend_decider_objective_is_the_escape_objective(write_scenario):
          "collides_with_protection": {"collides": False},
          "residual_exposure": {"t3": {"p_cut": 0.01}}},
     ]}
-    decision = decider.objective(_obs_with_horizon(), menu)
+    decision = _run(decider.objective(_obs_with_horizon(), menu))
     assert decision.choice == "candidate_1"

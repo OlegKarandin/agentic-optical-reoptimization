@@ -405,16 +405,16 @@ class _RecordingDecider:
         self.observations = []          # one per hour: the timing observation
         self.probes = []                # one per constraints() call
 
-    def timing(self, obs):
+    async def timing(self, obs):
         self.observations.append(obs)
-        return self.inner.timing(obs)
+        return await self.inner.timing(obs)
 
-    def constraints(self, obs, unconstrained_menu=None):
+    async def constraints(self, obs, unconstrained_menu=None):
         self.probes.append(unconstrained_menu)
-        return self.inner.constraints(obs, unconstrained_menu)
+        return await self.inner.constraints(obs, unconstrained_menu)
 
-    def objective(self, obs, menu):
-        return self.inner.objective(obs, menu)
+    async def objective(self, obs, menu):
+        return await self.inner.objective(obs, menu)
 
 
 def test_the_constraints_step_is_shown_the_menu_it_is_about_to_narrow(
@@ -501,11 +501,11 @@ class _WidensOnDisjointnessRejection:
         self._inner = ForecastBlindBaseline(variant)
         self.name = "widens-on-disjointness-rejection"
 
-    def timing(self, obs):
-        return self._inner.timing(obs)
+    async def timing(self, obs):
+        return await self._inner.timing(obs)
 
-    def constraints(self, obs, unconstrained_menu=None):
-        base = self._inner.constraints(obs, unconstrained_menu)
+    async def constraints(self, obs, unconstrained_menu=None):
+        base = await self._inner.constraints(obs, unconstrained_menu)
         extra: set[str] = set()
         if obs.last_rejection and obs.last_rejection.get("type") == "validation_violations":
             for violation in obs.last_rejection.get("violations", []):
@@ -521,8 +521,8 @@ class _WidensOnDisjointnessRejection:
             protected=base.protected, best_effort=base.best_effort,
             basis=base.basis, level=base.level)
 
-    def objective(self, obs, menu):
-        return self._inner.objective(obs, menu)
+    async def objective(self, obs, menu):
+        return await self._inner.objective(obs, menu)
 
 
 def test_exposure_follows_the_service_after_it_reroutes(
@@ -745,10 +745,10 @@ class _LoosenAfterInfeasible:
     def __init__(self):
         self.rejections_seen = []
 
-    def timing(self, obs):
+    async def timing(self, obs):
         return TimingDecision("act", "act: exposed at the next horizon")
 
-    def constraints(self, obs, unconstrained_menu=None):
+    async def constraints(self, obs, unconstrained_menu=None):
         self.rejections_seen.append(obs.last_rejection)
         if obs.iteration == 0:
             return ConstraintDecision(
@@ -757,7 +757,7 @@ class _LoosenAfterInfeasible:
         return ConstraintDecision(
             avoid={}, reasoning="loosened after declaring the menu infeasible")
 
-    def objective(self, obs, menu):
+    async def objective(self, obs, menu):
         if obs.iteration == 0:
             return ObjectiveDecision("infeasible", None,
                                      "nothing on this menu is acceptable")

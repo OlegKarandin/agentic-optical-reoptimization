@@ -900,7 +900,7 @@ async def run_episode(
         obs = build_observation(scenario, hour, risk_group_ids=rg_ids,
                                 **obs_kwargs)
         record.update(observation_record(obs, geometry))
-        timing = decider.timing(obs)
+        timing = await decider.timing(obs)
         record["timing"] = timing.to_dict()
         # What the DECIDER was shown, as against the ground truth above. Read
         # off the decider rather than recomputed: the projection is
@@ -937,7 +937,7 @@ async def run_episode(
                        "spares_spent": ledger.spent,
                        "actions_taken": action_payloads(
                            actions, hours=scenario.hours)})
-                constraints = decider.constraints(obs, probe)
+                constraints = await decider.constraints(obs, probe)
                 menu = await counting.call(
                     "route_service",
                     constraints.route_service_args(scenario.service_under_test))
@@ -949,7 +949,7 @@ async def run_episode(
                     menu, geometry, scenario.service_under_test,
                     issuance=issuance, damage_radius_km=scenario.damage_radius_km,
                     demand_gbps=sut_demand_gbps)
-                choice = decider.objective(obs, menu)
+                choice = await decider.objective(obs, menu)
                 step = {"iteration": iteration,
                         "constraints": constraints.to_dict(),
                         "menu_status": menu.get("status"),

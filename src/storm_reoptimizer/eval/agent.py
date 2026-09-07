@@ -620,7 +620,7 @@ class ClaudeDecider:
                     f"not in this observation's `exposure`. Name only "
                     f"services you were shown.")
 
-    def _decide(self, tool_name, decision_cls, obs, payload, user_content):
+    async def _decide(self, tool_name, decision_cls, obs, payload, user_content):
         """One decision, with up to MAX_ATTEMPTS self-correction rounds.
 
         Only schema/validation failures are retried here. Transient API
@@ -709,23 +709,23 @@ class ClaudeDecider:
             obs, p_cut_threshold=self._p_cut_threshold)
         return self.last_projection
 
-    def timing(self, obs: Observation) -> TimingDecision:
+    async def timing(self, obs: Observation) -> TimingDecision:
         payload = self._project(obs)
-        return self._decide(
+        return await self._decide(
             TIMING_TOOL, TimingDecision, obs, payload,
             self._user_content(payload, TIMING_INSTRUCTION))
 
-    def constraints(self, obs: Observation,
-                    unconstrained_menu: dict | None = None
-                    ) -> ConstraintDecision:
+    async def constraints(self, obs: Observation,
+                          unconstrained_menu: dict | None = None
+                          ) -> ConstraintDecision:
         payload = self._project(obs)
-        return self._decide(
+        return await self._decide(
             CONSTRAINT_TOOL, ConstraintDecision, obs, payload,
             self._user_content(payload, CONSTRAINT_INSTRUCTION,
                                unconstrained_menu=unconstrained_menu))
 
-    def objective(self, obs: Observation, menu: dict) -> ObjectiveDecision:
+    async def objective(self, obs: Observation, menu: dict) -> ObjectiveDecision:
         payload = self._project(obs)
-        return self._decide(
+        return await self._decide(
             OBJECTIVE_TOOL, ObjectiveDecision, obs, payload,
             self._user_content(payload, OBJECTIVE_INSTRUCTION, menu=menu))

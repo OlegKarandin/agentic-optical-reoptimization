@@ -69,15 +69,15 @@ class _WaitsAlways:
 
     name = "probe:dump-prompt"
 
-    def timing(self, obs) -> TimingDecision:
+    async def timing(self, obs) -> TimingDecision:
         return TimingDecision(action="wait", reasoning="probe_episode "
                               "--dump-prompt: never acts",
                               contested_claim=None, claim_priority=())
 
-    def constraints(self, obs, unconstrained_menu=None):
+    async def constraints(self, obs, unconstrained_menu=None):
         raise NotImplementedError("timing() always waits; never reached")
 
-    def objective(self, obs, menu):
+    async def objective(self, obs, menu):
         raise NotImplementedError("timing() always waits; never reached")
 
 
@@ -95,16 +95,16 @@ class _RecordingDecider:
         self.observations = []          # one per hour: the timing observation
         self.probes = []                # one per constraints() call
 
-    def timing(self, obs):
+    async def timing(self, obs):
         self.observations.append(obs)
-        return self.inner.timing(obs)
+        return await self.inner.timing(obs)
 
-    def constraints(self, obs, unconstrained_menu=None):
+    async def constraints(self, obs, unconstrained_menu=None):
         self.probes.append(unconstrained_menu)
-        return self.inner.constraints(obs, unconstrained_menu)
+        return await self.inner.constraints(obs, unconstrained_menu)
 
-    def objective(self, obs, menu):
-        return self.inner.objective(obs, menu)
+    async def objective(self, obs, menu):
+        return await self.inner.objective(obs, menu)
 
 
 async def probe(topology: Path, state: Path, service: str, lat: float,

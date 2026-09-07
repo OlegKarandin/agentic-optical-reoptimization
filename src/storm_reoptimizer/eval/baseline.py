@@ -86,7 +86,7 @@ class ForecastBlindBaseline:
         self.variant = variant
         self.name = f"baseline:{variant}"
 
-    def timing(self, obs: Observation) -> TimingDecision:
+    async def timing(self, obs: Observation) -> TimingDecision:
         exposed = _nearest_exposed_horizon(obs)
         if exposed is None:
             return TimingDecision(
@@ -105,9 +105,9 @@ class ForecastBlindBaseline:
             "wait", f"{self.name}: {entry['hours_ahead']}h to exposure at "
                     f"{horizon} still exceeds the {deadline}h lead time")
 
-    def constraints(self, obs: Observation,
-                    unconstrained_menu: dict | None = None
-                    ) -> ConstraintDecision:
+    async def constraints(self, obs: Observation,
+                          unconstrained_menu: dict | None = None
+                          ) -> ConstraintDecision:
         # Accepted and IGNORED. This policy is forecast-blind by definition
         # (see the class docstring) and Claim 1's exactly-50% arithmetic
         # depends on it staying that way.
@@ -126,7 +126,7 @@ class ForecastBlindBaseline:
                       f"reroute op.",
             protected=False, best_effort=False, basis="physical", level="link")
 
-    def objective(self, obs: Observation, menu: dict) -> ObjectiveDecision:
+    async def objective(self, obs: Observation, menu: dict) -> ObjectiveDecision:
         candidates = menu.get("candidates") or []
         if not candidates:
             return ObjectiveDecision(
@@ -194,15 +194,15 @@ class ScriptedDecider:
         # Only meaningful with `objective_fn` set -- harmless otherwise.
         self.oms_nodes: dict[str, list[str]] = {}
 
-    def timing(self, obs: Observation) -> TimingDecision:
+    async def timing(self, obs: Observation) -> TimingDecision:
         return self._timing.get(obs.hour, self._default_timing)
 
-    def constraints(self, obs: Observation,
-                    unconstrained_menu: dict | None = None
-                    ) -> ConstraintDecision:
+    async def constraints(self, obs: Observation,
+                          unconstrained_menu: dict | None = None
+                          ) -> ConstraintDecision:
         return self._constraints.get(obs.hour, self._default_constraints)
 
-    def objective(self, obs: Observation, menu: dict) -> ObjectiveDecision:
+    async def objective(self, obs: Observation, menu: dict) -> ObjectiveDecision:
         if self._objective_fn is not None:
             return self._objective_fn(
                 obs, menu_for_prompt(menu, self.oms_nodes))

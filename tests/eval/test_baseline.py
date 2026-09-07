@@ -1,5 +1,8 @@
 """The forecast-blind fixed policy (eval design spec, "Baseline"). Both
 variants are deterministic: same observation, same answer, every time."""
+import asyncio
+import inspect
+
 import pytest
 
 from storm_reoptimizer.eval.baseline import (
@@ -8,6 +11,10 @@ from storm_reoptimizer.eval.baseline import (
 from storm_reoptimizer.eval.decisions import TimingDecision
 from storm_reoptimizer.eval.observation import Observation
 from storm_reoptimizer.eval.scenario_file import ConeAtHorizon, Issuance
+
+
+def _run(coro):
+    return asyncio.run(coro)
 
 MENU = {
     "status": "solution",
@@ -59,28 +66,28 @@ def test_there_are_exactly_two_variants():
 
 def test_immediate_acts_as_soon_as_the_service_is_inside_the_cone():
     b = ForecastBlindBaseline("immediate")
-    assert b.timing(_obs(offset_km=10.0, width_km=90.0, hours_ahead=3)).action == "act"
-    assert b.timing(_obs(offset_km=200.0, width_km=90.0, hours_ahead=3)).action == "wait"
+    assert _run(b.timing(_obs(offset_km=10.0, width_km=90.0, hours_ahead=3))).action == "act"
+    assert _run(b.timing(_obs(offset_km=200.0, width_km=90.0, hours_ahead=3))).action == "wait"
 
 
 def test_at_deadline_waits_until_lead_time_forces_the_issue():
     b = ForecastBlindBaseline("at_deadline")
     inside = dict(offset_km=10.0, width_km=90.0)
-    assert b.timing(_obs(**inside, hours_ahead=3)).action == "wait"
-    assert b.timing(_obs(**inside, hours_ahead=1)).action == "act"
+    assert _run(b.timing(_obs(**inside, hours_ahead=3))).action == "wait"
+    assert _run(b.timing(_obs(**inside, hours_ahead=1))).action == "act"
 
 
 def test_both_variants_are_deterministic():
     for variant in BASELINE_VARIANTS:
         b = ForecastBlindBaseline(variant)
         obs = _obs(offset_km=10.0, width_km=90.0, hours_ahead=1)
-        assert [b.timing(obs).to_dict() for _ in range(5)] == [
-            b.timing(obs).to_dict()] * 5
+        assert [_run(b.timing(obs)).to_dict() for _ in range(5)] == [
+            _run(b.timing(obs)).to_dict()] * 5
 
 
 def test_constraints_avoid_only_the_nearest_exposed_horizon_and_pin_posture():
-    d = ForecastBlindBaseline("immediate").constraints(
-        _obs(offset_km=10.0, width_km=90.0, hours_ahead=3))
+    d = _run(ForecastBlindBaseline("immediate").constraints(
+        _obs(offset_km=10.0, width_km=90.0, hours_ahead=3)))
     assert d.avoid == {"risk_groups": ["rg_X_t1_t3"]}
     assert (d.protected, d.best_effort, d.basis, d.level) == (
         False, False, "physical", "link")
@@ -89,17 +96,17 @@ def test_constraints_avoid_only_the_nearest_exposed_horizon_and_pin_posture():
 def test_objective_is_a_fixed_service_class_priority_table():
     assert service_class(300.0) == "premium"
     assert service_class(100.0) == "standard"
-    d = ForecastBlindBaseline("immediate").objective(
-        _obs(offset_km=10.0, width_km=90.0, hours_ahead=1), MENU)
+    d = _run(ForecastBlindBaseline("immediate").objective(
+        _obs(offset_km=10.0, width_km=90.0, hours_ahead=1), MENU))
     # premium leads on dropped_traffic, so the full-restoration candidate wins.
     assert d.choice == "candidate_0"
     assert d.priority is not None
 
 
 def test_an_empty_menu_yields_infeasible():
-    d = ForecastBlindBaseline("immediate").objective(
+    d = _run(ForecastBlindBaseline("immediate").objective(
         _obs(offset_km=10.0, width_km=90.0, hours_ahead=1),
-        {"status": "no_solution", "candidates": [], "pairs": []})
+        {"status": "no_solution", "candidates": [], "pairs": []}))
     assert d.choice == "infeasible"
 
 
@@ -116,22 +123,36 @@ def test_the_baseline_acts_outside_the_track_cone_but_inside_the_damage_footprin
     b = ForecastBlindBaseline("immediate")
     outside_cone_inside_footprint = dict(
         offset_km=58.4, width_km=7.5, hours_ahead=1, damage_radius_km=74.0)
-    assert b.timing(_obs(**outside_cone_inside_footprint)).action == "act"
+    assert _run(b.timing(_obs(**outside_cone_inside_footprint))).action == "act"
     # The same geometry with no damage radius is the OLD test, and waits.
-    assert b.timing(_obs(**{**outside_cone_inside_footprint,
-                           "damage_radius_km": 0.0})).action == "wait"
+    assert _run(b.timing(_obs(**{**outside_cone_inside_footprint,
+                           "damage_radius_km": 0.0}))).action == "wait"
 
 
 def test_the_baseline_still_waits_outside_the_damage_footprint_too():
     """Widening is not the same as always firing: 45 + 74 = 119 km still
     does not reach 200 km."""
     b = ForecastBlindBaseline("immediate")
-    assert b.timing(_obs(offset_km=200.0, width_km=90.0, hours_ahead=3,
-                         damage_radius_km=74.0)).action == "wait"
+    assert _run(b.timing(_obs(offset_km=200.0, width_km=90.0, hours_ahead=3,
+                         damage_radius_km=74.0))).action == "wait"
 
 
 def test_scripted_decider_replays_what_it_was_given():
     s = ScriptedDecider(
         "alt", timing_by_hour={"t1": TimingDecision("act", "scripted")},
         default_timing=TimingDecision("wait", "scripted default"))
-    assert s.timing(_obs(offset_km=10.0, width_km=90.0, hours_ahead=1)).action == "act"
+    assert _run(s.timing(_obs(offset_km=10.0, width_km=90.0, hours_ahead=1))).action == "act"
+
+
+def test_every_decider_method_is_a_coroutine_function():
+    # Spec 5.2: the runner awaits all three so a decider can await the probe.
+    for decider in (ForecastBlindBaseline("immediate"), ScriptedDecider("s")):
+        for name in ("timing", "constraints", "objective"):
+            assert inspect.iscoroutinefunction(getattr(decider, name)), name
+
+
+def test_baseline_timing_still_answers_when_awaited():
+    b = ForecastBlindBaseline("immediate")
+    decision = asyncio.run(
+        b.timing(_obs(offset_km=10.0, width_km=90.0, hours_ahead=3)))
+    assert decision.action == "act"

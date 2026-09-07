@@ -7,6 +7,8 @@ after any change to the request shape.
 Run: python tools/smoke_agent_decider.py"""
 from __future__ import annotations
 
+import asyncio
+
 from storm_reoptimizer.eval.agent import ClaudeDecider
 from storm_reoptimizer.eval.observation import Observation
 from storm_reoptimizer.eval.scenario_file import ConeAtHorizon, Issuance
@@ -30,7 +32,7 @@ def main() -> None:
         spares_on_hand=1, lead_time_hours=1,
         risk_group_ids={"t3": "rg_SMOKE_t1_t3"})
 
-    decision = ClaudeDecider().timing(obs)
+    decision = asyncio.run(ClaudeDecider().timing(obs))
     print(f"action={decision.action}\nreasoning={decision.reasoning}")
 
 

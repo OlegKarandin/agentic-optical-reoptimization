@@ -1,6 +1,7 @@
 """The LLM decider (agent decider design spec, 2026-08-24). Unit tests only:
 a fake Anthropic client, no network, no cost, and no `anthropic` install."""
 import ast
+import asyncio
 import json
 import tomllib
 from pathlib import Path
@@ -27,6 +28,10 @@ HORIZON = "t3"
 # T3a's own depot_site (scenarios/T3a.yaml). storm-svc-1 terminates
 # satna<->allahabad -- the only service in the shipped state that touches it.
 DEPOT_SITE = "satna"
+
+
+def _run(coro):
+    return asyncio.run(coro)
 
 
 def _obs(*, others=(), sut_p_cut=0.3410, iteration=0, last_rejection=None):
@@ -508,7 +513,7 @@ def test_the_canonical_schemas_are_not_mutated_by_adaptation():
 def test_timing_forces_its_own_tool_and_parses_the_action():
     decider, client = _decider(
         FakeResponse(FakeThinking(), FakeToolUse(TIMING_TOOL, TIMING_OK)))
-    decision = decider.timing(_obs(others=CLAIMANTS))
+    decision = _run(decider.timing(_obs(others=CLAIMANTS)))
     assert decision.action == "wait"
     assert decision.reasoning == "the far cone is 2h out"
     assert client.messages.calls[0]["tool_choice"] == {
@@ -518,7 +523,7 @@ def test_timing_forces_its_own_tool_and_parses_the_action():
 def test_constraints_forces_its_own_tool_and_parses_the_posture():
     decider, client = _decider(
         FakeResponse(FakeToolUse(CONSTRAINT_TOOL, CONSTRAINT_OK)))
-    decision = decider.constraints(_obs(others=CLAIMANTS))
+    decision = _run(decider.constraints(_obs(others=CLAIMANTS)))
     assert decision.avoid == {"risk_groups": ["rg_T3a_t1_t3"]}
     assert (decision.protected, decision.best_effort, decision.basis,
             decision.level) == (False, False, "physical", "link")
@@ -528,7 +533,7 @@ def test_constraints_forces_its_own_tool_and_parses_the_posture():
 def test_objective_forces_its_own_tool_and_parses_the_choice():
     decider, client = _decider(
         FakeResponse(FakeToolUse(OBJECTIVE_TOOL, OBJECTIVE_OK)))
-    decision = decider.objective(_obs(others=CLAIMANTS), MENU)
+    decision = _run(decider.objective(_obs(others=CLAIMANTS), MENU))
     assert decision.choice == "candidate_1"
     assert decision.priority == ("transponders", "dropped_traffic")
     assert client.messages.calls[0]["tool_choice"]["name"] == OBJECTIVE_TOOL
@@ -543,8 +548,8 @@ def test_every_request_declares_all_three_tools_so_one_cache_prefix_serves():
         FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)),
         FakeResponse(FakeToolUse(CONSTRAINT_TOOL, CONSTRAINT_OK)))
     obs = _obs(others=CLAIMANTS)
-    decider.timing(obs)
-    decider.constraints(obs)
+    _run(decider.timing(obs))
+    _run(decider.constraints(obs))
     first, second = client.messages.calls
     assert [t["name"] for t in first["tools"]] == [
         TIMING_TOOL, CONSTRAINT_TOOL, OBJECTIVE_TOOL]
@@ -555,7 +560,7 @@ def test_every_request_declares_all_three_tools_so_one_cache_prefix_serves():
 def test_the_system_block_is_cached_and_thinking_is_adaptive():
     decider, client = _decider(
         FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)))
-    decider.timing(_obs(others=CLAIMANTS))
+    _run(decider.timing(_obs(others=CLAIMANTS)))
     call = client.messages.calls[0]
     assert call["system"] == [{"type": "text", "text": SYSTEM_PROMPT,
                                "cache_control": {"type": "ephemeral"}}]
@@ -569,7 +574,7 @@ def test_no_parameter_sonnet_5_rejects_is_ever_sent():
     # before a real run burns a rollout.
     decider, client = _decider(
         FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)))
-    decider.timing(_obs(others=CLAIMANTS))
+    _run(decider.timing(_obs(others=CLAIMANTS)))
     call = client.messages.calls[0]
     for banned in ("temperature", "top_p", "top_k"):
         assert banned not in call
@@ -579,7 +584,7 @@ def test_no_parameter_sonnet_5_rejects_is_ever_sent():
 def test_the_user_turn_carries_the_projection_not_the_raw_observation():
     decider, client = _decider(
         FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)))
-    decider.timing(_obs(others=CLAIMANTS + BELOW_THRESHOLD))
+    _run(decider.timing(_obs(others=CLAIMANTS + BELOW_THRESHOLD)))
     content = client.messages.calls[0]["messages"][0]["content"]
     assert "d0363" in content            # a claimant above the threshold
     assert "d0001" not in content        # one below it
@@ -594,7 +599,7 @@ def test_the_objective_prompt_states_each_candidates_own_spare_cost():
     # only reliable way it reasons about spares correctly.
     decider, client = _decider(
         FakeResponse(FakeToolUse(OBJECTIVE_TOOL, OBJECTIVE_OK)))
-    decider.objective(_obs(others=CLAIMANTS), MENU)
+    _run(decider.objective(_obs(others=CLAIMANTS), MENU))
     content = client.messages.calls[0]["messages"][0]["content"]
     menu = json.loads(content.split("\n\n")[0])["menu"]
     assert [c["spares_needed"] for c in menu["candidates"]] == [
@@ -633,7 +638,7 @@ def test_build_deciders_wiring_gap_is_closed(monkeypatch):
     decider._client = FakeAnthropic(
         FakeResponse(FakeToolUse(OBJECTIVE_TOOL, OBJECTIVE_OK)))
     with pytest.raises(ValueError, match="does not resolve to exactly two"):
-        decider.objective(_obs(others=CLAIMANTS), MENU)
+        _run(decider.objective(_obs(others=CLAIMANTS), MENU))
 
     # runner.run_episode's wiring, reproduced here rather than invoked
     # through a live rollout: `if hasattr(decider, "oms_nodes"):
@@ -642,7 +647,7 @@ def test_build_deciders_wiring_gap_is_closed(monkeypatch):
         decider.oms_nodes = OMS_NODES
     decider._client = FakeAnthropic(
         FakeResponse(FakeToolUse(OBJECTIVE_TOOL, OBJECTIVE_OK)))
-    decider.objective(_obs(others=CLAIMANTS), MENU)  # no crash
+    _run(decider.objective(_obs(others=CLAIMANTS), MENU))  # no crash
 
 
 PROBE = {"status": "solution",
@@ -655,7 +660,7 @@ PROBE = {"status": "solution",
 def test_the_constraints_prompt_shows_what_exists_before_it_is_narrowed():
     decider, client = _decider(
         FakeResponse(FakeToolUse(CONSTRAINT_TOOL, CONSTRAINT_OK)))
-    decider.constraints(_obs(others=CLAIMANTS), PROBE)
+    _run(decider.constraints(_obs(others=CLAIMANTS), PROBE))
     content = client.messages.calls[0]["messages"][0]["content"]
     body = json.loads(content.split("\n\n")[0])
     assert body["unconstrained_menu"] == PROBE
@@ -669,8 +674,8 @@ def test_the_timing_and_objective_prompts_never_carry_the_probe():
     decider, client = _decider(
         FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)),
         FakeResponse(FakeToolUse(OBJECTIVE_TOOL, OBJECTIVE_OK)))
-    decider.timing(_obs(others=CLAIMANTS))
-    decider.objective(_obs(others=CLAIMANTS), MENU)
+    _run(decider.timing(_obs(others=CLAIMANTS)))
+    _run(decider.objective(_obs(others=CLAIMANTS), MENU))
     for call in client.messages.calls:
         body = json.loads(call["messages"][0]["content"].split("\n\n")[0])
         assert "unconstrained_menu" not in body
@@ -803,7 +808,7 @@ def test_an_invalid_payload_is_returned_as_an_error_tool_result_and_retried():
         FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_BAD_ACTION,
                                  block_id="toolu_first")),
         FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)))
-    assert decider.timing(_obs(others=CLAIMANTS)).action == "wait"
+    assert _run(decider.timing(_obs(others=CLAIMANTS))).action == "wait"
     retry = client.messages.calls[1]["messages"]
     assert [m["role"] for m in retry] == ["user", "assistant", "user"]
     result = retry[2]["content"][0]
@@ -822,7 +827,7 @@ def test_the_retry_echoes_the_assistant_content_so_thinking_blocks_survive():
     decider, client = _decider(
         FakeResponse(thinking, tool_use),
         FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)))
-    decider.timing(_obs(others=CLAIMANTS))
+    _run(decider.timing(_obs(others=CLAIMANTS)))
     echoed = client.messages.calls[1]["messages"][1]
     assert echoed["role"] == "assistant"
     assert echoed["content"] == [thinking, tool_use]
@@ -832,7 +837,7 @@ def test_a_response_with_no_tool_use_block_is_retried_as_a_correction():
     decider, client = _decider(
         FakeResponse(FakeText("I would rather discuss this in prose.")),
         FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)))
-    assert decider.timing(_obs(others=CLAIMANTS)).action == "wait"
+    assert _run(decider.timing(_obs(others=CLAIMANTS))).action == "wait"
     retry = client.messages.calls[1]["messages"]
     assert [m["role"] for m in retry] == ["user", "assistant", "user"]
     # No tool_use block means no tool_use_id to answer, so the correction is
@@ -845,7 +850,7 @@ def test_a_tool_use_block_naming_a_different_tool_is_not_accepted():
     decider, client = _decider(
         FakeResponse(FakeToolUse(OBJECTIVE_TOOL, OBJECTIVE_OK)),
         FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)))
-    assert decider.timing(_obs(others=CLAIMANTS)).action == "wait"
+    assert _run(decider.timing(_obs(others=CLAIMANTS))).action == "wait"
     assert len(client.messages.calls) == 2
 
 
@@ -859,7 +864,7 @@ def test_a_claim_naming_an_unshown_service_is_retried_not_accepted():
         FakeResponse(FakeToolUse(TIMING_TOOL, {
             "action": "act", "reasoning": "nothing else is exposed",
             "contested_claim": None})))
-    decision = decider.timing(_obs(others=CLAIMANTS))
+    decision = _run(decider.timing(_obs(others=CLAIMANTS)))
     assert decision.contested_claim is None
     assert len(client.messages.calls) == 2
     correction = client.messages.calls[1]["messages"][-1]["content"][0]
@@ -873,7 +878,7 @@ def test_a_claim_naming_a_shown_service_is_accepted_first_time():
         "action": "wait", "reasoning": "they are ahead of me in the queue",
         "contested_claim": {"service_id": shown,
                             "expected_capacity_at_risk_gbps": 12.0}})))
-    decision = decider.timing(_obs(others=CLAIMANTS))
+    decision = _run(decider.timing(_obs(others=CLAIMANTS)))
     assert decision.contested_claim["service_id"] == shown
     assert len(client.messages.calls) == 1
 
@@ -883,7 +888,7 @@ def test_recovery_on_the_third_attempt_still_returns_a_decision():
         FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_BAD_ACTION)),
         FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_NO_REASONING)),
         FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)))
-    assert decider.timing(_obs(others=CLAIMANTS)).action == "wait"
+    assert _run(decider.timing(_obs(others=CLAIMANTS))).action == "wait"
     assert len(client.messages.calls) == 3
 
 
@@ -892,7 +897,7 @@ def test_exhausting_every_attempt_raises_rather_than_degrading():
         *[FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_BAD_ACTION))
           for _ in range(MAX_ATTEMPTS)])
     with pytest.raises(DecisionError, match="action"):
-        decider.timing(_obs(others=CLAIMANTS))
+        _run(decider.timing(_obs(others=CLAIMANTS)))
     assert len(client.messages.calls) == MAX_ATTEMPTS
 
 
@@ -902,7 +907,7 @@ def test_a_response_that_never_calls_the_tool_raises_a_decision_error():
     decider, _ = _decider(
         *[FakeResponse(FakeText("no")) for _ in range(MAX_ATTEMPTS)])
     with pytest.raises(DecisionError, match="no tool_use block"):
-        decider.timing(_obs(others=CLAIMANTS))
+        _run(decider.timing(_obs(others=CLAIMANTS)))
 
 
 def test_each_decision_starts_a_fresh_conversation():
@@ -913,8 +918,8 @@ def test_each_decision_starts_a_fresh_conversation():
         FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)),
         FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)))
     obs = _obs(others=CLAIMANTS)
-    decider.timing(obs)
-    decider.timing(obs)
+    _run(decider.timing(obs))
+    _run(decider.timing(obs))
     assert len(client.messages.calls[2]["messages"]) == 1
     assert client.messages.calls[2]["messages"][0]["role"] == "user"
 
@@ -923,7 +928,7 @@ def test_the_audit_sidecar_records_what_the_model_was_shown(tmp_path):
     audit = tmp_path / "agent-calls.jsonl"
     decider, _ = _decider(
         FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)), audit_path=audit)
-    decider.timing(_obs(others=CLAIMANTS + BELOW_THRESHOLD))
+    _run(decider.timing(_obs(others=CLAIMANTS + BELOW_THRESHOLD)))
     record = json.loads(audit.read_text(encoding="utf-8").strip())
     assert record["decider"] == "agent:claude-sonnet-5"
     assert record["scenario_id"] == "T3a"
@@ -943,13 +948,13 @@ def test_the_audit_records_how_many_attempts_a_decision_took(tmp_path):
     decider, client = _decider(
         FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_BAD_ACTION)),
         FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)), audit_path=audit)
-    decider.timing(_obs(others=CLAIMANTS))
+    _run(decider.timing(_obs(others=CLAIMANTS)))
     assert json.loads(audit.read_text(encoding="utf-8"))["attempts"] == 2
 
 
 def test_no_audit_file_is_written_when_none_is_configured(tmp_path):
     decider, _ = _decider(FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)))
-    decider.timing(_obs(others=CLAIMANTS))
+    _run(decider.timing(_obs(others=CLAIMANTS)))
     assert list(tmp_path.iterdir()) == []
 
 
@@ -961,7 +966,7 @@ def test_the_audit_record_shows_the_risk_figure_for_every_shown_service(
     path = tmp_path / "calls.jsonl"
     decider, _ = _decider(FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)),
                           audit_path=path)
-    decider.timing(_obs(others=CLAIMANTS))
+    _run(decider.timing(_obs(others=CLAIMANTS)))
     record = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
     shown = record["shown_expected_capacity_at_risk_gbps"]
     assert sorted(shown) == record["shown_services"]
@@ -1089,7 +1094,7 @@ def test_last_projection_is_telemetry_and_never_reaches_a_request():
     decider, fake = _decider(
         FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)),
         FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)))
-    decider.timing(_obs(others=CLAIMANTS))
+    _run(decider.timing(_obs(others=CLAIMANTS)))
     first = fake.messages.calls[-1]
-    decider.timing(_obs(others=CLAIMANTS))
+    _run(decider.timing(_obs(others=CLAIMANTS)))
     assert fake.messages.calls[-1]["messages"] == first["messages"]

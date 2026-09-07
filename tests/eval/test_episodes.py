@@ -563,11 +563,11 @@ class _WidensOnDisjointnessRejection:
         self._inner = ForecastBlindBaseline("immediate")
         self.name = "t2a-rejection-probe"
 
-    def timing(self, obs):
-        return self._inner.timing(obs)
+    async def timing(self, obs):
+        return await self._inner.timing(obs)
 
-    def constraints(self, obs, unconstrained_menu=None):
-        base = self._inner.constraints(obs, unconstrained_menu)
+    async def constraints(self, obs, unconstrained_menu=None):
+        base = await self._inner.constraints(obs, unconstrained_menu)
         extra: set[str] = set()
         if obs.last_rejection and obs.last_rejection.get("type") == "validation_violations":
             for violation in obs.last_rejection.get("violations", []):
@@ -583,8 +583,8 @@ class _WidensOnDisjointnessRejection:
             protected=base.protected, best_effort=base.best_effort,
             basis=base.basis, level=base.level)
 
-    def objective(self, obs, menu):
-        return self._inner.objective(obs, menu)
+    async def objective(self, obs, menu):
+        return await self._inner.objective(obs, menu)
 
 
 # stale_pair (2026-09-05 plan, Task 11): T2a-specific singleton, and T2's
