@@ -147,24 +147,26 @@ T2_PINS: list[dict] = [
     {"id": "t2-claimant-jalgaon-khandwa", "src": "jalgaon", "dst": "khandwa",
      "demand_gbps": 200.0, "protected": False},
 ]
-# Single-hop unprotected services along dhulia's BURIED alternative path,
-# sized so each lightpath keeps >= 200 G headroom for the dhulia claimant's
-# zero-spare ip_reroute (spec 4.2). Whether route_service actually offers
-# that groom is the one unverified element of the design; Task 8 checks it
-# live before anything is authored and records the answer.
-T3_SURVIVOR_PINS: list[dict] = [
-    {"id": "t3-survivor-jalgaon-aurangabad", "src": "jalgaon",
-     "dst": "aurangabad", "demand_gbps": 100.0, "protected": False},
-    {"id": "t3-survivor-aurangabad-ahmednagar", "src": "aurangabad",
-     "dst": "ahmednagar", "demand_gbps": 100.0, "protected": False},
-    {"id": "t3-survivor-ahmednagar-nasik", "src": "ahmednagar",
-     "dst": "nasik", "demand_gbps": 100.0, "protected": False},
-    {"id": "t3-survivor-nasik-dhulia", "src": "nasik", "dst": "dhulia",
-     "demand_gbps": 100.0, "protected": False},
-]
-# Order matters: SUT, claimants, THEN survivors. Pins solve in order, and a
-# survivor lightpath that already existed could absorb a claimant as an IP
-# groom, taking it off the aerial corridor the pair is about.
+# T3's original design (spec 4.2) added single-hop unprotected "survivor"
+# services along dhulia's BURIED alternative path (jalgaon-aurangabad,
+# aurangabad-ahmednagar, ahmednagar-nasik, nasik-dhulia), sized to leave
+# headroom, so route_service would offer the dhulia claimant a zero-spare
+# ip_reroute groomed onto them. Checked live 2026-09-06 (plan Task 8) via
+# tools/probe_restorability.py against this pin set at both 100 G (as
+# originally committed) and 50 G survivor demand: NOT offered either time,
+# and not a headroom problem -- `solve_allocation_model` never lit a
+# dedicated lightpath on the direct jalgaon-aurangabad (etc.) spans at all,
+# instead grooming each survivor demand onto FOUR hops of unrelated
+# pre-existing IP links, so no lightpath with spare capacity ever sat on
+# the buried path for the claimant to reuse.
+# route_service's menu for t3-claimant-jalgaon-dhulia under a group
+# containing its own corridor came back `optical_reroute`-only both times
+# (min_spares_needed_by_site {"jalgaon": 1, "dhulia": 1}, never {}). Per
+# spec 4.2's own documented fallback, the survivor pins are dropped and T3
+# is the two-corridor restorability variant instead (SUT + two claimants
+# only; see the spec for the corresponding cone/footprint change).
+#
+# Order matters: SUT, then claimants. Pins solve in order.
 T3_PINS: list[dict] = [
     {"id": "t3-svc-jalgaon-nagpur", "src": "jalgaon", "dst": "nagpur",
      "demand_gbps": 300.0, "protected": False},
@@ -172,7 +174,6 @@ T3_PINS: list[dict] = [
      "demand_gbps": 200.0, "protected": False},
     {"id": "t3-claimant-jalgaon-dhulia", "src": "jalgaon", "dst": "dhulia",
      "demand_gbps": 200.0, "protected": False},
-    *T3_SURVIVOR_PINS,
 ]
 PIN_SETS: dict[str, list[dict]] = {"t2": T2_PINS, "t3": T3_PINS}
 # NOT "srlg": the toy topology has zero static SRLGs (confirmed:

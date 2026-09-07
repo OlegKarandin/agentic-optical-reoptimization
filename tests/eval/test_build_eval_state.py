@@ -206,7 +206,15 @@ import build_eval_state  # noqa: E402
 
 def test_the_t2_and_t3_pin_sets_are_the_specs():
     """Spec 4.1/4.2 (T2/T3 probe redesign): the pins, verbatim. T3's SUT is
-    UNPROTECTED and its survivors run along dhulia's buried alternative."""
+    UNPROTECTED. T3's original design added survivor pins along dhulia's
+    buried alternative so route_service would offer a zero-spare ip_reroute
+    groom; Task 8 checked that live (twice, at two survivor demand sizes)
+    and it was never offered -- solve_allocation_model never lit a dedicated
+    lightpath on the direct buried spans at all, so no lightpath with spare
+    capacity ever sat there. Per the spec's documented fallback (recorded in
+    `docs/superpowers/plans/notes/2026-09-06-t2-t3-authoring.md`), T3 is now
+    the two-corridor restorability variant: SUT + two claimants, NO
+    survivor pins."""
     t2 = {p["id"]: p for p in build_eval_state.T2_PINS}
     assert t2["t2-svc-jalgaon-nagpur"] == {
         "id": "t2-svc-jalgaon-nagpur", "src": "jalgaon", "dst": "nagpur",
@@ -217,17 +225,16 @@ def test_the_t2_and_t3_pin_sets_are_the_specs():
     assert t3["t3-svc-jalgaon-nagpur"]["protected"] is False
     assert {t3["t3-claimant-jalgaon-khandwa"]["dst"],
             t3["t3-claimant-jalgaon-dhulia"]["dst"]} == {"khandwa", "dhulia"}
-    survivors = [(p["src"], p["dst"]) for p in build_eval_state.T3_SURVIVOR_PINS]
-    assert survivors == [("jalgaon", "aurangabad"), ("aurangabad", "ahmednagar"),
-                         ("ahmednagar", "nasik"), ("nasik", "dhulia")]
+    assert not hasattr(build_eval_state, "T3_SURVIVOR_PINS")
+    assert {p["id"] for p in build_eval_state.T3_PINS} == {
+        "t3-svc-jalgaon-nagpur", "t3-claimant-jalgaon-khandwa",
+        "t3-claimant-jalgaon-dhulia"}
     assert build_eval_state.PIN_SETS == {
         "t2": build_eval_state.T2_PINS, "t3": build_eval_state.T3_PINS}
-    # Pins solve in order: SUT, claimants, THEN survivors -- a survivor
-    # lightpath that existed first could absorb a claimant as an ip groom
-    # and take it off the aerial corridor the pair is about.
+    # Pins solve in order: SUT, then claimants.
     ids = [p["id"] for p in build_eval_state.T3_PINS]
-    assert ids.index("t3-claimant-jalgaon-dhulia") < ids.index(
-        build_eval_state.T3_SURVIVOR_PINS[0]["id"])
+    assert ids.index("t3-svc-jalgaon-nagpur") < ids.index(
+        "t3-claimant-jalgaon-dhulia")
 
 
 def test_the_pair_state_files_carry_their_pins_and_the_base(eval_state_paths):
