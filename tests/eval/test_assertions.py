@@ -349,11 +349,11 @@ def test_an_unequal_sut_signal_is_not_this_checks_business(t1a, t1b):
 #
 # Finding #5 (2026-08-26 re-review): the predicate now ALSO requires that
 # committing the free candidate would flip the graded label away from gold's
-# -- "moves the service" alone is necessary but not sufficient, and two of the
-# suite's three shipped conserve halves (T2b, T3b) were false positives under
-# the old, broader check. `_T1_KW`/etc. below fix the label_rule/gold_label
-# a T1a-shaped half needs; the new tests exercise T2/T3-shaped halves whose
-# free escape does NOT flip the label.
+# -- "moves the service" alone is necessary but not sufficient. Two of the
+# then-shipped 2026-08-31 conserve halves were false positives under the old,
+# broader check on the two label rules retired 2026-09-06 (see
+# `test_label_if_committed_rejects_a_retired_rule` below); `_T1_KW`/etc.
+# below fix the label_rule/gold_label a T1a-shaped half needs.
 _T1_KW = dict(label_rule="timing_at_decision_hour", gold_label="wait",
              reference_avoid={})
 
@@ -408,74 +408,14 @@ def test_the_raised_message_names_the_specific_lightpath_and_reason():
             "T1a", menu, current={"lp-cand-storm-svc-1-0"}, **_T1_KW)
 
 
-def test_a_free_escape_that_does_not_flip_an_avoid_horizon_label_is_safe():
-    """T2b-shaped false positive (Finding #5): the free candidate is offered
-    under a neutral `reference_avoid={}`, so its `risk_groups` is empty and
-    `avoid_horizon_at_decision_hour` still reads "narrow" -- unchanged from
-    gold. The old, broader predicate (any zero-pair, service-moving
-    candidate) would have flagged this; the label-aware one must not."""
-    menu = {"status": "solution", "candidates": [
-        {"lever": "ip_reroute", "reused_lightpaths": ["lp-prot-storm-svc-1-0"],
-         "new_lightpaths": [], "restored_gbps": 300.0,
-         "shortfall_gbps": 0.0, "cost_vector": {}}]}
-    _check_no_free_escape(
-        "T2b", menu, current={"lp-cand-storm-svc-1-0"},
-        label_rule="avoid_horizon_at_decision_hour", gold_label="narrow",
-        reference_avoid={}, wide_avoid_risk_group="rg_T2b_t1_t6")
-
-
-def test_a_free_escape_that_would_flip_an_avoid_horizon_label_still_raises():
-    """The mirror case: if the free candidate's `reference_avoid` DID name the
-    wide risk group, committing it would read "wide" -- a real escape against
-    a "narrow" gold, and the check must still catch it."""
-    menu = {"status": "solution", "candidates": [
-        {"lever": "ip_reroute", "reused_lightpaths": ["lp-prot-storm-svc-1-0"],
-         "new_lightpaths": [], "restored_gbps": 300.0,
-         "shortfall_gbps": 0.0, "cost_vector": {}}]}
-    with pytest.raises(PairInvalid, match="GRADED LABEL"):
-        _check_no_free_escape(
-            "T2b", menu, current={"lp-cand-storm-svc-1-0"},
-            label_rule="avoid_horizon_at_decision_hour", gold_label="narrow",
-            reference_avoid={"risk_groups": ["rg_T2b_t1_t6"]},
-            wide_avoid_risk_group="rg_T2b_t1_t6")
-
-
-def test_a_free_escape_that_does_not_flip_a_chosen_lever_label_is_safe():
-    """T3b-shaped false positive (Finding #5): the free candidate IS an
-    ip_reroute, and `label_by_lever` already maps ip_reroute to gold's own
-    label "B" -- committing it reads the SAME label, not a different one."""
-    menu = {"status": "solution", "candidates": [
-        {"lever": "ip_reroute", "reused_lightpaths": ["lp-prot-storm-svc-1-0"],
-         "new_lightpaths": [], "restored_gbps": 300.0,
-         "shortfall_gbps": 0.0, "cost_vector": {}}]}
-    _check_no_free_escape(
-        "T3b", menu, current={"lp-cand-storm-svc-1-0"},
-        label_rule="chosen_lever_at_decision_hour", gold_label="B",
-        reference_avoid={},
-        label_by_lever={"optical_reroute": "A", "hybrid": "A",
-                        "ip_reroute": "B"})
-
-
-def test_a_free_escape_that_would_flip_a_chosen_lever_label_still_raises():
-    """The mirror case: an optical_reroute free escape against a "B" gold
-    would read "A" -- a real, catchable escape."""
-    menu = {"status": "solution", "candidates": [
-        {"lever": "optical_reroute", "reused_lightpaths": ["lp-elsewhere"],
-         "new_lightpaths": [{"oms_sequence": ["oms_1"]}],
-         "restored_gbps": 300.0, "shortfall_gbps": 0.0, "cost_vector": {}}]}
-    # NOTE: pairs_needed reads len(new_lightpaths), so this candidate is not
-    # actually zero-pair and would be skipped by the real predicate -- this
-    # fixture exists only to exercise _label_if_committed's chosen_lever
-    # branch directly, via the module-private helper, not through
-    # _check_no_free_escape's pairs_needed gate.
+def test_label_if_committed_rejects_a_retired_rule():
+    # Spec 7 (T2/T3 probe redesign): avoid_horizon_at_decision_hour and
+    # chosen_lever_at_decision_hour were retired with the pairs that used
+    # them.
     from storm_reoptimizer.eval.assertions import _label_if_committed
-    label = _label_if_committed(
-        label_rule="chosen_lever_at_decision_hour",
-        candidate=menu["candidates"][0], avoid_used={},
-        wide_avoid_risk_group=None,
-        label_by_lever={"optical_reroute": "A", "hybrid": "A",
-                        "ip_reroute": "B"})
-    assert label == "A"
+    with pytest.raises(ValueError, match="unknown label_rule"):
+        _label_if_committed(label_rule="avoid_horizon_at_decision_hour",
+                            candidate={}, avoid_used={})
 
 
 # --------------------------------------------------------------------------

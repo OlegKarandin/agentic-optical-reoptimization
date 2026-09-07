@@ -20,18 +20,15 @@ from storm_reoptimizer.eval.assertions import (
     assert_wait_gold_has_no_free_escape,
 )
 from storm_reoptimizer.eval.gold import enumerate_outcomes
-from storm_reoptimizer.eval.baseline import ForecastBlindBaseline
 from storm_reoptimizer.eval.decisions import (
-    ConstraintDecision, ObjectiveDecision, TimingDecision,
+    ConstraintDecision, TimingDecision,
 )
 from storm_reoptimizer.eval.derived import (
     derived_scalars_for_suite, flip_scalars_for_suite,
 )
-from storm_reoptimizer.eval.runner import run_episode
 from storm_reoptimizer.eval.scenario_file import (
     SCENARIOS_DIR as SCENARIOS, load_all_scenarios, load_scenario,
 )
-from storm_reoptimizer.eval.scoring import episode_metrics
 
 TOPOLOGY_PATH = (
     Path(__file__).parent.parent.parent
@@ -287,145 +284,6 @@ def test_half_gold_matches_oracle_outcomes(half, connect_for):
         scenario.gold.outcome_gbps_h
 
 
-# T2's flip variable is `constraints` (gold.label is `wide`/`narrow`, an
-# avoid-set outcome), so the two decisions T2 is NOT testing are `timing` and
-# `objective`. There is no way to score an avoid-horizon choice without
-# committing something, so the gold TIMING decision at t1 is "act" in BOTH
-# halves (unlike T1, where gold.label IS the timing action). The gold
-# OBJECTIVE decision is whichever candidate index actually carries the
-# wide-avoid lever in T2a (candidate_2: optical_reroute, 1 spare pair, under
-# avoid={risk_groups:[rg_T2a_t1_t6]}/basis=risk_group/level=risk_group -- see
-# docs/superpowers/rehearsals/T2.md) and the narrow-avoid lever in T2b
-# (candidate_0: ip_reroute, 0 spare pairs, reusing storm-svc-1's own existing
-# working lightpath unchanged, under avoid={}/basis=physical/level=link) --
-# found by probing the real server, not guessed. An unknown risk_group id
-# (e.g. rg_T2a_t1_t6 before hour t1 has minted it) is silently treated as an
-# empty exclusion by route_service (confirmed against the real server), so
-# using this fixed gold constraints/objective pair at every hour is safe --
-# no crash, just a wasted retry loop at hours other than t1.
-#
-# Re-probed and unchanged after T2's 2026-08-23 rebuild (whole-branch review
-# finding C1): that rebuild moved only the t1 issuance's NEAR (t2) horizon
-# centre, and neither gold candidate's menu depends on it -- T2a's wide avoid
-# names the FAR (t6) risk group, whose asset list is byte-identical across the
-# halves and unchanged from the reviewed version, and T2b's is avoid={}.
-_T2_NON_FLIP_GOLD_DECISIONS = {
-    "T2a": (
-        TimingDecision("act", "gold"),
-        ConstraintDecision(
-            avoid={"risk_groups": ["rg_T2a_t1_t6"]}, reasoning="gold",
-            protected=False, best_effort=False, basis="risk_group",
-            level="risk_group"),
-        ObjectiveDecision("candidate_2", None, "gold"),
-    ),
-    "T2b": (
-        TimingDecision("act", "gold"),
-        ConstraintDecision(
-            avoid={}, reasoning="gold", protected=False, best_effort=False,
-            basis="physical", level="link"),
-        ObjectiveDecision("candidate_0", None, "gold"),
-    ),
-}
-
-
-# stale_pair (2026-09-05 plan, Task 11): T2-only, and T2's live invariants
-# are known-stale on the joint-exposure model -- see PAIRS/STALE_PAIRS above.
-@pytest.mark.stale_pair
-@pytest.mark.parametrize("half", ("T2a", "T2b"))
-def test_t2_non_flip_decisions_are_non_binding(half, connect_for):
-    scenario = load_all_scenarios()[half]
-    timing, constraints, objective = _T2_NON_FLIP_GOLD_DECISIONS[half]
-    # T2a/T2b both declare `gold.decision_at_t0: wait`: gold HOLDS at t0 and
-    # acts at t1, so the "act" belongs in `gold_by_hour` at the decision hour,
-    # never as a bare default -- see `_t1_gold_replay`'s comment above, which
-    # states the same rule for T1's own gold replay.
-    gold_decisions = {
-        "timing": TimingDecision("wait", "gold: hold at t0, per "
-                                         "gold.decision_at_t0"),
-        "constraints": constraints, "objective": objective,
-    }
-    gold_by_hour = {"timing": {scenario.decision_hour: timing}}
-
-    async def _run():
-        await assert_non_flip_decisions_non_binding(
-            connect_for(scenario.state_file), scenario,
-            topology_path=TOPOLOGY_PATH,
-            gold_decisions=gold_decisions, gold_by_hour=gold_by_hour,
-            non_flip=("timing", "objective"))
-
-    asyncio.run(_run())
-
-
-# T3's flip variable is `objective` (gold.label is A/B, read off which
-# candidate LEVER actually gets committed at t1 via metadata.label_by_lever),
-# so the two decisions T3 is NOT testing are `timing` and `constraints`. Per
-# chosen_lever_at_decision_hour (scoring.py), a label can only be read off a
-# COMMITTED candidate, so the gold TIMING decision at t1 is "act" in BOTH
-# halves (same reasoning as T2, unlike T1 where gold.label IS the timing
-# action). The gold CONSTRAINTS decision is FIXED to avoid={} (T3's own
-# reference_avoid -- the menu the pair's whole claim rests on being identical
-# in both halves) with basis="risk_group"/level="risk_group": confirmed
-# against the real server that BOTH gold candidates need risk_group-basis
-# validation to commit -- basis="physical"/level="link" makes EITHER
-# candidate collide with storm-svc-1's own static protection leg
-# (jhansi<->allahabad, shared regardless of which corridor the new working
-# path actually uses) via disjointness_collapse, the exact same
-# buried-shared-leg mechanic T2's rehearsal doc derives in full. The gold
-# OBJECTIVE decision is whichever candidate index actually carries each
-# half's lever under this fixed avoid={}: candidate_4 for T3a (optical_reroute
-# via jabalpur, 1 spare pair -- the only lightpath-clean route confirmed
-# genuinely disjoint from protection under basis=risk_group), candidate_0 for
-# T3b (ip_reroute, reusing storm-svc-1's own CURRENT working lightpath
-# unchanged, 0 spare pairs) -- both found by probing the real server, see
-# docs/superpowers/rehearsals/T3.md.
-_T3_NON_FLIP_GOLD_DECISIONS = {
-    "T3a": (
-        TimingDecision("act", "gold"),
-        ConstraintDecision(
-            avoid={}, reasoning="gold", protected=False, best_effort=False,
-            basis="risk_group", level="risk_group"),
-        ObjectiveDecision("candidate_4", None, "gold"),
-    ),
-    "T3b": (
-        TimingDecision("act", "gold"),
-        ConstraintDecision(
-            avoid={}, reasoning="gold", protected=False, best_effort=False,
-            basis="risk_group", level="risk_group"),
-        ObjectiveDecision("candidate_0", None, "gold"),
-    ),
-}
-
-
-# stale_pair (2026-09-05 plan, Task 11): T3-only, and T3's live invariants
-# are known-stale on the joint-exposure model -- see PAIRS/STALE_PAIRS above.
-@pytest.mark.stale_pair
-@pytest.mark.parametrize("half", ("T3a", "T3b"))
-def test_t3_non_flip_decisions_are_non_binding(half, connect_for):
-    scenario = load_all_scenarios()[half]
-    timing, constraints, objective = _T3_NON_FLIP_GOLD_DECISIONS[half]
-    # T3a/T3b both declare `gold.decision_at_t0: wait`. Acting at t0 as well
-    # is not merely off-gold here, it CHANGES THE GRADED LABEL: the t0 commit
-    # reroutes storm-svc-1, so by t1 `candidate_4` is an ip_reroute rather
-    # than the optical_reroute T3a was authored against, and T3a reads "B"
-    # where gold says "A". Found 2026-08-23, once this assertion started
-    # scoring the label instead of survival (whole-branch review finding I1).
-    gold_decisions = {
-        "timing": TimingDecision("wait", "gold: hold at t0, per "
-                                         "gold.decision_at_t0"),
-        "constraints": constraints, "objective": objective,
-    }
-    gold_by_hour = {"timing": {scenario.decision_hour: timing}}
-
-    async def _run():
-        await assert_non_flip_decisions_non_binding(
-            connect_for(scenario.state_file), scenario,
-            topology_path=TOPOLOGY_PATH,
-            gold_decisions=gold_decisions, gold_by_hour=gold_by_hour,
-            non_flip=("timing", "constraints"))
-
-    asyncio.run(_run())
-
-
 # stale_pair (2026-09-05 plan, Task 11): D1-specific, and D1's live
 # invariants are known-stale on the joint-exposure model -- see
 # PAIRS/STALE_PAIRS above.
@@ -446,147 +304,6 @@ def test_d1_menu_contains_no_ip_reroute_candidate(connect_for):
     assert "ip_reroute" not in levers, (
         f"D1's menu offers {sorted(levers)}; an ip_reroute has zero lead "
         f"time, which makes waiting free and flips D1's gold label to 'wait'")
-
-
-class _WidensOnDisjointnessRejection:
-    """Wraps ForecastBlindBaseline('immediate') -- same timing/objective --
-    but reacts to a genuine validate_plan disjointness_collapse rejection by
-    adding the violation's OWN `shared_assets` to the avoid set and retrying.
-
-    This is NOT a change to baseline.py: ForecastBlindBaseline's constraints()
-    is deliberately blind to `last_rejection` (its docstring: "Neither reads
-    revisions... that is what makes each variant emit the SAME answer to both
-    halves", the exact property assert_each_baseline_variant_ties relies on
-    for every pair). Making it reactive would risk breaking that invariant
-    suite-wide. This wrapper is local to this one probe: it demonstrates the
-    real recovery mechanic ("widening avoid and re-calling route_service", per
-    the design) without touching the shared, already-reviewed baseline.
-
-    Confirmed against the real server: storm-svc-1's STATIC protection
-    lightpath uses satna<->jhansi<->allahabad. The exposed-horizon avoid this
-    wrapper inherits from ForecastBlindBaseline therefore leaves every one of
-    route_service's candidates colliding with that protection leg under
-    basis=physical/level=link -- a REAL, first-try rejection, not fabricated.
-    Widening with the violation's own shared_assets (which name the specific
-    jhansi<->allahabad fiber/amp/oms/roadm ids) finds a genuinely disjoint,
-    longer route that validates cleanly on a later iteration.
-
-    Note this wrapper names no fiber id of its own: it reads them out of the
-    violation the server reports, so T2's 2026-08-23 rebuild (which moved the
-    near-horizon cone off storm-svc-1, making t6 rather than t2 the nearest
-    exposed horizon the inherited constraints() keys on) needed no edit
-    here -- see docs/superpowers/rehearsals/T2.md's Q3.
-
-    Task 14 finding (2026-08-30, exposure-and-depot plan): satna<->jabalpur
-    going aerial (Task 5 of this same plan) put it INSIDE T2a's far-horizon
-    cone's own geometry too (jabalpur's nearest point to that cone's centre
-    is ~65 km, well inside its ~100 km radius) -- confirmed live via
-    `geo_mapper.map_geo_event_to_assets`, `rg_T2a_t1_t6`'s own asset list now
-    contains all THREE of satna's aerial directions (rewa, jhansi, AND
-    jabalpur), not two. Under basis=physical, avoiding all three leaves NO
-    physical route out of satna at all -- `route_service` returns
-    `menu_size=0`, `status=no_solution`, not merely an invalid candidate --
-    so this wrapper's widen-on-`disjointness_collapse` logic never finds a
-    `validation_violations` rejection to react to and cannot recover (there
-    is nothing left to widen with; the escape route this scenario needs,
-    jabalpur, is now itself excluded by the very avoid set being tested).
-    See `test_t2a_carries_a_real_validate_plan_rejection`'s own docstring for
-    what this proves instead. `tests/eval/test_runner.py`'s EXPOSURE_SMOKE
-    fixture hit the identical problem and fixed it with a hand-built
-    "keyhole" cone that carves out jabalpur's own bearing -- not applicable
-    here, since T2a's far cone must stay BYTE-IDENTICAL to T2b's (the
-    joint-tuning construction's own tied pair; see
-    docs/superpowers/plans/notes/2026-08-30-joint-tuning.md) and this test
-    exists specifically to exercise T2a's REAL, shipped geometry, not a
-    synthetic stand-in for it."""
-
-    def __init__(self) -> None:
-        self._inner = ForecastBlindBaseline("immediate")
-        self.name = "t2a-rejection-probe"
-
-    async def timing(self, obs):
-        return await self._inner.timing(obs)
-
-    async def constraints(self, obs, unconstrained_menu=None):
-        base = await self._inner.constraints(obs, unconstrained_menu)
-        extra: set[str] = set()
-        if obs.last_rejection and obs.last_rejection.get("type") == "validation_violations":
-            for violation in obs.last_rejection.get("violations", []):
-                if violation.get("type") == "disjointness_collapse":
-                    extra.update(violation.get("shared_assets", []))
-        if not extra:
-            return base
-        avoid = dict(base.avoid)
-        avoid["assets"] = sorted(set(avoid.get("assets", [])) | extra)
-        return ConstraintDecision(
-            avoid=avoid,
-            reasoning=base.reasoning + "; widened after disjointness rejection",
-            protected=base.protected, best_effort=base.best_effort,
-            basis=base.basis, level=base.level)
-
-    async def objective(self, obs, menu):
-        return await self._inner.objective(obs, menu)
-
-
-# stale_pair (2026-09-05 plan, Task 11): T2a-specific singleton, and T2's
-# live invariants are known-stale on the joint-exposure model -- see
-# PAIRS/STALE_PAIRS above.
-@pytest.mark.stale_pair
-def test_t2a_carries_a_real_validate_plan_rejection(connect_for):
-    """Re-derived 2026-08-30 (Task 14, exposure-and-depot plan) against the
-    live server -- see `_WidensOnDisjointnessRejection`'s own docstring
-    for the full mechanism. Before Task 5 of this plan made satna<->jabalpur
-    aerial, avoiding T2a's far-horizon risk group (rewa + jhansi) under
-    basis=physical genuinely produced a candidate that then FAILED
-    validate_plan with `disjointness_collapse` against storm-svc-1's own
-    static protection leg -- a real, recoverable rejection, and this test's
-    original name and docstring described exactly that.
-
-    That is no longer what happens, confirmed live and NOT a regression this
-    task introduced: `rg_T2a_t1_t6`'s own asset list now ALSO contains
-    satna<->jabalpur (it is aerial now, and geometrically inside the same far
-    cone), so avoiding it under basis=physical excludes all THREE of satna's
-    aerial directions and leaves NO physical route out of satna at all --
-    `route_service` itself returns zero candidates (`status=no_solution`),
-    one step earlier than a `validate_plan` rejection, and with nothing for
-    `_WidensOnDisjointnessRejection` to widen with. This is confirmed
-    pre-existing at baseline HEAD (git-stash confirmed by Task 12, before any
-    Task 14 change), i.e. a consequence of Task 5's own topology edit, not of
-    this task's episode geometry retune (T2a's far cone is BYTE-IDENTICAL
-    before and after Task 14).
-
-    What this test now proves instead: T2a's forecast-blind, basis=physical
-    baseline hits a genuine, real dead end -- not a fabricated one -- which
-    is an even STARKER version of the same point the shipped gold rationale
-    already makes (T2a.yaml: "the same call under basis=physical does not
-    validate"). Recovery is genuinely impossible via widen-and-retry here
-    (there is no violation to read `shared_assets` from), so
-    `recovered_from_rejection` must be False, and the episode never commits
-    under this baseline -- exactly why the REAL gold decision uses
-    basis=risk_group instead (see `_T2_NON_FLIP_GOLD_DECISIONS`), which
-    `test_gold_spare_action_is_grounded_in_a_real_candidate` and
-    `assert_escape_route_survives` already confirm still finds and validates
-    the jabalpur escape route for real."""
-    t2a = load_all_scenarios()["T2a"]
-
-    async def _run():
-        async with connect_for(t2a.state_file)() as client:
-            return await run_episode(client, t2a,
-                                     _WidensOnDisjointnessRejection(),
-                                     topology_path=TOPOLOGY_PATH)
-
-    trace = asyncio.run(_run())
-    kinds = {r["type"] for h in trace.hours for r in h["rejections"]}
-    assert kinds == {"declared_infeasible"}, (
-        f"T2a's forecast-blind, basis=physical baseline saw rejection kinds "
-        f"{sorted(kinds)}, not the expected {{'declared_infeasible'}} -- "
-        f"either the topology's satna<->jabalpur aerial edge, or T2a's own "
-        f"far-horizon cone, moved since this was last confirmed live")
-    assert trace.terminal_status == "declared_infeasible"
-    assert not episode_metrics(t2a, trace)["recovered_from_rejection"], (
-        "recovery should be impossible here: avoiding all three of satna's "
-        "aerial directions under basis=physical leaves no candidate to "
-        "widen from")
 
 
 def test_the_claimant_aggregates_are_derivable_for_every_twin_half(connect_for):
@@ -702,60 +419,6 @@ def test_the_flip_dominates_every_equal_signal(pair, connect_for):
     assert_flip_dominates(a, b, flips[a.id], flips[b.id])
 
 
-# W1.6 FINDING (task 5, 2026-08-26), NARROWED (Finding #5, 2026-08-26
-# re-review). The original write-up here reported that ALL THREE shipped
-# conserve halves fail this check identically -- a bare "moves the service"
-# predicate on `_check_no_free_escape` flagged every one of them, since
-# storm-svc-1's own static protection lightpath (`lp-prot-storm-svc-1-0`) is
-# always a free (0-pair) `ip_reroute` candidate under the near-neutral
-# `reference_avoid: {}` every one of these three halves declares, and it never
-# reuses the service's current working lightpath (`lp-cand-storm-svc-1-0`) in
-# any of them. That much is still true. What the original write-up never
-# checked is whether committing that free candidate would actually change the
-# GRADED LABEL each half is scored on -- and traced through each half's own
-# `label_rule` (`scoring.decision_label`), only ONE of the three genuinely
-# does:
-#
-#   * T1a (`timing_at_decision_hour`, gold `wait`): committing ANYTHING at the
-#     decision hour requires having acted, so the label reads "act" --
-#     WRONG against gold `wait`. A REAL, live integrity hazard.
-#   * T2b (`avoid_horizon_at_decision_hour`, gold `narrow`): the free
-#     candidate is offered under `reference_avoid={}`, so its `risk_groups`
-#     is empty and the label still reads "narrow" -- gold-CORRECT. The
-#     original predicate's flag here was a FALSE POSITIVE.
-#   * T3b (`chosen_lever_at_decision_hour`,
-#     `label_by_lever: {ip_reroute: B}`, gold `B`): the free candidate IS an
-#     `ip_reroute`, so the label still reads "B" -- also gold-correct, also a
-#     FALSE POSITIVE.
-#
-# `_check_no_free_escape` (assertions.py) now checks the label directly (see
-# its own docstring and `_label_if_committed`), so T2b/T3b are expected to
-# PASS this check for real and T1a is expected to keep failing it -- both
-# confirmed against the live server below. The free `ip_reroute` onto the
-# protection lightpath still exists in all three menus (that part of the
-# original finding is unchanged, and still worth a separate look for T1a's
-# sake), but only T1a's exposure to it is a genuine confound.
-# stale_pair (2026-09-05 plan, Task 11): T2/T3-only (both parameter values),
-# and T2/T3's live invariants are known-stale on the joint-exposure model --
-# see PAIRS/STALE_PAIRS above.
-@pytest.mark.stale_pair
-@pytest.mark.parametrize("scenario_id", ("T2b", "T3b"))
-def test_a_conserve_gold_with_an_unexploitable_free_escape_passes(
-    scenario_id, connect_for,
-):
-    """T2b/T3b: the free `ip_reroute` onto storm-svc-1's static protection
-    lightpath exists in the menu, but taking it reads the SAME label gold
-    does under each half's own `label_rule` -- not exploitable, so this must
-    pass, not xfail."""
-    scenario = load_scenario(SCENARIOS / f"{scenario_id}.yaml")
-
-    async def _run():
-        async with connect_for(scenario.state_file)() as client:
-            await assert_wait_gold_has_no_free_escape(client, scenario)
-
-    asyncio.run(_run())
-
-
 def _unwrap_lone_exception(exc: BaseException) -> BaseException:
     """`connect_server`'s `stdio_client` (anyio, over an asyncio TaskGroup)
     wraps ANY exception raised inside its `async with` body in one or more
@@ -811,11 +474,14 @@ def _unwrap_lone_exception(exc: BaseException) -> BaseException:
 # If a later pair re-introduces a conserve half on a label rule where a
 # zero-pair commit CAN change the graded label, this check becomes meaningful
 # again with no change to it.
-def test_a_conserve_gold_has_no_free_escape(connect_for):
-    """W1.6, T1a only -- see the module-level comment above for why T2b/T3b
-    were split out into their own test, and the comment directly above for
-    why this one is unmarked and currently unfalsifiable."""
-    scenario = load_scenario(SCENARIOS / "T1a.yaml")
+#
+# T2a/T3a (2026-09-06) grade the same `spare_action_by_deadline` rule, so the
+# same structural argument applies.
+@pytest.mark.parametrize("scenario_id", ("T1a", "T2a", "T3a"))
+def test_a_conserve_gold_has_no_free_escape(scenario_id, connect_for):
+    """W1.6 -- see the module-level comment above for why this one is
+    unmarked and currently unfalsifiable."""
+    scenario = load_scenario(SCENARIOS / f"{scenario_id}.yaml")
 
     async def _run():
         async with connect_for(scenario.state_file)() as client:

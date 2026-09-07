@@ -37,8 +37,7 @@ from collections import Counter
 from .runner import EpisodeTrace
 from .scenario_file import ScenarioFile
 
-LABEL_RULES = ("timing_at_decision_hour", "avoid_horizon_at_decision_hour",
-               "chosen_lever_at_decision_hour", "spare_action_by_deadline")
+LABEL_RULES = ("timing_at_decision_hour", "spare_action_by_deadline")
 
 
 def _hour_record(trace: EpisodeTrace, hour: str) -> dict | None:
@@ -168,18 +167,7 @@ def decision_label(scenario: ScenarioFile, trace: EpisodeTrace) -> str | None:
     if rule == "timing_at_decision_hour":
         return record.get("timing", {}).get("action")
 
-    committed = next((s for s in record.get("iterations", [])
-                      if s.get("outcome") == "committed"), None)
-    if committed is None:
-        return None
-
-    if rule == "avoid_horizon_at_decision_hour":
-        wide = scenario.metadata["wide_avoid_risk_group"]
-        chosen = committed["constraints"]["avoid"].get("risk_groups", [])
-        return "wide" if wide in chosen else "narrow"
-
-    lever = committed.get("lever")
-    return scenario.metadata["label_by_lever"].get(lever)
+    raise ValueError(f"unhandled label_rule {rule!r}")
 
 
 def episode_metrics(scenario: ScenarioFile, trace: EpisodeTrace) -> dict:

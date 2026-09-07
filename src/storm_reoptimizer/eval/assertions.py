@@ -264,10 +264,9 @@ async def assert_non_flip_decisions_non_binding(
     `TimingDecision("act", ...)` alternative does exercise them, but timing
     is T1's flip variable and so is never in `non_flip`). That is a
     structural property of a timing pair, not a hole in this check -- the
-    check does real work on T2 (where a constraints/objective alternative
-    could commit under a different avoid horizon) and on T3 (where a
-    constraints alternative could commit a different LEVER, which is exactly
-    what `chosen_lever_at_decision_hour` grades).
+    check does real work on T2 and T3 too, wherever a constraints or
+    objective alternative could commit a different candidate against the
+    label rule each pair's own scenarios declare.
 
     **`objective_fn`** (optional; None keeps every existing caller's
     behaviour exactly) hands the replay decider a RULE for the objective
@@ -662,13 +661,12 @@ def assert_flip_dominates(a: ScenarioFile, b: ScenarioFile,
 
 
 def _label_if_committed(*, label_rule: str, candidate: dict,
-                        avoid_used: dict, wide_avoid_risk_group: str | None,
-                        label_by_lever: dict | None,
+                        avoid_used: dict,
                         depot_spares_needed: int = 0) -> str | None:
     """The label `scoring.decision_label` would read off a HYPOTHETICAL commit
     of `candidate` under `avoid_used`, without a trace or a rollout -- the same
-    four `label_rule` branches that function implements, applied to one
-    candidate instead of a replayed hour's `iterations` record.
+    `label_rule` branches that function implements, applied to one candidate
+    instead of a replayed hour's `iterations` record.
 
     `depot_spares_needed` is the `spare_action_by_deadline` branch's own
     input: this function never sees a ledger or an oms_nodes map, so the
@@ -677,12 +675,8 @@ def _label_if_committed(*, label_rule: str, candidate: dict,
     depot's own share of that total. Defaulted to 0 so every other
     `label_rule`'s existing callers are unaffected.
 
-    Added for Finding #5 (2026-08-26 re-review of W1.6): `_check_no_free_
-    escape` used to flag any zero-pair, service-moving candidate regardless of
-    whether committing it would actually change the graded label, and two of
-    the three episodes it flagged (T2b, T3b) turned out to be FALSE POSITIVES
-    once traced through their own `label_rule` -- see that function's updated
-    docstring for the per-half trace.
+    Finding #5 (2026-08-26 re-review of W1.6) is why this function exists at
+    all; the two retired rules' branches lived here until 2026-09-06.
 
     `timing_at_decision_hour` is unconditionally "act": there is no candidate
     commit in this harness without having acted at that hour (`run_episode`
@@ -690,11 +684,6 @@ def _label_if_committed(*, label_rule: str, candidate: dict,
     reaching this function under that rule always reads "act" if taken."""
     if label_rule == "timing_at_decision_hour":
         return "act"
-    if label_rule == "avoid_horizon_at_decision_hour":
-        chosen = avoid_used.get("risk_groups", [])
-        return "wide" if wide_avoid_risk_group in chosen else "narrow"
-    if label_rule == "chosen_lever_at_decision_hour":
-        return (label_by_lever or {}).get(candidate.get("lever"))
     if label_rule == "spare_action_by_deadline":
         return "spend" if depot_spares_needed else "hold"
     raise ValueError(f"unknown label_rule {label_rule!r}")
@@ -703,8 +692,6 @@ def _label_if_committed(*, label_rule: str, candidate: dict,
 def _check_no_free_escape(scenario_id: str, menu: dict, current: set[str], *,
                           label_rule: str, gold_label: str,
                           reference_avoid: dict,
-                          wide_avoid_risk_group: str | None = None,
-                          label_by_lever: dict | None = None,
                           oms_nodes: dict | None = None) -> None:
     """The pure half of W1.6: given a menu and the service's CURRENT working
     lightpath ids, no zero-pair candidate that would actually flip the GRADED
@@ -715,24 +702,12 @@ def _check_no_free_escape(scenario_id: str, menu: dict, current: set[str], *,
     working lightpath is necessary but not sufficient evidence of a real
     escape: whether it is exploitable depends on whether committing it would
     actually change what `scoring.decision_label` reads for this half, which
-    depends on `label_rule` and is NOT the same question for all three pairs.
-    Traced against the shipped suite's own three `gold_spare_action=conserve`
-    halves:
+    depends on `label_rule`. Traced against the shipped suite's own
+    `gold_spare_action=conserve` halves: T1a (`timing_at_decision_hour`,
+    gold `wait`) -- ANY commit reads "act" (see `_label_if_committed`) --
+    REAL escape, since gold is "wait".
 
-      * T1a (`timing_at_decision_hour`, gold `wait`): ANY commit reads "act"
-        (see `_label_if_committed`) -- REAL escape, since gold is "wait".
-      * T2b (`avoid_horizon_at_decision_hour`, gold `narrow`): the free
-        candidate is offered under `reference_avoid={}`, so `risk_groups`
-        is empty and the label still reads "narrow" -- gold-CORRECT, not an
-        escape. The old, broader predicate flagged this as a false positive.
-      * T3b (`chosen_lever_at_decision_hour`,
-        `label_by_lever: {ip_reroute: B}`, gold `B`): the free candidate IS
-        an `ip_reroute`, so the label still reads "B" -- also gold-correct,
-        also a false positive under the old predicate.
-
-    So only T1a is a genuine, live integrity hazard; see
-    `test_a_conserve_gold_has_no_free_escape` in test_episodes.py, restructured
-    to reflect that.
+    See `test_a_conserve_gold_has_no_free_escape` in test_episodes.py.
 
     **Why the cheap variant, otherwise.** The strict version would need each
     candidate's own exposure, which means recomputing a representative point
@@ -752,8 +727,6 @@ def _check_no_free_escape(scenario_id: str, menu: dict, current: set[str], *,
         label = _label_if_committed(
             label_rule=label_rule, candidate=candidate,
             avoid_used=reference_avoid,
-            wide_avoid_risk_group=wide_avoid_risk_group,
-            label_by_lever=label_by_lever,
             # Always 0 here: the gate above already requires this
             # candidate's total spares_needed (summed across every site) to
             # be zero, so its depot-specific share can never be nonzero
@@ -853,8 +826,6 @@ async def assert_wait_gold_has_no_free_escape(client: Client,
         label_rule=scenario.metadata.get("label_rule"),
         gold_label=scenario.gold.label,
         reference_avoid=scenario.reference_avoid,
-        wide_avoid_risk_group=scenario.metadata.get("wide_avoid_risk_group"),
-        label_by_lever=scenario.metadata.get("label_by_lever"),
         oms_nodes=oms_nodes)
 
 

@@ -320,11 +320,11 @@ async def _run_dimensional_coherence_invariants(
 
     Invariants 6/7 (`assert_depot_is_the_binding_site`/
     `assert_escape_route_survives`) are SKIPPED for any scenario whose
-    `metadata.stale_invariants` is true (2026-09-05 plan, Task 11): D1/T2/T3
-    were built and frozen against the OLD working-leg-only exposure numbers,
+    `metadata.stale_invariants` is true (2026-09-05 plan, Task 11): D1
+    was built and frozen against the OLD working-leg-only exposure numbers,
     and Tasks 3/4 of that same plan moved to a joint (working-AND-protection)
     probability for protected services, so those two invariants are
-    known-stale there pending D1/T2/T3's own redesign turn -- see the ruling
+    known-stale there pending D1's own redesign turn -- see the ruling
     in `tests/eval/test_episodes.py`'s `PAIRS`/`STALE_PAIRS` comment."""
     async with connect_for(next(iter(episodes.values())).state_file)() as client:
         from ..mcp_client import call_tool_json
@@ -369,15 +369,15 @@ async def _run_dimensional_coherence_invariants(
                 client, scenario, topology_path=topology_path, oms=oms_by_id_list)
             groups = await _groups_for(
                 client, scenario, topology_path=topology_path)
-            # stale_invariants (2026-09-05 plan, Task 11): D1/T2/T3's
+            # stale_invariants (2026-09-05 plan, Task 11): D1's
             # `assert_depot_is_the_binding_site`/`assert_escape_route_survives`
             # were built and frozen against the OLD working-leg-only exposure
             # numbers. Tasks 3/4 of this same plan moved to a joint
             # (working-AND-protection) probability for protected services,
-            # so these two invariants are known-stale for those episodes --
+            # so these two invariants are known-stale for that episode --
             # ruling: "don't worry about old tests or T2/T3, we'll update
             # those later". Declared per-episode via
-            # `metadata.stale_invariants: true` (D1/T2a/T2b/T3a/T3b) rather
+            # `metadata.stale_invariants: true` (D1 only) rather
             # than skipped by id here, so the flag travels with the scenario
             # file that earns it.
             if not scenario.metadata.get("stale_invariants"):
