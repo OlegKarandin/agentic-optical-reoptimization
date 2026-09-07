@@ -303,9 +303,102 @@ both gold rollouts tied at identical loss. `dhulia`'s other link is BURIED
 (`dhulia <-> nasik`), which a storm filter can never admit. Both facts are
 asserted in `tests/eval/test_build_eval_state.py`.
 
-D1/T2/T3 are unaffected: they still name `storm-svc-1` and the satna claimant
-family, stage 1 (the gravity load) runs before any pin and is not re-routed by
-one, and the pin list is solved in order.
+D1 is unaffected: it still names `storm-svc-1` and the satna claimant family,
+stage 1 (the gravity load) runs before any pin and is not re-routed by one,
+and the pin list is solved in order. **T2 and T3 no longer name `storm-svc-1`
+or the satna claimants at all** -- see the next section.
+
+### The T2/T3 pairs live on their own state files (2026-09-06) -- no topology change
+
+T2 and T3 were rebuilt on the same jalgaon machinery as T1, on the T2/T3
+probe redesign
+(spec `docs/superpowers/specs/2026-09-06-t2-t3-probe-redesign-design.md`),
+and moved off `storm-svc-1`/the satna claimants entirely -- they no longer
+share T1's canonical protected-both-legs-aerial story at all. `T1` stays
+decidable from the observation alone (does the observation say the claimant
+is exposed enough to outweigh the SUT). `T2` and `T3` are decidable only by
+an agent that chooses to call the new read-only `probe_restorability` tool:
+`T2` asks whether the claimant CAN be restored at all after its cut (the
+observation alone points the wrong way in `T2`'s spend half -- it shows a
+*bigger* claim where holding the spare is worthless); `T3` asks whether that
+restoration NEEDS the spare (both halves show the decider the identical
+claim size, 114.8 G, and only the probe distinguishes them).
+
+Each pair gets its OWN state file, built from `eval/states/loaded-s17.json`
+with `tools/build_eval_state.py --pin-set {t2,t3}` --
+`eval/states/t2-jalgaon-s17.json` and `t3-jalgaon-s17.json` -- rather than
+adding more stage-2 pins to T1's own file. Two reasons, both live-found, not
+speculative: T1's own state, menus, gold and frozen scalars must stay
+untouched by T2/T3 authoring (a shared file would re-solve T1's pins every
+time T2/T3's pins changed), and an early T3 design (see below) added
+"survivor" lightpaths that must never appear as free grooms in T2's or T1's
+menus.
+
+**Current, shipped pins (`tools/build_eval_state.py`), as they exist right
+now -- read the file directly for the exact `src`/`dst`/`demand_gbps`, not
+this summary:**
+
+- `T2_PINS`: the SUT, `t2-svc-jalgaon-nagpur` (`jalgaon <-> nagpur`, 300 G,
+  protected), plus ONE claimant, `t2-claimant-jalgaon-khandwa`
+  (`jalgaon <-> khandwa`, 200 G, unprotected). Both SUT legs are aerial out
+  of jalgaon (working via `khandwa`, protection via `buldhana` -- the solver
+  assigns these the OPPOSITE way round from the design spec's own GIS
+  pre-check, confirmed live and recorded in the authoring note below); the
+  claimant's flip is whether `khandwa`'s only other link
+  (`khandwa <-> dhar`, aerial) sits inside the storm footprint too, which
+  determines whether `route_service` can restore it at all once its own
+  corridor is cut.
+- `T3_PINS`: the SUT, `t3-svc-jalgaon-nagpur` (`jalgaon <-> nagpur`, 300 G,
+  **unprotected** -- deliberately a different posture from T1/T2's
+  protected canonical case, since jalgaon has only four aerial neighbours
+  and a protected SUT already consumes two of them), plus TWO claimants,
+  `t3-claimant-jalgaon-khandwa` (`jalgaon <-> khandwa`, 200 G) and
+  `t3-claimant-jalgaon-buldhana` (`jalgaon <-> buldhana`, 200 G), both
+  unprotected. **`T3_PINS` carries NO survivor pins.** The original design
+  (spec §4.2) called for a THIRD kind of pin -- single-hop unprotected
+  "survivor" services along a claimant's
+  buried alternative path, sized to leave headroom, so that claimant would
+  get a free zero-spare `ip_reroute` groom. Checked live 2026-09-06 (plan
+  Task 8, `tools/probe_restorability.py`) at both the originally-committed
+  100 G survivor demand and a smaller 50 G: the groom was NOT offered
+  either time -- `solve_allocation_model` never lit a dedicated lightpath on
+  the survivor path at all, grooming each survivor demand onto unrelated
+  pre-existing IP links instead, so no lightpath with spare capacity ever
+  sat where the claimant's `route_service` call could reuse it. Per the
+  design spec's own documented fallback, the survivor pins were dropped
+  entirely and T3 ships as the two-corridor RESTORABILITY variant instead
+  (same shape as T2's "restorable or not" flip, on a second corridor) --
+  `T3_SURVIVOR_PINS` was removed from `tools/build_eval_state.py` rather
+  than left dead, since nothing references it once dropped from `T3_PINS`.
+- **The claimant corridor was substituted for a second, independent
+  live-topology reason (plan Task 11).** The design spec's §4.2 assumed
+  T3's unprotected SUT would leave jalgaon via `buldhana`, so it assigned
+  `dhulia` and `khandwa` as the two claimant corridors. The live solver
+  assigns the SUT's working leg the long `jalgaon -> dhulia -> ...` route
+  instead, whose ONLY near-depot aerial span is `jalgaon <-> dhulia` --
+  exactly the `dhulia` claimant's own corridor. Measured live: a `dhulia`
+  claimant's `p_cut` is then IDENTICAL to the SUT's own, to the last Sobol
+  point, at every cone near jalgaon -- the same "spare contention is not a
+  contest" confound this file already records for the pre-2026-08-30 satna
+  claimants above -- and cutting that corridor cuts the SUT itself, so both
+  halves would grade `spend` and the pair could never flip. `buldhana` was
+  substituted as the second corridor: structurally `khandwa`'s twin (exactly
+  two aerial links, `jalgaon <-> buldhana` and `buldhana <-> amravati`, with
+  the far end's onward link BURIED), so it carries the same
+  restorable/not-restorable flip `khandwa` does.
+
+No mount-type change was needed for either pin set: the SUTs' real
+near-depot legs (T2's `dhulia`/`buldhana` first hops, T3's `dhulia` working
+leg) and the claimant corridors (`khandwa`/`buldhana`) are already aerial
+out of jalgaon, and the escape node (`aurangabad`, not `surat` -- `surat`
+has no `optical_reroute` candidate for either SUT, found live) is already
+buried, from T1's own mount-type inventory.
+`tests/eval/test_build_eval_state.py::test_the_t2_and_t3_pin_sets_are_the_specs`
+asserts `T2_PINS`/`T3_PINS` verbatim; `test_the_pair_state_files_carry_their_pins_and_the_base`
+asserts each state file is a superset of `loaded-s17.json`'s own services.
+Full derivation, including the live geometry search each pair needed
+because the solver's leg assignment inverted the design spec's own GIS
+pre-check twice (once for T2, once for T3): `docs/superpowers/plans/notes/2026-09-06-t2-t3-authoring.md`.
 
 ---
 

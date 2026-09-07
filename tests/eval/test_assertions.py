@@ -266,6 +266,32 @@ def test_a_pair_whose_halves_declare_the_same_spare_action_is_rejected(
             six_halves_same_spare_action, {})
 
 
+def test_global_policy_report_names_how_each_variable_is_blocked(six_halves):
+    """`_SOLVED`/`_INTERLEAVED` above only ever populate ONE
+    `FLIP_VARS` member (`claimant_ecar_at_exposure_horizon`) -- every
+    existing test above wraps them the same way. So this test wraps them
+    identically and restricts its assertions to that one variable, rather
+    than asserting `set(report) == set(FLIP_VARS)`: a var nobody supplied
+    any value for is omitted from the report entirely (same silent skip
+    `assert_no_global_policy_solves_the_suite` always had for a partial
+    sweep), not populated with a placeholder entry."""
+    from storm_reoptimizer.eval.assertions import global_policy_report
+    from storm_reoptimizer.eval.derived import FLIP_VARS
+    var = FLIP_VARS[0]
+
+    interleaved = {sid: {var: v} for sid, v in _INTERLEAVED.items()}
+    report = global_policy_report(six_halves, interleaved)
+    assert var in report
+    assert report[var]["n"] == 6
+    assert report[var]["best"] < 6
+    assert report[var]["blocked_by"] in ("tie", "reversal", "interleave")
+
+    solved = {sid: {var: v} for sid, v in _SOLVED.items()}
+    solved_report = global_policy_report(six_halves, solved)
+    assert solved_report[var]["best"] == 6
+    assert solved_report[var]["blocked_by"] == "solved"
+
+
 # GATE B (`assert_flip_dominates`, F2): the largest EQUAL-in-both-halves
 # signal about the service under test must not outweigh the flip itself.
 @pytest.fixture

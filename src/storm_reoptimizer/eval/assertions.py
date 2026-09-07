@@ -435,6 +435,140 @@ def _derived_mismatches(a: ScenarioFile, derived_a: DerivedGeometry,
 SPARE_ACTIONS = ("spend", "conserve")
 
 
+def _reversed_pair_exists(
+    pairs: list[tuple[ScenarioFile, ScenarioFile]],
+    values: dict[str, float],
+    actions: dict[str, str],
+) -> bool:
+    """True when two pairs order their spend/conserve halves OPPOSITELY on
+    `values` -- one pair's spend half reads lower than its conserve half,
+    another pair's spend half reads higher. A pair whose two halves tie
+    (within `_distinct_within_tolerance`'s bar) carries no orientation of its
+    own and is skipped rather than forced either way; `global_policy_report`
+    only calls this once it has already confirmed no pair ties, so in
+    practice every pair contributes an orientation here."""
+    from .rules import _distinct_within_tolerance
+
+    orientations: set[bool] = set()
+    for a, b in pairs:
+        spend_id, conserve_id = (
+            (a.id, b.id) if actions[a.id] == "spend" else (b.id, a.id))
+        spend_value, conserve_value = values[spend_id], values[conserve_id]
+        if len(_distinct_within_tolerance([spend_value, conserve_value])) == 1:
+            continue
+        orientations.add(spend_value < conserve_value)
+    return len(orientations) > 1
+
+
+def global_policy_report(
+    episodes: list[ScenarioFile],
+    flip_values: dict[str, dict[str, float]],
+) -> dict[str, dict]:
+    """Per `FLIP_VARS` member: the values per half, the best count any ONE
+    threshold under ONE orientation reaches, and why it falls short.
+
+    `blocked_by`: `"tie"` when some pair's two halves carry the same value
+    (within `_distinct_within_tolerance`'s tolerance), `"reversal"` when no
+    tie exists but the best orientation still misses because a pair's halves
+    are ordered the OTHER way round from another pair's, `"interleave"` when
+    it misses for any other reason, `"solved"` when `best == n`.
+
+    Extracted from `assert_no_global_policy_solves_the_suite` (which now
+    delegates to this and raises on any `"solved"` entry) so the per-variable
+    bound/best table `tools/sweep_flip_vars.py` prints comes from the gate's
+    own arithmetic, not a hand-transcribed copy of it.
+
+    `flip_values` is `{scenario_id: {var: value}}`, the shape
+    `derived.FlipScalars.values()` produces. Only episodes belonging to a
+    pair are scored -- diagnostic episodes have no twin and no flip. A
+    variable nobody supplied ANY value for is OMITTED from the report
+    entirely (see the loop below); this mirrors the equally-silent skip the
+    pre-extraction code had, and only ever fires for a synthetic/unit-test
+    `flip_values` that deliberately exercises one variable at a time --
+    `derived.FlipScalars.values()`, the real caller, always populates every
+    `FLIP_VARS` member together."""
+    # Lazy, not for circular-import reasons (there are none: rules.py never
+    # imports this module, directly or transitively -- only suite.py imports
+    # assertions.py). It mirrors the equally-lazy `from .rules import
+    # best_rule` in assert_no_single_variable_rule_solves below, kept local
+    # so this module's own top-level import surface does not gain rules.py
+    # (and, through it, nothing new -- rules.py only adds derived.py, which
+    # this module already imports) for callers that never run either check.
+    from .rules import _distinct_within_tolerance, split_points
+
+    halves = [e for e in episodes if e.pair]
+    if not halves:
+        return {}
+
+    actions: dict[str, str] = {}
+    for episode in halves:
+        action = episode.metadata.get("gold_spare_action")
+        if action not in SPARE_ACTIONS:
+            raise PairInvalid(
+                f"{episode.id}: metadata.gold_spare_action must be one of "
+                f"{list(SPARE_ACTIONS)}, got {action!r}. W1.2 needs one "
+                f"common axis across pairs whose gold labels use three "
+                f"different vocabularies.")
+        actions[episode.id] = action
+
+    by_pair: dict[str, list[ScenarioFile]] = defaultdict(list)
+    for episode in halves:
+        by_pair[episode.pair].append(episode)
+    for pair, group in sorted(by_pair.items()):
+        declared = {actions[e.id] for e in group}
+        if len(declared) < 2:
+            raise PairInvalid(
+                f"pair {pair}: both halves declare gold_spare_action="
+                f"{declared.pop()!r}. A twin pair's halves must land on "
+                f"opposite sides of the one spare pair, or there is no flip.")
+    pairs = [tuple(group) for group in by_pair.values()]
+
+    report: dict[str, dict] = {}
+    for var in FLIP_VARS:
+        values = {e.id: flip_values.get(e.id, {}).get(var) for e in halves}
+        supplied = [v for v in values.values() if v is not None]
+        if not supplied:
+            # Nobody supplied this var at all -- not swept, not a partial
+            # sweep. `derived.FlipScalars.values()` (the real caller) always
+            # populates all of FLIP_VARS together, so this branch only ever
+            # fires for a synthetic/unit-test `flip_values` that deliberately
+            # exercises one variable at a time.
+            continue
+        if len(supplied) < len(values):
+            missing = sorted(k for k, v in values.items() if v is None)
+            raise PairInvalid(
+                f"{var}: no value supplied for {missing}; the whole-suite "
+                f"check cannot be run on a partial sweep")
+        best, best_threshold, best_orientation = 0, None, None
+        for threshold in split_points(list(values.values())):
+            for lo_action in SPARE_ACTIONS:
+                hi_action = ("conserve" if lo_action == "spend" else "spend")
+                predicted = {
+                    eid: (lo_action if value < threshold else hi_action)
+                    for eid, value in values.items()}
+                score = sum(
+                    predicted[eid] == actions[eid] for eid in values)
+                if score > best:
+                    best, best_threshold, best_orientation = (
+                        score, threshold, lo_action)
+        tied = any(
+            len(_distinct_within_tolerance([values[a.id], values[b.id]])) == 1
+            for a, b in pairs)
+        if best == len(values):
+            blocked_by = "solved"
+        elif tied:
+            blocked_by = "tie"
+        elif _reversed_pair_exists(pairs, values, actions):
+            blocked_by = "reversal"
+        else:
+            blocked_by = "interleave"
+        report[var] = {
+            "values": values, "n": len(values), "best": best,
+            "threshold": best_threshold, "lo_action": best_orientation,
+            "blocked_by": blocked_by}
+    return report
+
+
 def assert_no_global_policy_solves_the_suite(
     episodes: list[ScenarioFile],
     flip_values: dict[str, dict[str, float]],
@@ -459,74 +593,28 @@ def assert_no_global_policy_solves_the_suite(
 
     `flip_values` is `{scenario_id: {var: value}}`, the shape
     `derived.FlipScalars.values()` produces. Only episodes belonging to a pair
-    are scored -- diagnostic episodes have no twin and no flip."""
-    # Lazy, not for circular-import reasons (there are none: rules.py never
-    # imports this module, directly or transitively -- only suite.py imports
-    # assertions.py). It mirrors the equally-lazy `from .rules import
-    # best_rule` in assert_no_single_variable_rule_solves below, kept local
-    # so this module's own top-level import surface does not gain rules.py
-    # (and, through it, nothing new -- rules.py only adds derived.py, which
-    # this module already imports) for callers that never run either check.
-    from .rules import split_points
+    are scored -- diagnostic episodes have no twin and no flip.
 
-    halves = [e for e in episodes if e.pair]
-    if not halves:
-        return
-
-    actions: dict[str, str] = {}
-    for episode in halves:
-        action = episode.metadata.get("gold_spare_action")
-        if action not in SPARE_ACTIONS:
-            raise PairInvalid(
-                f"{episode.id}: metadata.gold_spare_action must be one of "
-                f"{list(SPARE_ACTIONS)}, got {action!r}. W1.2 needs one "
-                f"common axis across pairs whose gold labels use three "
-                f"different vocabularies.")
-        actions[episode.id] = action
-
-    by_pair: dict[str, set[str]] = defaultdict(set)
-    for episode in halves:
-        by_pair[episode.pair].add(actions[episode.id])
-    for pair, declared in sorted(by_pair.items()):
-        if len(declared) < 2:
-            raise PairInvalid(
-                f"pair {pair}: both halves declare gold_spare_action="
-                f"{declared.pop()!r}. A twin pair's halves must land on "
-                f"opposite sides of the one spare pair, or there is no flip.")
-
-    for var in FLIP_VARS:
-        values = {e.id: flip_values.get(e.id, {}).get(var) for e in halves}
-        supplied = [v for v in values.values() if v is not None]
-        if not supplied:
-            # Nobody supplied this var at all -- not swept, not a partial
-            # sweep. `derived.FlipScalars.values()` (the real caller) always
-            # populates all of FLIP_VARS together, so this branch only ever
-            # fires for a synthetic/unit-test `flip_values` that deliberately
-            # exercises one variable at a time.
+    Delegates the actual sweep to `global_policy_report` (which raises the
+    same `PairInvalid`s this function used to raise directly for an invalid
+    `gold_spare_action` or a partial sweep) and raises iff any variable's
+    report entry is `blocked_by == "solved"`."""
+    report = global_policy_report(episodes, flip_values)
+    for var, entry in report.items():
+        if entry["blocked_by"] != "solved":
             continue
-        if len(supplied) < len(values):
-            missing = sorted(k for k, v in values.items() if v is None)
-            raise PairInvalid(
-                f"{var}: no value supplied for {missing}; the whole-suite "
-                f"check cannot be run on a partial sweep")
-        for threshold in split_points(list(values.values())):
-            for lo_action in SPARE_ACTIONS:
-                hi_action = ("conserve" if lo_action == "spend" else "spend")
-                predicted = {
-                    eid: (lo_action if value < threshold else hi_action)
-                    for eid, value in values.items()}
-                if predicted == actions:
-                    raise PairInvalid(
-                        f"a fixed global policy solves the suite {len(halves)}"
-                        f"/{len(halves)}: one global threshold at "
-                        f"{threshold:.4g} on {var}, with lo -> {lo_action} and "
-                        f"hi -> {hi_action}. Values: "
-                        f"{ {k: round(v, 1) for k, v in sorted(values.items())} }. "
-                        f"Such a policy never reads the service under test and "
-                        f"performs no comparison, so an agent scoring "
-                        f"{len(halves)}/{len(halves)} would prove nothing. "
-                        f"Retune the geometry until the values INTERLEAVE "
-                        f"across the labels.")
+        hi_action = "conserve" if entry["lo_action"] == "spend" else "spend"
+        raise PairInvalid(
+            f"a fixed global policy solves the suite {entry['best']}"
+            f"/{entry['n']}: one global threshold at "
+            f"{entry['threshold']:.4g} on {var}, with lo -> "
+            f"{entry['lo_action']} and hi -> {hi_action}. Values: "
+            f"{ {k: round(v, 1) for k, v in sorted(entry['values'].items())} }. "
+            f"Such a policy never reads the service under test and "
+            f"performs no comparison, so an agent scoring "
+            f"{entry['best']}/{entry['n']} would prove nothing. "
+            f"Retune the geometry until the values INTERLEAVE "
+            f"across the labels.")
 
 
 async def assert_gold_spare_action_is_grounded(

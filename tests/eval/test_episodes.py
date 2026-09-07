@@ -337,60 +337,56 @@ def test_no_global_policy_solves_the_shipped_suite(connect_for):
     `derived.FLIP_VARS`, under ONE fixed orientation, answers all six twin
     halves.
 
-    RE-DERIVED 2026-08-30 (Task 14, exposure-and-depot plan) against the REAL
-    satna-homed claimant pair (`claimant-satna-jabalpur-fwd`/`-rev`) and
-    Task 13's frozen geometry -- every number below is from a live run of
-    `tools/derive_episodes.py` and matches
-    `docs/superpowers/plans/notes/2026-08-30-joint-tuning.md` digit for
-    digit; the PRE-Task-13 numbers this docstring used to quote (89.35 G
-    threshold, 128.4/284.0 G ties, a 107.6/114.6/128.4 G interleave) described
-    the OLD placeholder claimants and no longer exist. "Bound" below is what
-    a tied pair guarantees; "best" is what an exhaustive sweep of every
-    threshold under both orientations actually reaches. They are not always
-    the same number, and quoting the bound as if it were the measured score
-    makes the suite look closer to solvable than it is:
+    RE-DERIVED 2026-09-07 (T2/T3 probe redesign plan, Task 13) against the
+    THREE jalgaon-homed pairs (T1, T2, T3 -- the satna-homed placeholder
+    claimants this docstring used to cite are retired; see CLAUDE.md's "The
+    T2/T3 pairs live on their own state files" section) and `global_policy_
+    report` (`assertions.py`), the reporting function this gate itself now
+    calls. Every number below is `tools/sweep_flip_vars.py`'s own printed
+    output against the live server -- run it to reproduce digit for digit --
+    and matches `docs/superpowers/plans/notes/2026-09-06-t2-t3-authoring.md`.
+    "Best achievable" is what an exhaustive sweep of every threshold under
+    both orientations actually reaches; `global_policy_report` also names
+    WHY each variable falls short (`blocked_by`), which this table repeats
+    verbatim rather than re-deriving:
 
-      * `..._at_exposure_horizon`   -- tied on T2 (both 529.441 G) and on T3
-                                       (both 444.080 G): each pair publishes a
-                                       byte-identical far horizon.
-                                       Bound 4/6, best 4/6.
-      * `..._before_exposure_horizon` -- tied on T1 (both 0.0): T1's
-                                       decision-hour issuance publishes only
-                                       its exposure horizon, so the sum is
-                                       over an empty set.
-                                       Bound 5/6, best 4/6 -- the bound is NOT
-                                       tight here: T2a (687.276, spend) sits
-                                       between T3b (672.689, conserve) and T2b
-                                       (1087.764, conserve), costing a second
-                                       misclassification beyond the T1 tie.
-      * `..._peak_over_horizons`   -- NO tie at all; blocked by a genuine
-                                       INTERLEAVE: sorted order is spend,
-                                       spend, conserve, conserve, **spend**
-                                       (T2a), conserve -- three transitions.
-                                       Best 5/6. The real binding edge,
-                                       live-bisected and cross-checked against
-                                       closed-form arithmetic: shrinking T2a
-                                       down flips the check at T1a's own value
-                                       (655.4772), margin 31.798 G -- T1a is
-                                       the binder, not the adjacent-in-sorted-
-                                       order T3b (whose gap to T2a, 14.586 G,
-                                       is NOT the real margin; see the notes
-                                       file's own correction of exactly this
-                                       trap).
-      * `..._min_over_horizons`    -- tied on T2 (both 529.441 G): both
-                                       halves' `min` reads the SAME far-
-                                       horizon value because each half's OWN
-                                       near-horizon total is larger than it.
-                                       Bound 5/6, best 5/6 (tight).
+    | Variable | Blocked by | Best achievable (of 6 halves) |
+    |---|---|---|
+    | `claimant_ecar_at_exposure_horizon` | REVERSAL | 5/6 |
+    | `claimant_ecar_before_exposure_horizon` | TIE | 0/6 |
+    | `claimant_ecar_peak_over_horizons` | REVERSAL | 5/6 |
+    | `claimant_ecar_min_over_horizons` | REVERSAL | 5/6 |
+    | `largest_restorable_group_ecar_gbps` | TIE | 4/6 |
 
-    A tied pair predicts the same label for both halves under any threshold
-    and any orientation. An interleave is the stronger outcome; T2a's near
-    cone (bearing 202.0/213.0 deg at 250.0 km from storm-svc-1's own point,
-    both halves) is what buys it for `peak_over_horizons`. All four FLIP_VARS
-    members (plus the fifth, `largest_restorable_group_ecar_gbps`, added
-    2026-08-30 -- TIED on T2 at 75.633 G and on T3 at 51.408 G, bound and
-    best both 4/6) are genuinely blocked; see the notes file for the full,
-    triple-verified derivation."""
+    Every pair now publishes exactly ONE horizon (`t3`) per issuance, so
+    `..._at_exposure_horizon`, `..._peak_over_horizons` and `..._min_over_
+    horizons` are the SAME column, digit for digit: T1b=831.070 (spend),
+    T3b=1090.169 (spend), T1a=2456.858 (conserve), T2a=3991.015 (conserve),
+    T3a=4094.957 (conserve), T2b=6737.691 (spend). `_reversed_pair_exists`
+    is what names this REVERSAL, not a tie or a plain interleave: T1's own
+    orientation is "more claimant exposure -> conserve" (spend 831.070 <
+    conserve 2456.858) and T3's agrees (spend 1090.169 < conserve 4094.957),
+    but T2 is the OPPOSITE way round (conserve 3991.015 < spend 6737.691) --
+    exactly spec `2026-09-06-t2-t3-probe-redesign-design.md` §3's design ("T2
+    reverses the orientation any function of claimant exposure would need").
+    `..._before_exposure_horizon` is a TIE at 0.0 across all six halves (no
+    pair publishes a horizon before its own single exposure horizon), so
+    `rules.split_points` finds no split point to sweep at all and "best
+    achievable" is reported as 0/6, not the 3/6 a naive default-to-one-label
+    policy would actually score outside this sweep's own threshold search.
+
+    `largest_restorable_group_ecar_gbps` is the variable T3's construction is
+    built to tie ON: T3a and T3b both read 114.763 G (T2a matches it too --
+    not coincidence, T3's half A reuses T2's own half-A cone anchor exactly,
+    bearing 84.0/radius 68.0 -- but T2b does not, 197.076 G) -- sorted:
+    T1b=24.643 (spend), T2a=114.763 (conserve),
+    T3a=114.763 (conserve), T3b=114.763 (spend), T1a=148.931 (conserve),
+    T2b=197.076 (spend). T3a and T3b tying on their OWN pair is what
+    `global_policy_report` reports as `blocked_by == "tie"`, and per the
+    design spec's corrected §4.2, T1 and T2 alone already interleave on this
+    same variable (T1b < T2a < T1a < T2b, conserve/spend/conserve/spend) --
+    T3's tie is a real, additional blocker, not the sole one an earlier
+    draft of that spec claimed."""
     episodes = [load_scenario(SCENARIOS / f"{n}.yaml")
                 for n in ("T1a", "T1b", "T2a", "T2b", "T3a", "T3b")]
 

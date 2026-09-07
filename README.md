@@ -18,9 +18,11 @@ not measured by "did it restore the network" — a solver does that — but by
 whether it earns its place over a `(service_class → policy)` table on decisions
 the table cannot key on. `src/storm_reoptimizer/eval/` is the benchmark built to
 answer that question, and `src/storm_reoptimizer/eval/suite.py` is what wires its
-seven episodes — three twin pairs (`T1` timing, `T2` constraints, `T3`
-objective) plus one diagnostic (`D1`) — into a single runnable suite: it drives
-every episode against one or more deciders over the real `multilayer-optical-mcp`
+seven episodes — three twin pairs, all grading one spare at one depot (`T1`
+how exposed the claimant is, `T2` whether it can be restored at all, `T3`
+whether its restoration needs the spare) — plus one diagnostic (`D1`) —
+into a single runnable suite: it drives every episode against one or more
+deciders over the real `multilayer-optical-mcp`
 server (never a mock — CLAUDE.md's hard seam), scores `pair_solved` and the
 per-episode metrics in `scoring.py`, and renders the results table below.
 
@@ -68,18 +70,17 @@ the forecast: the twins' menus and observables are identical by construction,
 so such a policy emits the same answer twice and scores exactly 50%.
 **Claim 2 (asserted at build time).** No rule keyed on any single forecast
 variable -- and no parameter-free greedy policy -- solves the suite; checked
-over the gold labels before any rollout runs. This claim is now backed by a
-WIDER enumeration than any earlier version of this document reported: **all
-seven** claimant-side summary variables the harness can derive (the five
-members of `derived.FLIP_VARS` -- `claimant_ecar_at_exposure_horizon`,
-`claimant_ecar_before_exposure_horizon`, `claimant_ecar_peak_over_horizons`,
-`claimant_ecar_min_over_horizons`, `largest_restorable_group_ecar_gbps` --
-plus two further summaries of the same per-horizon map that are NOT in
-`FLIP_VARS`, `claimant_ecar_at_earliest_horizon` and `claimant_ecar_
-median_over_horizons`), swept jointly against the REAL satna-homed claimant
-(`claimant-satna-jabalpur-fwd`/`-rev`, Task 14, 2026-08-30) rather than the
-narrative placeholder claimants earlier drafts of this document used. Two
-distinct static checks back this claim, and they ask opposite questions:
+over the gold labels before any rollout runs. All three pairs are now real,
+authored, reviewed twins on ONE spare at ONE depot (`jalgaon`), rebuilt on the
+T2/T3 probe redesign (`docs/superpowers/specs/2026-09-06-t2-t3-probe-redesign-design.md`):
+`T1` grades how EXPOSED its claimant is (decidable from the observation
+alone), `T2` grades whether the claimant can be RESTORED AT ALL after its
+cut (decidable only by a `probe_restorability` call, since the observation
+alone points the wrong way in `T2`'s spend half), and `T3` grades whether
+that restoration NEEDS the spare (same probe; the observation is exhausted
+-- both halves show the decider the identical claim size, 114.8 G, and only
+the probe distinguishes them). Two distinct static checks back this claim,
+and they ask opposite questions:
 
 - `assertions.assert_no_single_variable_rule_solves` -- per pair, over the
   variables both halves are supposed to SHARE (`rules.OBSERVABLE_VARS` and
@@ -90,95 +91,72 @@ distinct static checks back this claim, and they ask opposite questions:
   (`derived.FLIP_VARS`): does one FIXED threshold, applied UNIFORMLY with one
   fixed orientation, answer all six halves at once -- i.e. could an operator
   deploy a bare number and skip the comparison the agent is meant to make?
+  Extracted (Task 13, T2/T3 probe redesign plan) into a reusable
+  `assertions.global_policy_report` that names WHY each variable falls
+  short, not just whether it does.
 
-**The full 7-variable sweep (Task 13, `tools/derive_episodes.py`, recorded in
-`docs/superpowers/plans/notes/2026-08-30-joint-tuning.md`) confirms all seven
-are genuinely blocked**, by one of two structural reasons:
+**The whole-suite sweep (Task 13, `tools/sweep_flip_vars.py`, printed
+live against the three shipped pairs) confirms all five `FLIP_VARS`
+members are genuinely blocked**, by one of two structural reasons:
 
 | Variable | Blocked by | Best achievable (of 6 halves) |
 |---|---|---|
-| `claimant_ecar_at_exposure_horizon` | TIE (T2, T3 each share a byte-identical far horizon) | 4/6 |
-| `claimant_ecar_before_exposure_horizon` | TIE (T1 publishes no horizon before its own exposure horizon) | 4/6 |
-| `claimant_ecar_peak_over_horizons` | INTERLEAVE (no tie) | 5/6 |
-| `claimant_ecar_min_over_horizons` | TIE (T2's own min reads its shared far horizon in both halves) | 5/6 |
-| `largest_restorable_group_ecar_gbps` | TIE (T2, T3, same far-horizon reason) | 4/6 |
-| `claimant_ecar_at_earliest_horizon` (not in `FLIP_VARS`) | INTERLEAVE (identical column to `peak_over_horizons` in this suite) | 5/6 |
-| `claimant_ecar_median_over_horizons` (not in `FLIP_VARS`) | INTERLEAVE (no tie) | 5/6 |
+| `claimant_ecar_at_exposure_horizon` | REVERSAL | 5/6 |
+| `claimant_ecar_before_exposure_horizon` | TIE | 0/6 |
+| `claimant_ecar_peak_over_horizons` | REVERSAL | 5/6 |
+| `claimant_ecar_min_over_horizons` | REVERSAL | 5/6 |
+| `largest_restorable_group_ecar_gbps` | TIE | 4/6 |
 
-A TIE means at least one pair's two halves read the identical value on that
-variable, so any single threshold necessarily assigns them the same label --
-an upper bound on what a bare-scalar policy can score, confirmed tight in
-every row above except `before_exposure_horizon` (bound 5/6, not tight: T2a's
-own value sits out of order relative to T1a's independently of the tie). An
-INTERLEAVE means no two halves tie, but sorting all six values still puts a
-`conserve`-labelled half below a `spend`-labelled one, so no single threshold
-in either orientation separates the column; confirmed by live-bisecting each
-interleaved variable's own binding edge and cross-checking the bisected point
-against a closed-form `max(spend values) - min(conserve values)` computation
-with no bisection at all (the two agree to `1e-6`).
+Every pair now publishes exactly ONE horizon (`t3`) per issuance, so
+`..._at_exposure_horizon`, `..._peak_over_horizons` and `..._min_over_
+horizons` are the identical column: `T1b=831.070` (spend), `T3b=1090.169`
+(spend), `T1a=2456.858` (conserve), `T2a=3991.015` (conserve),
+`T3a=4094.957` (conserve), `T2b=6737.691` (spend). A TIE means at least one
+pair's two halves read the identical value on that variable, so any single
+threshold necessarily assigns them the same label -- `before_exposure_
+horizon` ties at 0.0 across all six halves (no pair publishes a horizon
+before its own single exposure horizon), so there is no split point to
+sweep at all and "best achievable" reads 0/6, not the 3/6 a naive
+default-to-one-label policy would score outside this sweep's own threshold
+search. A REVERSAL means no tie exists, but the best orientation still
+misses because one pair's halves are ordered the OPPOSITE way from
+another's: `T1` and `T3` both read "more claimant exposure -> conserve"
+(spend below conserve in each), but `T2` reads the other way round
+(conserve `3991.015` below spend `6737.691`) -- exactly the design spec's
+"T2 reverses the orientation any function of claimant exposure would need."
 
-**The tightest real margin in the whole construction is 31.798 G**
-(`claimant_ecar_peak_over_horizons` and `claimant_ecar_at_earliest_horizon`,
-both blocked by the SAME pair of values: `T2a`'s network-wide total, `687.276
-G`, against `T1a`'s, `655.477 G` -- shrinking `T2a`'s total by more than
-31.798 G would re-solve both checks 6/6). The second-tightest is
-`claimant_ecar_median_over_horizons`'s **49.973 G** (`T2a` vs `T3b`). Both
-margins are two to three orders of magnitude above `cone.py`'s own documented
-~2.56e-4 Sobol sampling noise floor, so neither is a coin-flip against
-numerical noise. A prior draft of the underlying joint-tuning note reported a
-SMALLER, INCORRECT margin here (14.586 G, read off the smallest sorted-
-adjacent gap rather than the actual value the interleave has to clear) before
-a live review caught and corrected it -- see the note's own "What was wrong
-in the first pass" section for the full account; the 31.798 G figure above is
-the corrected, live-bisected one.
+**Reading the same table by PAIR, not by variable, matches the design
+spec's own framing (§3).** On `claimant_ecar_at_exposure_horizon` (=peak=
+min): `T1`'s own two halves read "more claimant exposure -> conserve"
+(spend `831.070` < conserve `2456.858`), and `T3`'s agree (spend `1090.169`
+< conserve `4094.957`) -- but `T2` is the pair that reverses it (conserve
+`3991.015` < spend `6737.691`), by exposing MORE claimant capacity in the
+half where holding the spare is *worthless* (`no_solution` on the probe),
+which is exactly the design spec's "forecast-blind / naive-exposure reflex
+defeated" story for `T1` and the "REVERSED orientation" story for `T2`. On
+`largest_restorable_group_ecar_gbps`: `T3` contributes a TIE
+(`T3a`/`T3b` both read `114.763` G, enforced bit-identically by
+`tools/derive_t1.py --require-flip-tie largest_restorable_group_ecar_gbps`)
+-- but `T1` and `T2` alone already interleave that same variable (sorted:
+`T1b=24.643` spend, `T2a=114.763` conserve, `T1a=148.931` conserve,
+`T2b=197.076` spend), so `T3`'s tie is a real, ADDITIONAL blocker of the
+gate on this one variable, not the sole one an earlier draft of the design
+spec claimed (corrected there, 2026-09-07 followup).
 
-**This 7-variable sweep replaces every narrower or earlier version of this
-claim.** A pre-2026-08-30 version of this document swept only four
-claimant-side variants against OLD, narrative placeholder claimants
-(`d0029`/`d0348` for T1, eight kanpur/agra services for T2, `d0462`/`d0212`/
-`d0363` for T3) -- none of which were real, depot-eligible competitors for
-`storm-svc-1`'s own spare pool under the corrected per-site ledger (Task 9).
-That version's own account of a near-miss (a threshold on
-`claimant_ecar_min_over_horizons` solving the OLD suite 6/6 at a single
-global 89.35 G, forcing a retune of T2's near cone) is now moot: the claimant
-identity it was tuned against no longer exists in the shipped episodes, and
-the CURRENT geometry was derived fresh against the real claimant by Task 13's
-own `tools/derive_episodes.py` run, not by patching the old numbers. See
-`docs/superpowers/plans/notes/2026-08-30-joint-tuning.md` for the complete,
-reproducible derivation (re-run the tool against the live server to
-regenerate every figure above digit for digit).
-
-**Separately, and out of scope for this claim, two known findings this
-rewrite carries forward honestly rather than silently drops:**
-
-1. A related check (`assert_wait_gold_has_no_free_escape`, W1.6) found that
-   storm-svc-1's own static protection lightpath is a free, zero-pair
-   `ip_reroute` candidate under every conserve-gold half's near-neutral
-   `reference_avoid={}` -- genuinely exploitable on exactly one of the three
-   pairs, `T1a` (taking it flips T1a's graded label from gold's `wait` to
-   `act`), and correctly a no-op on `T2b`/`T3b` (the same free candidate
-   reads the SAME label gold does there).
-   `test_a_conserve_gold_with_an_unexploitable_free_escape_passes` confirms
-   this live; only `T1a`'s case remains `xfail`, pending its own follow-up
-   workstream. Claim 2 is about the two checks above, not a claim that every
-   shortcut in the suite is closed.
-2. T2's OLDER `avoid_horizon_at_decision_hour` scoring dimension (separate
-   from the spend/conserve flip this claim is about; T3 does not carry this
-   dimension at all) turned out to be structurally broken by this same
-   plan's own `satna<->jabalpur` topology change, for the `T2a` half
-   specifically: its gold `wide` label is unreachable (`route_service`
-   under the named risk-group avoid returns zero candidates). Separately,
-   `T2a` and `T3a` share a different, narrower problem: the same jabalpur
-   `optical_reroute` both rely on is, under honest post-commit accounting, a
-   worse deal than its gold rationale assumes (a net loss for `T3a`) -- an
-   economics problem, not a reachability one, and the ONLY problem `T3a`
-   has (its gold `A` label remains perfectly reachable). Both are
-   documented in full, investigated to a definitive conclusion, and
-   deliberately deferred rather than fixed:
-   `docs/superpowers/2026-08-31-t2-t3-wide-avoid-finding.md`. This does not
-   touch the claim above (which is about the spend/conserve flip variable,
-   verified independently three times in Task 13), but a reader auditing the
-   suite's overall honesty should know about it.
+**One known, honestly-carried limitation.** `T3`'s originally intended flip
+("does the claimant's restoration need the spare at all", via a zero-spare
+`ip_reroute` groomed onto survivor lightpaths) was checked live
+(`tools/probe_restorability.py` against the built survivor pins, both at
+100 G and 50 G demand) and found NOT offered -- `solve_allocation_model`
+never lit a dedicated lightpath on the survivor path at all, so no free
+groom ever existed for `route_service` to reuse. Per the design spec's own
+documented fallback, `T3` ships as the two-corridor RESTORABILITY variant
+instead (same shape as `T2`'s "restorable or not" flip, on a second
+claimant corridor) rather than its originally intended "needs the spare or
+not" contrast -- a real, acknowledged loss of variety between `T2` and
+`T3`, not a hidden one. Recorded in full in
+`docs/superpowers/plans/notes/2026-09-06-t2-t3-authoring.md` (Task 8) and
+`docs/superpowers/specs/2026-09-06-t2-t3-probe-redesign-design.md` §4.2.
 
 `pair_solved` over three pairs takes values in {0, 1/3, 2/3, 1}: enough to tell
 a working harness from a broken one, not enough to separate luck from skill.
