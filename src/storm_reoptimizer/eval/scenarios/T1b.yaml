@@ -183,5 +183,5 @@ metadata:
   spares_on_hand: 1
   gold_spare_action: spend
   widest_avoid_feasible: true
-  claimed_competing_ecar_gbps: 24.64
+  claimed_competing_ecar_gbps: 24.6
   claimed_competing_ecar_at: t3

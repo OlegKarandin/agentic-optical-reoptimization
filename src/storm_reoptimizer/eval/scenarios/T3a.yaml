@@ -179,7 +179,7 @@ metadata:
   # (gold.rationale, verbatim) -- the honest LARGEST RESTORABLE GROUP figure,
   # not a network-wide sum. Billed at the NEAR horizon (t2) -- NOT the SUT's
   # own exposure_horizon_hours-derived t6. Task 14, 2026-08-30.
-  claimed_competing_ecar_gbps: 67.420
+  claimed_competing_ecar_gbps: 67.4
   claimed_competing_ecar_at: t2
   # For the record (Task 14): FlipScalars.largest_restorable_group_ecar_gbps
   # at THIS half's own exposure horizon (t6, the FAR horizon) -- 51.408 G,
