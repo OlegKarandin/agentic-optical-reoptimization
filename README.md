@@ -65,7 +65,11 @@ variants — `pair_solved` did not move (still `0.00` for both, over all three
 pairs). The extra correct episode is `D1`, not a change within any pair; see
 "Reading `episodes correct` honestly" below for why, and
 `docs/superpowers/rehearsals/D1.md`'s rewritten Q3 for the live-verified
-mechanism.
+mechanism. **Superseded 2026-09-06 by the T2/T3 probe redesign plan**, which
+moved this further to 4/7 (T2 and T3 rebuilt on T1's own label rule) — see
+the results table above and "Reading `episodes correct` honestly" below for
+the current mechanism; this entry is kept only as the historical record of
+the 1/7 -> 2/7 step.
 
 **Claim 1 (provable).** The agent beats every fixed policy that does not read
 the forecast: the twins' menus and observables are identical by construction,
