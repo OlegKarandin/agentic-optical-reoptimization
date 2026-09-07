@@ -34,13 +34,15 @@ python -m storm_reoptimizer.eval.suite
 
 ### Results
 
-The table `render_results_table()` produces, from a real run against
-`eval/states/loaded-s17.json` (seed 17) over all seven episodes:
+The table `render_results_table()` produces, from a real run (2026-09-07,
+T2/T3 probe redesign plan, Task 14) against the three pairs' own state files
+(`eval/states/loaded-s17.json`, `t2-jalgaon-s17.json`, `t3-jalgaon-s17.json`,
+all seed 17) over all seven episodes:
 
-| decider | pair_solved | episodes correct | notes |
-|---|---|---|---|
-| baseline:at_deadline | 0.00 | 2/7 | fixed policy: same input in both halves, so exactly one half per pair |
-| baseline:immediate | 0.00 | 2/7 | fixed policy: same input in both halves, so exactly one half per pair |
+| decider | pair_solved | episodes correct | regret_gbps_h | inert_commits | notes |
+|---|---|---|---|---|---|
+| baseline:at_deadline | 0.00 | 4/7 | 250.0 | 0 | fixed policy: same input in both halves, so exactly one half per pair |
+| baseline:immediate | 0.00 | 4/7 | 250.0 | 0 | fixed policy: same input in both halves, so exactly one half per pair |
 
 Budget: seed(s) [17] x 7 episodes x N=3 = 42 rollouts (both baseline variants
 are collapsed to one real rollout per episode by `collapse_deterministic`; the
