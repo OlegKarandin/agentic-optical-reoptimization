@@ -795,7 +795,13 @@ async def derive(args: argparse.Namespace) -> dict:
         # not a separately-rounded figure of this tool's own -- so the
         # scenario's declared claim matches, bit for bit, what a real
         # rollout would actually show the agent (T1a.yaml/T2a.yaml's own
-        # precedent, "two readers, two roundings, one quantity").
+        # precedent, "two readers, two roundings, one quantity"). Restricted
+        # to the groups whose OWN `members` intersect `--claimants` -- the
+        # SAME filter `assertions.assert_claim_is_one_lightpath` applies
+        # (`claimant_ids & set(g.get("members") or ())`) -- not the
+        # network-wide largest group at this horizon, which can name a
+        # service outside this pair's own claim once more than one
+        # depot-eligible group exists at the horizon.
         for label, scenario in (("A", scenario_a), ("B", scenario_b)):
             obs = build_observation(
                 scenario, args.decision_hour,
@@ -810,11 +816,22 @@ async def derive(args: argparse.Namespace) -> dict:
                     f"depot-eligible group at {exposure_horizon!r} -- the "
                     f"claimants are not reading as exposed/depot-eligible; "
                     f"check --claimants and --depot")
-            claimed = groups[0]["ecar_gbps"]
+            claimant_ids = set(claimants)
+            own_groups = [g for g in groups
+                         if claimant_ids & set(g.get("members") or ())]
+            if not own_groups:
+                raise SystemExit(
+                    f"half {label}: none of observation._restorable_groups' "
+                    f"{len(groups)} group(s) at {exposure_horizon!r} have "
+                    f"members intersecting --claimants {sorted(claimant_ids)!r} "
+                    f"-- the claimants are not reading as exposed/"
+                    f"depot-eligible; check --claimants and --depot")
+            largest_group = max(own_groups, key=lambda g: g["ecar_gbps"])
+            claimed = largest_group["ecar_gbps"]
             print(f"half {label} claimed_competing_ecar_gbps "
-                 f"(observation._restorable_groups, largest group at "
-                 f"{exposure_horizon!r}) = {claimed!r}  members="
-                 f"{groups[0]['members']}")
+                 f"(observation._restorable_groups, largest of the claim's "
+                 f"OWN groups at {exposure_horizon!r}) = {claimed!r}  "
+                 f"members={largest_group['members']}")
             new_metadata = {**scenario.metadata,
                             "claimed_competing_ecar_gbps": claimed,
                             "claimed_competing_ecar_at": exposure_horizon}
