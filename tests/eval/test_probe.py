@@ -1,14 +1,29 @@
 """probe.py, pure: a fake `call` answering route_service, no server. The
 menu is the same shape tests/eval/test_replay.py's MENU_CANDIDATES uses."""
 import asyncio
+import functools
+from contextlib import asynccontextmanager
+from pathlib import Path
 
 import pytest
 
+from storm_reoptimizer.eval import oracle
 from storm_reoptimizer.eval.probe import (
     MAX_PROBES_PER_DECISION, ProbeBinding, ProbeError, answer_probe,
 )
-from storm_reoptimizer.eval.runner import ServiceGeometry
-from storm_reoptimizer.eval.scenario_file import ConeAtHorizon, Issuance
+from storm_reoptimizer.eval.runner import (
+    EVENT_TYPE, ServiceGeometry, horizon_risk_group_asset_ids, run_episode,
+    service_geometry,
+)
+from storm_reoptimizer.eval.scenario_file import (
+    ConeAtHorizon, Issuance, load_all_scenarios,
+)
+from storm_reoptimizer.events.filters import get_filter
+from storm_reoptimizer.geo_mapper import load_edges
+from storm_reoptimizer.mcp_client import call_tool_json, connect_server
+
+TOPOLOGY_PATH = (Path(__file__).parent.parent.parent / "src"
+                 / "storm_reoptimizer" / "data" / "toy_india_topology.json")
 
 INERT = {"lever": "ip_reroute", "reused_lightpaths": [], "new_lightpaths": [],
          "shortfall_gbps": 0.0}
@@ -154,3 +169,56 @@ def test_the_cap_is_per_decision_and_begin_resets_it():
 def test_a_probe_outside_any_decision_is_rejected():
     with pytest.raises(ProbeError, match="decision"):
         asyncio.run(_binding()("c", "rg_x"))
+
+
+def test_the_probe_answers_what_the_replay_then_does_on_t1a(
+    loaded_state_path, local_server_command, local_server_env,
+):
+    """Spec 8.1: for the same service and group, the probe's cheapest full
+    restore is exactly what `restore_after_cuts` spends on it after the cut.
+    T1a: the hold rollout restores the dhulia claimant at t3 with one pair
+    at jalgaon and one at dhulia."""
+    scenario = load_all_scenarios()["T1a"]
+    claimant = scenario.metadata["claimant_services"][0]
+    horizon, rg_id = oracle.spend_risk_group(scenario)
+
+    @asynccontextmanager
+    async def _connect():
+        async with connect_server(
+            TOPOLOGY_PATH, server_command=local_server_command,
+            env=local_server_env,
+            extra_args=["--state", str(loaded_state_path)],
+        ) as client:
+            yield client
+
+    async def _probe():
+        edges = load_edges(TOPOLOGY_PATH)
+        async with _connect() as client:
+            geometry = await service_geometry(client, TOPOLOGY_PATH, edges=edges)
+            topo = await call_tool_json(client, "get_topology", {"layer": "optical"})
+            issuance = scenario.forecast[scenario.decision_hour]
+            await call_tool_json(client, "define_risk_group", {
+                "rg_id": rg_id,
+                "asset_ids": horizon_risk_group_asset_ids(
+                    issuance.horizons[horizon], scenario.damage_radius_km,
+                    edges=edges, oms=topo["oms"], filter_fn=get_filter(EVENT_TYPE)),
+                "metadata": {"test": "probe-equals-replay"}})
+            services = (await call_tool_json(client, "get_services"))["services"]
+            return await answer_probe(
+                functools.partial(call_tool_json, client),
+                service_id=claimant, risk_group_id=rg_id, geometry=geometry,
+                issuance=issuance, damage_radius_km=scenario.damage_radius_km,
+                demands={s["id"]: float(s["demand_gbps"]) for s in services})
+
+    async def _replay():
+        async with _connect() as client:
+            return await run_episode(client, scenario, oracle.hold_decider(scenario),
+                                     topology_path=TOPOLOGY_PATH)
+
+    answer = asyncio.run(_probe())
+    trace = asyncio.run(_replay())
+    restored = next(r for r in trace.restorations
+                    if r["service_id"] == claimant and r["outcome"] == "restored")
+    assert answer.full_restore_candidates > 0
+    assert answer.min_spares_needed_by_site == restored["spares"]
+    assert restored["lever"] in answer.levers
