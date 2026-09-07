@@ -10,7 +10,7 @@ import pytest
 from storm_reoptimizer.eval import oracle
 from storm_reoptimizer.eval.assertions import (
     assert_both_legs_exposed, assert_flip_dominates,
-    assert_pair_derived_geometry_is_equal,
+    assert_pair_derived_geometry_is_equal, assert_probe_flips,
     assert_each_baseline_variant_ties, assert_gold_choices_differ,
     assert_gold_matches_outcomes, assert_gold_spare_action_is_grounded,
     assert_issuance_prefix_shared,
@@ -50,8 +50,14 @@ TOPOLOGY_PATH = (
 # don't silently stop executing) but every test that reads it is skipped via
 # the `stale_pair` marker (see conftest.py's `pytest_collection_modifyitems`)
 # with a reason pointing back here, pending T2/T3's own redesign turn.
-PAIRS = ("T1",)
-STALE_PAIRS = ("T2", "T3")
+#
+# T2 REBUILT (2026-09-06 plan, Task 10) on the T1 spend-or-hold machinery
+# (spec docs/superpowers/specs/2026-09-06-t2-t3-probe-redesign-design.md
+# §4.1): its live invariants are current again, so it moves out of
+# STALE_PAIRS and into PAIRS. T3 stays stale pending its own redesign turn
+# (Task 11).
+PAIRS = ("T1", "T2")
+STALE_PAIRS = ("T3",)
 
 
 def _pair_params(*, live=PAIRS, stale=STALE_PAIRS):
@@ -126,9 +132,27 @@ def test_each_baseline_variant_scores_exactly_one_half(pair, connect_for):
     asyncio.run(_run())
 
 
-# T1's flip variable (2026-09-05 redesign) is the SPEND/HOLD decision, which
-# the harness expresses as the timing decision plus a real, spare-consuming
-# objective pick -- `metadata.label_rule: spare_action_by_deadline`, graded by
+@pytest.mark.parametrize("pair", _pair_params())
+def test_pair_probe_flips(pair, connect_for):
+    """Spec 5.3: the pair's flip, checked by the code path that answers the
+    agent. T1 declares no probe_flip, so its claimants must probe
+    identically in both halves; T2 flips on restorability."""
+    episodes = load_all_scenarios()
+    a, b = episodes[f"{pair}a"], episodes[f"{pair}b"]
+
+    async def _run():
+        async with connect_for(a.state_file)() as client_a, \
+                connect_for(b.state_file)() as client_b:
+            await assert_probe_flips(client_a, client_b, a, b,
+                                     topology_path=TOPOLOGY_PATH)
+
+    asyncio.run(_run())
+
+
+# T1/T2's flip variable (2026-09-05 redesign, extended to T2 by the 2026-09-06
+# probe redesign) is the SPEND/HOLD decision, which the harness expresses as
+# the timing decision plus a real, spare-consuming objective pick --
+# `metadata.label_rule: spare_action_by_deadline`, graded by
 # `scoring._spare_action_by_deadline_label`. The one decision this pair is NOT
 # testing is therefore `constraints`: which avoid set the escape is searched
 # under is free, as long as a genuine escape is still found and spent.
@@ -144,7 +168,11 @@ def test_each_baseline_variant_scores_exactly_one_half(pair, connect_for):
 # rollout that also acts at t0, which is NOT the gold rollout (that mistake
 # was live in T2/T3's fixtures below until 2026-08-23, where it really did
 # move the graded label).
-def _t1_gold_replay(scenario):
+#
+# RENAMED from `_t1_gold_replay` (2026-09-06 plan, Task 10): the body reads
+# everything off the scenario object, not off anything T1-specific, so T2's
+# halves reuse it unchanged once they share the same `label_rule`.
+def _spend_or_hold_gold_replay(scenario):
     """`(gold_decisions, gold_by_hour, objective_fn)` reproducing whichever
     of `oracle.spend_decider`/`oracle.hold_decider` this half's own
     `gold.label` names."""
@@ -181,10 +209,10 @@ def _t1_gold_replay(scenario):
         None, None)
 
 
-@pytest.mark.parametrize("half", ("T1a", "T1b"))
-def test_t1_non_flip_decisions_are_non_binding(half, connect_for):
+@pytest.mark.parametrize("half", ("T1a", "T1b", "T2a", "T2b"))
+def test_half_non_flip_decisions_are_non_binding(half, connect_for):
     scenario = load_all_scenarios()[half]
-    gold_decisions, gold_by_hour, objective_fn = _t1_gold_replay(scenario)
+    gold_decisions, gold_by_hour, objective_fn = _spend_or_hold_gold_replay(scenario)
 
     async def _run():
         await assert_non_flip_decisions_non_binding(
@@ -196,15 +224,14 @@ def test_t1_non_flip_decisions_are_non_binding(half, connect_for):
     asyncio.run(_run())
 
 
-@pytest.mark.parametrize("half", ("T1a", "T1b"))
-def test_t1_both_legs_exposed(half, connect_for):
+@pytest.mark.parametrize("half", ("T1a", "T1b", "T2a", "T2b"))
+def test_half_both_legs_exposed(half, connect_for):
     """Invariant 9a (redesign spec 4.7): the SUT's WORKING and PROTECTION
     legs each carry a non-trivial cut probability at the decision-hour
-    issuance's own latest horizon, in BOTH halves. This is what makes
-    `t1-svc-jalgaon-indore` CLAUDE.md's canonical case rather than the old
-    T1's technicality -- storm-svc-1's protection leg (satna<->jhansi) sat
-    outside every T1 cone, so switchover absorbed everything and the
-    spend/hold comparison tested nothing."""
+    issuance's own latest horizon, in BOTH halves. This is what makes each
+    pair's SUT CLAUDE.md's canonical case rather than a technicality -- a
+    protection leg that sits outside every cone would let switchover absorb
+    everything and the spend/hold comparison would test nothing."""
     scenario = load_all_scenarios()[half]
 
     async def _run():
@@ -215,16 +242,16 @@ def test_t1_both_legs_exposed(half, connect_for):
     asyncio.run(_run())
 
 
-@pytest.mark.parametrize("half", ("T1a", "T1b"))
-def test_t1_spend_is_real(half, connect_for):
+@pytest.mark.parametrize("half", ("T1a", "T1b", "T2a", "T2b"))
+def test_half_spend_is_real(half, connect_for):
     """Invariant 9b (redesign spec 4.7): the escape `oracle.spend_decider`
     would actually take exists, moves the service, does not ride its own
     protection corridor, costs exactly one transponder pair at the depot,
     and lands the service clear of the cone. Run on BOTH halves, not just
     the spend one: the two halves share a state file and a menu, so "spend"
     has to be a real, available option in the half where gold says to HOLD
-    it too -- otherwise T1a's gold would be correct by absence of an
-    alternative rather than by comparison."""
+    it too -- otherwise the hold half's gold would be correct by absence of
+    an alternative rather than by comparison."""
     scenario = load_all_scenarios()[half]
 
     async def _run():
@@ -235,8 +262,8 @@ def test_t1_spend_is_real(half, connect_for):
     asyncio.run(_run())
 
 
-@pytest.mark.parametrize("half", ("T1a", "T1b"))
-def test_t1_gold_matches_oracle_outcomes(half, connect_for):
+@pytest.mark.parametrize("half", ("T1a", "T1b", "T2a", "T2b"))
+def test_half_gold_matches_oracle_outcomes(half, connect_for):
     """The frozen `gold.label`/`gold.outcome_gbps_h` are re-enumerated LIVE
     (`gold.enumerate_outcomes`, the same function `tools/compute_gold.py`
     wrote them with) and must still argmin to the frozen label by at least
@@ -809,12 +836,14 @@ def test_a_conserve_gold_has_no_free_escape(connect_for):
 # fixed `candidate_0` (an ip_reroute costing 0 pairs) for BOTH halves -- a
 # deliberate, non-representative placeholder, not a claim about what T1b's
 # real committed action costs. That gap is closed since the 2026-09-05
-# redesign (Task 15): T1's gold replay is now `_t1_gold_replay` above, which
-# builds the spend half's objective from `oracle.escape_objective` -- the same
-# RULE `oracle.spend_decider` (and therefore the enumerator that computed
-# `gold.label`) is wired to, so it necessarily picks a candidate that changes
-# the working path, clears the SUT's own protection, and charges a real
-# transponder pair. `test_t1_spend_is_real` checks that exact pick live.
+# redesign (Task 15): T1's gold replay is now `_spend_or_hold_gold_replay`
+# above (renamed from `_t1_gold_replay` when T2 joined it, Task 10 of the
+# 2026-09-06 plan), which builds the spend half's objective from
+# `oracle.escape_objective` -- the same RULE `oracle.spend_decider` (and
+# therefore the enumerator that computed `gold.label`) is wired to, so it
+# necessarily picks a candidate that changes the working path, clears the
+# SUT's own protection, and charges a real transponder pair.
+# `test_half_spend_is_real` checks that exact pick live.
 _GOLD_COMMITTED_LEVER = {
     "T1a": None,                 # gold label "hold": the gold rollout never
                                   # acts on the SUT at all, so it commits no
@@ -824,12 +853,13 @@ _GOLD_COMMITTED_LEVER = {
                                   # transponder pair at the depot is an
                                   # optical_reroute (assert_spend_is_real
                                   # checks exactly that candidate, live)
-    "T2a": "optical_reroute",    # gold.rationale: "an optical_reroute via
-                                  # jabalpur costing 1 pair"; matches
-                                  # _T2_NON_FLIP_GOLD_DECISIONS' candidate_2
-    "T2b": "ip_reroute",         # gold.rationale: "an ip_reroute that reuses
-                                  # the current lightpath"; matches
-                                  # _T2_NON_FLIP_GOLD_DECISIONS' candidate_0
+    "T2a": None,                  # gold label "hold" (2026-09-06 redesign):
+                                  # T2's gold is enumerated the same way T1's
+                                  # is -- the gold rollout never acts on the
+                                  # SUT, so it commits no lever
+    "T2b": "optical_reroute",    # gold label "spend": the spend half's only
+                                  # real escape is a new lightpath over a
+                                  # buried spur, same shape as T1b
     "T3a": "optical_reroute",    # gold.rationale: candidate_4, optical_reroute
                                   # via jabalpur; matches label_by_lever's "A"
     "T3b": "ip_reroute",         # gold.rationale: candidate_0, ip_reroute;
@@ -880,6 +910,22 @@ FROZEN_SCALARS_PATH = (
 # unchanged). D1 moved in NEITHER section -- both its scalars are saturated
 # (`sut_p_cut_at_exposure_horizon: 1.0`, claimant aggregates 1100.0/200.0), so
 # the model change could not shift them.
+#
+# RE-FROZEN AGAIN 2026-09-06 (T2/T3 probe redesign plan, Task 10), for the
+# same reason and by the same tool (`tools/freeze_derived_scalars.py`, which
+# Task 9 generalised to read each scenario's OWN `state_file` now that the
+# suite spans several): T2a/T2b were re-authored from scratch on the jalgaon
+# machinery against `eval/states/t2-jalgaon-s17.json`, so their scalars are
+# about a different SUT, a different state file and a different forecast
+# block than the ones this snapshot held.
+#
+# Exactly what moved, diffed entry by entry against the pre-Task-10 snapshot:
+# `derived` and `flip` for T2a and T2b ONLY. D1, T1a, T1b, T3a and T3b are
+# bit-identical across the re-freeze -- which is the point: the probability
+# model did not move, one pair's geometry did, and the diff proves the
+# difference. (T3a/T3b are still the 2026-08-31 episodes at this point; Task
+# 11 re-authors them and will have to re-freeze once more, with the same
+# entry-by-entry diff.)
 #
 # The guarantee below is unchanged and bites again from this snapshot forward.
 def test_the_probability_model_scalars_are_unmoved(connect_for):
