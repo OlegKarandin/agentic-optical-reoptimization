@@ -417,6 +417,58 @@ class _RecordingDecider:
         return await self.inner.objective(obs, menu)
 
 
+class _ProbingDecider:
+    """Wraps a decider; at every timing call probes the first non-SUT service
+    shown, under the latest horizon's group, through whatever the runner
+    bound. Proves the binding is live during `timing` and torn down after
+    the hour."""
+
+    def __init__(self, inner):
+        self.inner = inner
+        self.name = inner.name
+        self.answers = []
+        self.bound = []
+
+    def bind_probe(self, probe):
+        self.bound.append(probe)
+
+    async def timing(self, obs):
+        probe = self.bound[-1]
+        others = [s for s in obs.exposure if s != obs.service_under_test]
+        if others and obs.risk_group_ids:
+            horizon = list(obs.risk_group_ids)[-1]
+            self.answers.append(await probe(others[0], obs.risk_group_ids[horizon]))
+        return await self.inner.timing(obs)
+
+    async def constraints(self, obs, unconstrained_menu=None):
+        return await self.inner.constraints(obs, unconstrained_menu)
+
+    async def objective(self, obs, menu):
+        return await self.inner.objective(obs, menu)
+
+
+def test_the_runner_binds_a_probe_per_hour_and_records_every_call(
+    tmp_path, loaded_state_path, local_server_command, local_server_env,
+):
+    decider = _ProbingDecider(ScriptedDecider("hold"))
+    trace = asyncio.run(_run(
+        _scenario(tmp_path), decider,
+        loaded_state_path, local_server_command, local_server_env))
+    # Bound once per hour, unbound (None) after each: [b, None, b, None, ...]
+    assert decider.bound[-1] is None
+    assert len([b for b in decider.bound if b is not None]) == len(trace.hours)
+    probed_hours = [h for h in trace.hours if h.get("probes")]
+    assert probed_hours, "no hour showed a second exposed service to probe"
+    record = probed_hours[0]["probes"][0]
+    assert record["decision"] == "timing"
+    assert record["error"] is None
+    assert set(record["answer"]) == {"status", "full_restore_candidates",
+                                     "min_spares_needed_by_site", "levers"}
+    assert record["answer"] == decider.answers[0]
+    # The probe's route_service call is counted like every other tool call.
+    assert trace.tool_calls > 0
+
+
 def test_the_constraints_step_is_shown_the_menu_it_is_about_to_narrow(
     tmp_path, loaded_state_path, local_server_command, local_server_env,
 ):

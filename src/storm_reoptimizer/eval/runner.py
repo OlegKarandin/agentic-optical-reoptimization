@@ -30,6 +30,7 @@ Every server interaction goes through mcp_client.call_tool_json against a
 real subprocess, per CLAUDE.md's hard seam."""
 from __future__ import annotations
 
+import functools
 import json
 import time
 from dataclasses import asdict, dataclass, field
@@ -50,6 +51,7 @@ from .decisions import ConstraintDecision, Decider, candidate_index
 from .ledger import SpareLedger, spares_needed
 from .observation import build_observation, latest_issuance, lead_time_hours_for
 from .plans import PlanTranslationError, build_topology_index, plan_from_candidate
+from .probe import ProbeBinding, answer_probe
 from .replay import restore_after_cuts
 from .scenario_file import ConeAtHorizon, Issuance, ScenarioFile
 
@@ -899,7 +901,27 @@ async def run_episode(
 
         obs = build_observation(scenario, hour, risk_group_ids=rg_ids,
                                 **obs_kwargs)
+        # T2/T3 probe redesign (§5.1): one read-only probe per hour, bound
+        # to any decider that can take it, answered with the replay's own
+        # route_service posture, guarded against ids the observation does not
+        # carry, and capped per decision. Records land on this hour's trace.
+        # `answer_probe` takes service_id/risk_group_id keyword-only, while
+        # ProbeBinding.__call__ passes them positionally -- a plain
+        # functools.partial cannot bridge that (its extra positional args
+        # would try to fill `call` a second time), so bind everything else
+        # with partial and forward the two positional args by keyword here.
+        _probe_answer = functools.partial(
+            answer_probe, counting.call, geometry=geometry,
+            issuance=issuance, damage_radius_km=scenario.damage_radius_km,
+            demands=record["demands"])
+        probe = ProbeBinding(
+            answer=lambda service_id, risk_group_id: _probe_answer(
+                service_id=service_id, risk_group_id=risk_group_id),
+            service_ids=set(obs.exposure), risk_group_ids=set(rg_ids.values()))
+        if hasattr(decider, "bind_probe"):
+            decider.bind_probe(probe)
         record.update(observation_record(obs, geometry))
+        probe.begin("timing")
         timing = await decider.timing(obs)
         record["timing"] = timing.to_dict()
         # What the DECIDER was shown, as against the ground truth above. Read
@@ -923,10 +945,10 @@ async def run_episode(
             probe_args = ConstraintDecision(
                 avoid={}, reasoning="unconstrained probe"
             ).route_service_args(scenario.service_under_test)
-            probe = unconstrained_menu_projection(
+            unconstrained = unconstrained_menu_projection(
                 await counting.call("route_service", probe_args),
                 geometry.oms_nodes)
-            record["unconstrained_menu"] = probe
+            record["unconstrained_menu"] = unconstrained
             last_rejection: dict | None = None
             committed = False
             for iteration in range(MAX_ITERATIONS):
@@ -937,7 +959,8 @@ async def run_episode(
                        "spares_spent": ledger.spent,
                        "actions_taken": action_payloads(
                            actions, hours=scenario.hours)})
-                constraints = await decider.constraints(obs, probe)
+                probe.begin("constraints")
+                constraints = await decider.constraints(obs, unconstrained)
                 menu = await counting.call(
                     "route_service",
                     constraints.route_service_args(scenario.service_under_test))
@@ -949,6 +972,7 @@ async def run_episode(
                     menu, geometry, scenario.service_under_test,
                     issuance=issuance, damage_radius_km=scenario.damage_radius_km,
                     demand_gbps=sut_demand_gbps)
+                probe.begin("objective")
                 choice = await decider.objective(obs, menu)
                 step = {"iteration": iteration,
                         "constraints": constraints.to_dict(),
@@ -1092,6 +1116,9 @@ async def run_episode(
             actions.extend(restore_actions)
             record["restorations"] = restore_records
             all_restorations.extend(restore_records)
+        record["probes"] = list(probe.records)
+        if hasattr(decider, "bind_probe"):
+            decider.bind_probe(None)
         hours.append(record)
 
     final_routing = await counting.call("simulate_ip_routing")
