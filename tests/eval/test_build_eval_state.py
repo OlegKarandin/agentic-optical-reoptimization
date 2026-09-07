@@ -223,18 +223,28 @@ def test_the_t2_and_t3_pin_sets_are_the_specs():
     assert t2["t2-claimant-jalgaon-khandwa"]["protected"] is False
     t3 = {p["id"]: p for p in build_eval_state.T3_PINS}
     assert t3["t3-svc-jalgaon-nagpur"]["protected"] is False
+    # khandwa + buldhana, NOT spec 4.2's khandwa + dhulia: the live solve
+    # gives the unprotected SUT a working leg whose only near-depot aerial
+    # span IS `jalgaon<->dhulia`, so a dhulia claimant would be perfectly
+    # correlated with the SUT and its realized cut WOULD BE the SUT's own
+    # first-hop cut (2026-09-06 plan, Task 11 -- see T3_PINS' own comment and
+    # tools/derive_t3.py's docstring). buldhana is khandwa's structural twin:
+    # exactly two links, both aerial, with a BURIED onward link past the far
+    # end so the restoration replay can reach it when the alternative span is
+    # outside the footprint.
     assert {t3["t3-claimant-jalgaon-khandwa"]["dst"],
-            t3["t3-claimant-jalgaon-dhulia"]["dst"]} == {"khandwa", "dhulia"}
+            t3["t3-claimant-jalgaon-buldhana"]["dst"]} == {"khandwa",
+                                                           "buldhana"}
     assert not hasattr(build_eval_state, "T3_SURVIVOR_PINS")
     assert {p["id"] for p in build_eval_state.T3_PINS} == {
         "t3-svc-jalgaon-nagpur", "t3-claimant-jalgaon-khandwa",
-        "t3-claimant-jalgaon-dhulia"}
+        "t3-claimant-jalgaon-buldhana"}
     assert build_eval_state.PIN_SETS == {
         "t2": build_eval_state.T2_PINS, "t3": build_eval_state.T3_PINS}
     # Pins solve in order: SUT, then claimants.
     ids = [p["id"] for p in build_eval_state.T3_PINS]
     assert ids.index("t3-svc-jalgaon-nagpur") < ids.index(
-        "t3-claimant-jalgaon-dhulia")
+        "t3-claimant-jalgaon-buldhana")
 
 
 def test_the_pair_state_files_carry_their_pins_and_the_base(eval_state_paths):

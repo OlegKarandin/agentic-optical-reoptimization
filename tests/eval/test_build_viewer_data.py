@@ -146,7 +146,10 @@ def test_the_topology_is_folded_in_with_its_mount_types(folded):
 
 
 def test_cone_polygons_are_flipped_to_lat_lon_once(folded):
-    ring = folded["episodes"]["T3b"]["forecast"]["t1"]["t6"]["polygon"]
+    # `t3`, not the retired 2026-08-31 T3's `t6`: the re-authored T3 (plan
+    # 2026-09-06, Task 11) runs on consecutive hour labels t0..t7 with the
+    # exposure horizon at t3, like T1 and T2.
+    ring = folded["episodes"]["T3b"]["forecast"]["t1"]["t3"]["polygon"]
     # India: latitude 8-35, longitude 68-97. A lon-first ring would put ~79
     # in the first slot.
     assert all(8 < lat < 35 for lat, _ in ring)
@@ -174,8 +177,11 @@ def test_restorations_survive_load_run(folded):
 
 def test_the_gold_label_and_spare_action_travel_with_the_episode(folded):
     gold = folded["episodes"]["T3b"]["gold"]
-    assert gold["label"] == "B"
-    assert gold["gold_spare_action"] == "conserve"
+    # The re-authored T3 (plan 2026-09-06, Task 11) grades the spend/hold
+    # axis like T1 and T2, so its labels are `hold`/`spend` rather than the
+    # retired episode's `A`/`B` avoid-width labels.
+    assert gold["label"] == "spend"
+    assert gold["gold_spare_action"] == "spend"
 
 
 def test_a_pre_change_trace_folds_without_the_new_keys(tmp_path):

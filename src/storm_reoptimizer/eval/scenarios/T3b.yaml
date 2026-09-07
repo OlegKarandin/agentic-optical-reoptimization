@@ -1,173 +1,189 @@
 id: T3b
 pair: T3
 seed: 17
-state_file: eval/states/loaded-s17.json
-service_under_test: storm-svc-1
+state_file: eval/states/t3-jalgaon-s17.json
+service_under_test: t3-svc-jalgaon-nagpur
 track: hudhud
-hours: [t0, t1, t2, t6]
+hours:
+- t0
+- t1
+- t2
+- t3
+- t4
+- t5
+- t6
+- t7
 decision_hour: t1
-lead_time_hours: 1
-spares_on_hand: 1            # transponder PAIRS: one new lightpath each
-depot_site: satna            # the site whose depot is scarce in this episode
-# Spare transponders held PER SITE. Only depot_site binds; every other site is
-# stocked well enough that a candidate is never limited by it, which
-# assert_depot_is_the_binding_site checks. Lighting a new lightpath consumes
-# one transponder at EACH of its two endpoint sites.
-spare_inventory: {satna: 1}
-damage_radius_km: 74
-reference_avoid: {}          # neutral third value: current exposure only --
-                              # also the ACTUAL avoid the gold constraints
-                              # decision uses (constraints is non-flip here)
-# GEOMETRY FROZEN 2026-08-30 (Task 14, exposure-and-depot plan) -- see
-# T3a.yaml's header comment for the full statement of the construction (the
-# real satna-homed claimant identity, why the shared near-horizon radius
-# moved from 228.0754620624 km to 290.0 km, and the fixed-point-count
-# argument for why storm-svc-1's own near-horizon p_cut is the exact same
-# float, 0.0, in both halves).
-#
-# The FAR horizon (t6) is UNCHANGED and byte-identical to T3a's (and to the
-# pre-2026-08-30 file): storm-svc-1's own point, width 320, p_cut
-# 0.25880827038986803 -> ecar 77.64248111696041 G.
-#
-# ONLY the near horizon's CENTRE differs from T3a's: bearing 213.0 deg (204.0
-# deg in T3a) at the SAME 290.0 km radial offset from storm-svc-1's own
-# point, so storm-svc-1's own near-horizon exposure stays the exact same
-# float across the halves. What DOES differ is where the real
-# claimant-satna-jabalpur corridor falls: this centre sits closer to the
-# corridor's own strongest exposure than T3a's. Confirmed live:
-# claimant-satna-jabalpur-fwd's own p_cut at this cone is
-# 0.6115358205539025 -> group ecar (2 * p_cut * 100 G, the co-terminating
-# fwd+rev pair) = 122.3071641107805 G.
+lead_time_hours: 2
+spares_on_hand: 1
+depot_site: jalgaon
+spare_inventory:
+  jalgaon: 1
+damage_radius_km: 50.0
+reference_avoid: {}
 forecast:
-  t0:                        # BYTE-IDENTICAL to T3a's t0 -- UNCHANGED, see
-                              # T3a.yaml's comment
-    t6: {cone: {type: Polygon, coordinates: [[[79.6, 23.40469], [79.71379, 23.39091], [79.81982, 23.35048], [79.91088, 23.28616], [79.98074, 23.20235], [80.02466, 23.10474], [80.03964, 23.0], [80.02466, 22.89526], [79.98074, 22.79765], [79.91088, 22.71384], [79.81982, 22.64952], [79.71379, 22.60909], [79.6, 22.59531], [79.48621, 22.60909], [79.38018, 22.64952], [79.28912, 22.71384], [79.21926, 22.79765], [79.17534, 22.89526], [79.16036, 23.0], [79.17534, 23.10474], [79.21926, 23.20235], [79.28912, 23.28616], [79.38018, 23.35048], [79.48621, 23.39091], [79.6, 23.40469]]]},
-         width_km: 90, center: {lat: 23.0, lon: 79.6}}
-  t1:                        # the revision -- structurally identical to
-                              # T3a's (same two horizons, same t6, same
-                              # 290.0 km t2-to-t6 distance) with the "t2"
-                              # claimant horizon centred -- THE FLIP -- FROZEN
-                              # 2026-08-30: bearing 213.0 deg, radius 290.0
-                              # km, width 90 -- see the header comment for the
-                              # full derivation and numbers. The t6 horizon
-                              # (storm-svc-1's own corridor) is UNCHANGED and
-                              # BYTE-IDENTICAL to T3a's.
-    t2: {cone: {type: Polygon, coordinates: [[[79.78843, 23.07297], [79.90194, 23.05918], [80.00772, 23.01875], [80.09855, 22.95444], [80.16824, 22.87062], [80.21206, 22.77302], [80.227, 22.66827], [80.21206, 22.56353], [80.16824, 22.46593], [80.09855, 22.38211], [80.00772, 22.3178], [79.90194, 22.27737], [79.78843, 22.26358], [79.67492, 22.27737], [79.56914, 22.3178], [79.47831, 22.38211], [79.40861, 22.46593], [79.3648, 22.56353], [79.34985, 22.66827], [79.3648, 22.77302], [79.40861, 22.87062], [79.47831, 22.95444], [79.56914, 23.01875], [79.67492, 23.05918], [79.78843, 23.07297]]]},
-         width_km: 90, center: {lat: 22.66827310352912, lon: 79.78842812540495}}
-    t6: {cone: {type: Polygon, coordinates: [[[81.32778, 26.29447], [81.73821, 26.24544], [82.12068, 26.10169], [82.44911, 25.87302], [82.70113, 25.57501], [82.85955, 25.22797], [82.91358, 24.85555], [82.85955, 24.48313], [82.70113, 24.1361], [82.44911, 23.83809], [82.12068, 23.60942], [81.73821, 23.46567], [81.32778, 23.41664], [80.91734, 23.46567], [80.53487, 23.60942], [80.20644, 23.83809], [79.95443, 24.1361], [79.796, 24.48313], [79.74197, 24.85555], [79.796, 25.22797], [79.95443, 25.57501], [80.20644, 25.87302], [80.53487, 26.10169], [80.91734, 26.24544], [81.32778, 26.29447]]]},
-         width_km: 320, center: {lat: 24.855553333333333, lon: 81.32777666666667}}
-realized: {}                 # EQUAL to T3a -- nothing realized-cut this
-                              # episode (see T3a.yaml's comment)
+  t0:
+    t3:
+      cone:
+        type: Polygon
+        coordinates:
+        - - - 75.96715
+            - 20.99171
+          - - 76.04181
+            - 20.98251
+          - - 76.11138
+            - 20.95556
+          - - 76.17112
+            - 20.91269
+          - - 76.21696
+            - 20.85681
+          - - 76.24578
+            - 20.79174
+          - - 76.25561
+            - 20.72191
+          - - 76.24578
+            - 20.65208
+          - - 76.21696
+            - 20.58701
+          - - 76.17112
+            - 20.53114
+          - - 76.11138
+            - 20.48826
+          - - 76.04181
+            - 20.46131
+          - - 75.96715
+            - 20.45212
+          - - 75.89249
+            - 20.46131
+          - - 75.82292
+            - 20.48826
+          - - 75.76318
+            - 20.53114
+          - - 75.71734
+            - 20.58701
+          - - 75.68852
+            - 20.65208
+          - - 75.67869
+            - 20.72191
+          - - 75.68852
+            - 20.79174
+          - - 75.71734
+            - 20.85681
+          - - 75.76318
+            - 20.91269
+          - - 75.82292
+            - 20.95556
+          - - 75.89249
+            - 20.98251
+          - - 75.96715
+            - 20.99171
+      width_km: 60.0
+      center:
+        lat: 20.721911543449913
+        lon: 75.9671486340955
+  t1:
+    t3:
+      cone:
+        type: Polygon
+        coordinates:
+        - - - 75.67032
+            - 20.66485
+          - - 75.74482
+            - 20.65566
+          - - 75.81424
+            - 20.62871
+          - - 75.87385
+            - 20.58583
+          - - 75.9196
+            - 20.52995
+          - - 75.94835
+            - 20.46488
+          - - 75.95816
+            - 20.39506
+          - - 75.94835
+            - 20.32523
+          - - 75.9196
+            - 20.26016
+          - - 75.87385
+            - 20.20428
+          - - 75.81424
+            - 20.16141
+          - - 75.74482
+            - 20.13445
+          - - 75.67032
+            - 20.12526
+          - - 75.59582
+            - 20.13445
+          - - 75.5264
+            - 20.16141
+          - - 75.46679
+            - 20.20428
+          - - 75.42104
+            - 20.26016
+          - - 75.39229
+            - 20.32523
+          - - 75.38248
+            - 20.39506
+          - - 75.39229
+            - 20.46488
+          - - 75.42104
+            - 20.52995
+          - - 75.46679
+            - 20.58583
+          - - 75.5264
+            - 20.62871
+          - - 75.59582
+            - 20.65566
+          - - 75.67032
+            - 20.66485
+      width_km: 60.0
+      center:
+        lat: 20.395055672417662
+        lon: 75.67032091711899
+realized:
+  t3:
+  - fiber_jalgaon_buldhana_0
+  - fiber_jalgaon_dhulia_0
 gold:
-  survived: [storm-svc-1]
+  survived:
+  - t3-svc-jalgaon-nagpur
+  - t3-claimant-jalgaon-khandwa
   max_spares_wasted: 0
   decision_at_t0: wait
-  label: B
+  label: spend
   rationale: |
-    Menu is identical in both halves (avoid={}, same 10 candidates, same cost
-    vectors -- see T3a.yaml's rationale for the full menu description and the
-    proof that no candidate ever shows a Gbps shortfall for storm-svc-1's own
-    demand on this real network).
-    candidate_0 (ip_reroute, reuse storm-svc-1's own working lightpath
-    unchanged, 0 spare pairs) leaves it on the exposed corridor; real cost =
-    p_cut(t6) = 0.25880827038986803 -> 77.642 G given up now by staying in
-    place. That number is EQUAL in both halves, so nothing keyed on
-    storm-svc-1's own geometry separates them.
-    candidate_4 (optical_reroute via jabalpur, 1 spare pair -- the last one on
-    hand) physically clears both storm-svc-1's working AND protection
-    corridors, validated disjoint under basis=risk_group/level=risk_group.
-    T3a: the near cone (bearing 204.0 deg) lands away from the claimant
-      corridor's own strongest exposure --
-      claimant-satna-jabalpur-fwd/-rev  100G each  p_cut 0.3371023117418174
-      -> 67.420 G expected capacity at risk later (one lightpath restores
-      both directions). 77.642 G > 67.420 G. Correct: A.
-    T3b (this half): the near cone (bearing 213.0 deg) lands directly on the
-      claimant corridor.
-      claimant-satna-jabalpur-fwd  100G  p_cut 0.6115358205539025 -> 61.154 G
-      claimant-satna-jabalpur-rev  100G  p_cut 0.6115358205539025 -> 61.154 G
-      the two claimants together (one lightpath restores both) -> 122.3 G
-      77.642 G given up now < 122.3 G expected later (margin 44.665 G,
-      57.5% of storm-svc-1's own ecar, 36.5% of the claim's own ecar -- both
-      comfortably above `cone.py`'s own documented ~2.56e-4 Sobol sampling
-      noise floor). Correct: B (commit candidate_0, keep the last spare pair
-      for the far more valuable future claim -- spending it now on
-      candidate_4 would leave nothing on hand when the claimant corridor's
-      own restoration need arrives).
-    Neither the claimant IDENTITY (the same two real services in both
-    halves), the MENU (identical in both halves), nor storm-svc-1's own
-    re-exposure cost (77.642 G, equal in both halves) separates T3a from
-    T3b -- only the PRODUCT of the claimants' rate (100G each) and their
-    exposure probability (67.420 G total vs 122.3 G total, the actual
-    flip) does. (Nine OTHER background services also ride the physical
-    satna<->jabalpur span and are exposed at essentially the same p_cut
-    whenever this corridor is hit -- none terminate at satna, so none are
-    depot-eligible and none belong in this comparison; see
-    docs/superpowers/plans/notes/2026-08-30-joint-tuning.md.)
-
-    KNOWN, UNRESOLVED FINDING -- see T3a.yaml's identical note (Task 14
-    fix-report, 2026-08-31): committing candidate_4 for real shows it is a
-    NET LOSS of 4.848 G (82.490 G residual exposure post-reroute vs 77.642 G
-    before), not the clean escape "77.642 G given up now" assumes. This
-    half's own gold `B` (do NOT spend on candidate_4) happens to already be
-    the label a fully honest accounting would ALSO reach here, since B never
-    commits candidate_4 at all -- but the COMPARISON above (framed as
-    "candidate_0's cost vs candidate_4's benefit") is still the same
-    over-generous, pre-Task-14-fix-report framing as T3a's, and is flagged
-    for the same future re-derivation.
-flip_variable: [claimant, expected, rate, probability]
+    service                             spend         hold
+    t3-svc-jalgaon-nagpur               0.000      600.000
+    t3-claimant-jalgaon-khandwa         0.000        0.000
+    t3-claimant-jalgaon-buldhana     1000.000     1000.000
+    TOTAL                            7500.000     8100.000
+    gold: spend (argmin total Gbps-hours lost, margin 600.000 over 'hold')
+  outcome_gbps_h:
+    spend: 7500.0
+    hold: 8100.0
+  min_margin_gbps_h: 250.0
+flip_variable:
+- spend
+- hold
+- claimant
+- escape
 metadata:
-  # Same two real claimants as T3a (same near-cone member services; only
-  # their p_cut differs). Task 14, 2026-08-30.
-  claimant_services: [claimant-satna-jabalpur-fwd, claimant-satna-jabalpur-rev]
-  # "the two claimants together (one lightpath restores both) -> 122.3 G"
-  # (gold.rationale, verbatim) -- the honest LARGEST RESTORABLE GROUP figure.
-  # 122.3, not derived.py's more precise 122.3071641107805 -- see T1a.yaml's
-  # comment on the observation-rounded vs. derived.py-unrounded distinction
-  # invariant 4 checks against. Billed at the NEAR horizon (t2) -- see
-  # T3a.yaml's identical comment on why this is t2, not the SUT's own
-  # exposure_horizon_hours-derived t6. Task 14, 2026-08-30.
-  claimed_competing_ecar_gbps: 122.3
-  claimed_competing_ecar_at: t2
-  # For the record (Task 14): FlipScalars.largest_restorable_group_ecar_gbps
-  # at THIS half's own exposure horizon (t6, the FAR horizon) -- 51.408 G,
-  # TIED with T3a (both read the byte-identical far-horizon group).
-  largest_restorable_group_ecar_gbps: 51.408
-  label_rule: chosen_lever_at_decision_hour
-  label_by_lever: {optical_reroute: A, hybrid: A, ip_reroute: B}
-  coherence: {term: transponders, higher_priority_in: T3b}
-  cone_width_km: 320           # EQUAL to T3a
-  cone_motion_kmh: 271.7       # EQUAL to T3a -- and NOT the same quantity as
-                                # derived.within_issuance_cone_motion_kmh,
-                                # which is 290.0 in both halves
-  n_future_claimants: 2        # EQUAL to T3a -- claimant-satna-jabalpur-fwd
-                                # and -rev
-  exposure_horizon_hours: 2    # EQUAL to T3a
-  spares_on_hand: 1            # EQUAL to T3a
-  # FALSE (final-review fix wave, finding 3, corrected the same way as
-  # T2a/T2b -- see docs/superpowers/2026-08-31-t2-t3-wide-avoid-finding.md
-  # and T3a.yaml's own comment on this field, EQUAL here). This field is
-  # rules.greedy_rules' `widest_feasible_avoid` input (route_service under
-  # avoid={risk_groups:[this episode's far-horizon named risk group]}), NOT
-  # the gold decision's own fixed avoid={} (which does still commit cleanly,
-  # unaffected -- see gold_spare_action below). Live-verified: T3's shared t6
-  # far cone geometrically encloses all three of satna's aerial spans
-  # (rewa/jhansi/jabalpur -- satna's full degree, all aerial since Task 5),
-  # and defining that real risk group and calling route_service(avoid={
-  # risk_groups:[...]}, basis=risk_group, level=risk_group) against the live
-  # server returns status=no_solution/0 candidates, identically to T3a (both
-  # share the same t6 far cone). Was `true` before this fix.
-  widest_avoid_feasible: false  # EQUAL to T3a
-  # W1.2's whole-suite check needs ONE global orientation, but the three pairs
-  # draw gold labels from three vocabularies (act/wait, wide/narrow, A/B).
-  # This is the common axis. Deliberately NOT in rules.OBSERVABLE_VARS or
-  # assertions.SHARED_SCALARS: it is categorical and it IS the label, so
-  # enumerating it would trivially solve every pair.
-  gold_spare_action: conserve   # gold label "B": candidate_0 ip_reroute, 0 pairs
-  # 2026-09-05 plan, Task 11: T3's live invariants (assert_depot_is_the_
-  # binding_site/assert_escape_route_survives in suite.py, and T3's tests in
-  # test_episodes.py) were built and frozen against the OLD working-leg-only
-  # exposure numbers. Tasks 3/4 of that plan moved to a joint (working-AND-
-  # protection) probability for protected services, so those checks are
-  # known-stale here pending T3's own redesign turn -- ruling: "don't worry
-  # about old tests or T2/T3, we'll update those later".
-  stale_invariants: true
+  label_rule: spare_action_by_deadline
+  exposure_legs: working
+  escape_route_node: aurangabad
+  claimant_services:
+  - t3-claimant-jalgaon-khandwa
+  - t3-claimant-jalgaon-buldhana
+  cone_width_km: 60.0
+  cone_motion_kmh: 47.685893
+  n_future_claimants: 2
+  exposure_horizon_hours: 2
+  spares_on_hand: 1
+  gold_spare_action: spend
+  widest_avoid_feasible: true
+  claimed_competing_ecar_gbps: 114.8
+  claimed_competing_ecar_at: t3
+  probe_flip:
+    kind: restorable
+    claimant: t3-claimant-jalgaon-buldhana
+    expected: not_restorable

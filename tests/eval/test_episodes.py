@@ -54,10 +54,14 @@ TOPOLOGY_PATH = (
 # T2 REBUILT (2026-09-06 plan, Task 10) on the T1 spend-or-hold machinery
 # (spec docs/superpowers/specs/2026-09-06-t2-t3-probe-redesign-design.md
 # §4.1): its live invariants are current again, so it moves out of
-# STALE_PAIRS and into PAIRS. T3 stays stale pending its own redesign turn
-# (Task 11).
-PAIRS = ("T1", "T2")
-STALE_PAIRS = ("T3",)
+# STALE_PAIRS and into PAIRS.
+#
+# T3 REBUILT (2026-09-06 plan, Task 11) on the same machinery, from §4.2's
+# documented FALLBACK (the two-corridor restorability variant -- Task 8
+# checked the primary design's zero-spare groom live and it is not offered).
+# STALE_PAIRS is now EMPTY: every shipped pair's live invariants are current.
+PAIRS = ("T1", "T2", "T3")
+STALE_PAIRS = ()
 
 
 def _pair_params(*, live=PAIRS, stale=STALE_PAIRS):
@@ -209,7 +213,7 @@ def _spend_or_hold_gold_replay(scenario):
         None, None)
 
 
-@pytest.mark.parametrize("half", ("T1a", "T1b", "T2a", "T2b"))
+@pytest.mark.parametrize("half", ("T1a", "T1b", "T2a", "T2b", "T3a", "T3b"))
 def test_half_non_flip_decisions_are_non_binding(half, connect_for):
     scenario = load_all_scenarios()[half]
     gold_decisions, gold_by_hour, objective_fn = _spend_or_hold_gold_replay(scenario)
@@ -224,7 +228,7 @@ def test_half_non_flip_decisions_are_non_binding(half, connect_for):
     asyncio.run(_run())
 
 
-@pytest.mark.parametrize("half", ("T1a", "T1b", "T2a", "T2b"))
+@pytest.mark.parametrize("half", ("T1a", "T1b", "T2a", "T2b", "T3a", "T3b"))
 def test_half_both_legs_exposed(half, connect_for):
     """Invariant 9a (redesign spec 4.7): the SUT's WORKING and PROTECTION
     legs each carry a non-trivial cut probability at the decision-hour
@@ -242,7 +246,7 @@ def test_half_both_legs_exposed(half, connect_for):
     asyncio.run(_run())
 
 
-@pytest.mark.parametrize("half", ("T1a", "T1b", "T2a", "T2b"))
+@pytest.mark.parametrize("half", ("T1a", "T1b", "T2a", "T2b", "T3a", "T3b"))
 def test_half_spend_is_real(half, connect_for):
     """Invariant 9b (redesign spec 4.7): the escape `oracle.spend_decider`
     would actually take exists, moves the service, does not ride its own
@@ -262,7 +266,7 @@ def test_half_spend_is_real(half, connect_for):
     asyncio.run(_run())
 
 
-@pytest.mark.parametrize("half", ("T1a", "T1b", "T2a", "T2b"))
+@pytest.mark.parametrize("half", ("T1a", "T1b", "T2a", "T2b", "T3a", "T3b"))
 def test_half_gold_matches_oracle_outcomes(half, connect_for):
     """The frozen `gold.label`/`gold.outcome_gbps_h` are re-enumerated LIVE
     (`gold.enumerate_outcomes`, the same function `tools/compute_gold.py`
@@ -860,10 +864,11 @@ _GOLD_COMMITTED_LEVER = {
     "T2b": "optical_reroute",    # gold label "spend": the spend half's only
                                   # real escape is a new lightpath over a
                                   # buried spur, same shape as T1b
-    "T3a": "optical_reroute",    # gold.rationale: candidate_4, optical_reroute
-                                  # via jabalpur; matches label_by_lever's "A"
-    "T3b": "ip_reroute",         # gold.rationale: candidate_0, ip_reroute;
-                                  # matches label_by_lever's "B"
+    "T3a": None,                  # gold label "hold" (2026-09-06 redesign,
+                                  # §4.2's fallback): the gold rollout never
+                                  # acts on the SUT, so it commits no lever
+    "T3b": "optical_reroute",    # gold label "spend": same shape as T1b/T2b --
+                                  # a new lightpath over a buried jalgaon spur
 }
 
 
@@ -926,6 +931,24 @@ FROZEN_SCALARS_PATH = (
 # difference. (T3a/T3b are still the 2026-08-31 episodes at this point; Task
 # 11 re-authors them and will have to re-freeze once more, with the same
 # entry-by-entry diff.)
+#
+# RE-FROZEN A THIRD TIME 2026-09-06 (same plan, Task 11), for the same reason
+# and by the same tool: T3a/T3b were re-authored on the jalgaon machinery
+# against `eval/states/t3-jalgaon-s17.json` (spec §4.2's fallback, two
+# claimant corridors -- khandwa and buldhana), so their scalars are about a
+# different SUT, a different state file and a different forecast block.
+#
+# Exactly what moved, diffed entry by entry against the pre-Task-11 snapshot:
+# `derived` and `flip` for T3a and T3b ONLY. D1, T1a, T1b, T2a and T2b are
+# bit-identical across this re-freeze, in BOTH sections. The moves are
+# `sut_p_cut_at_exposure_horizon` 0.18147554741741054 -> 0.1446707866025788
+# and `within_issuance_cone_motion_kmh` ~290.0 -> 0.0 in both halves (the new
+# T3, like T1 and T2, publishes a SINGLE horizon per issuance, so there is no
+# within-issuance motion and no horizon before the exposure one), plus the
+# claimant aggregates 444.08/370.81 -> 4094.96 (T3a) and 444.08/672.69 ->
+# 1090.17 (T3b), and `largest_restorable_group_ecar_gbps` 51.408 -> 114.763
+# in BOTH halves -- that last one is T3's deliberate tie (see
+# tools/derive_t3.py), which is what blocks a global threshold on it.
 #
 # The guarantee below is unchanged and bites again from this snapshot forward.
 def test_the_probability_model_scalars_are_unmoved(connect_for):

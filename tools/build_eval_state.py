@@ -166,13 +166,47 @@ T2_PINS: list[dict] = [
 # is the two-corridor restorability variant instead (SUT + two claimants
 # only; see the spec for the corresponding cone/footprint change).
 #
+#
+# THE SECOND CLAIMANT CORRIDOR IS `buldhana`, NOT `dhulia` (2026-09-06 plan,
+# Task 11, found live while authoring the cones). Spec 4.2 assumed the T3
+# SUT's working leg leaves jalgaon via `buldhana` and therefore assigned
+# `dhulia` + `khandwa` to the two claimants. The live solve assigns it the
+# OTHER way round (the same reversal Task 10 found for T2's protected SUT):
+# `t3-svc-jalgaon-nagpur`'s working path reads
+# jalgaon -> dhulia -> nasik -> mumbai -> nasik -> ahmednagar -> solapur ->
+# gulbarga -> hyderabad -> chandrapur -> wardha -> nagpur, whose ONLY
+# near-depot aerial span is `jalgaon<->dhulia` -- i.e. exactly the dhulia
+# claimant's own corridor. Two consequences, both measured, not assumed:
+#
+#   * `p_cut(SUT) == p_cut(t3-claimant-jalgaon-dhulia)` to the last Sobol
+#     point at every cone near jalgaon, so a dhulia claimant's exposure is
+#     PERFECTLY CORRELATED with the SUT's -- exactly the confound CLAUDE.md
+#     records for the old satna-homed claimants ("the spare contention the
+#     eval scores is not a contest").
+#   * `_realized_for("claimant:t3-claimant-jalgaon-dhulia")` and
+#     `_realized_for("sut")` resolve to the SAME fibre
+#     (`fiber_jalgaon_dhulia_0`), so the fallback's "half A cuts the dhulia
+#     corridor, S untouched" is impossible: cutting that corridor cuts the
+#     SUT, both halves then grade `spend`, and `assert_gold_choices_differ`
+#     fails.
+#
+# Spec 4.2's own arithmetic still holds, it just lands elsewhere: jalgaon
+# has four aerial neighbours, akola is a leaf, the unprotected SUT consumes
+# ONE of them (dhulia, as solved), so the two claimant corridors are
+# `khandwa` and `buldhana`. `buldhana` is structurally the twin of
+# `khandwa` -- exactly two links, `jalgaon<->buldhana` (the corridor) and
+# `buldhana<->amravati`, both aerial -- so it carries the same
+# restorable/not-restorable flip khandwa does, and `amravati<->nagpur` is
+# BURIED, which is what lets the restoration replay reach it when the
+# alternative span is outside the footprint.
+#
 # Order matters: SUT, then claimants. Pins solve in order.
 T3_PINS: list[dict] = [
     {"id": "t3-svc-jalgaon-nagpur", "src": "jalgaon", "dst": "nagpur",
      "demand_gbps": 300.0, "protected": False},
     {"id": "t3-claimant-jalgaon-khandwa", "src": "jalgaon", "dst": "khandwa",
      "demand_gbps": 200.0, "protected": False},
-    {"id": "t3-claimant-jalgaon-dhulia", "src": "jalgaon", "dst": "dhulia",
+    {"id": "t3-claimant-jalgaon-buldhana", "src": "jalgaon", "dst": "buldhana",
      "demand_gbps": 200.0, "protected": False},
 ]
 PIN_SETS: dict[str, list[dict]] = {"t2": T2_PINS, "t3": T3_PINS}

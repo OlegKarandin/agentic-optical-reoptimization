@@ -136,9 +136,19 @@ def test_derive_t2_and_t3_defaults_are_the_specs():
     originally-drafted survivor-groom variant was checked live and the
     zero-spare groom was never offered, so T3 shipped as the two-corridor
     restorability variant instead (SUT + two claimants, no survivor pins;
-    half A cuts the dhulia claimant, half B cuts the khandwa claimant AND
-    the SUT; `probe_flip` kind `restorable`, not the primary design's
-    `spares_needed`)."""
+    half A cuts one claimant, half B cuts the OTHER claimant AND the SUT;
+    `probe_flip` kind `restorable`, not the primary design's
+    `spares_needed`).
+
+    The two corridors are `khandwa` and `buldhana`, not spec 4.2's
+    `khandwa`/`dhulia`: the live solve gives the unprotected SUT a working
+    leg whose only near-depot aerial span IS `jalgaon<->dhulia`, so a dhulia
+    claimant is perfectly correlated with the SUT and its realized cut IS
+    the SUT's own first-hop cut (2026-09-06, Task 11; see
+    `tools/derive_t3.py`'s docstring and `T3_PINS`). `--require-flip-tie` is
+    deliberately OFF for the same task's reason: four of the five FLIP_VARS
+    are a network-wide sum that two different cones cannot tie bit for bit,
+    and a full tie would fail `assert_flip_dominates` anyway."""
     t2 = derive_t2.build_parser().parse_args(
         ["--t0-radius", "1", "--t0-bearing", "0", "--toward-bearing", "350",
          "--toward-radius", "60", "--away-bearing", "358"])
@@ -154,13 +164,18 @@ def test_derive_t2_and_t3_defaults_are_the_specs():
         ["--t0-radius", "1", "--t0-bearing", "0", "--toward-bearing", "20",
          "--toward-radius", "60", "--away-bearing-range", "250:300"])
     assert (t3.pair, t3.sut_posture) == ("T3", "unprotected")
-    assert t3.claimants == "t3-claimant-jalgaon-khandwa,t3-claimant-jalgaon-dhulia"
+    assert t3.claimants == (
+        "t3-claimant-jalgaon-khandwa,t3-claimant-jalgaon-buldhana")
+    assert (t3.half_a_cuts, t3.half_b_cuts) == (
+        "claimant:t3-claimant-jalgaon-khandwa",
+        "claimant:t3-claimant-jalgaon-buldhana,sut")
+    assert t3.alt_span == ["khandwa:dhar:out:out", "buldhana:amravati:in:in"]
     assert t3.pcut_match_claimant == (
-        "t3-claimant-jalgaon-dhulia:t3-claimant-jalgaon-khandwa")
-    assert t3.require_flip_tie is True
+        "t3-claimant-jalgaon-khandwa:t3-claimant-jalgaon-buldhana")
+    assert t3.require_flip_tie is False
     assert t3.state == "eval/states/t3-jalgaon-s17.json"
     assert derive_t1._parse_probe_flip(t3.probe_flip) == {
-        "A": {"kind": "restorable", "claimant": "t3-claimant-jalgaon-dhulia",
+        "A": {"kind": "restorable", "claimant": "t3-claimant-jalgaon-khandwa",
               "expected": "restorable"},
-        "B": {"kind": "restorable", "claimant": "t3-claimant-jalgaon-khandwa",
+        "B": {"kind": "restorable", "claimant": "t3-claimant-jalgaon-buldhana",
               "expected": "not_restorable"}}
