@@ -713,3 +713,38 @@ async def derived_scalars_for(client: "Client", scenarios: list[ScenarioFile],
         out[scenario.id] = derived_geometry_from_spans(
             scenario, spans, protection_spans).scalars()
     return out
+
+
+def scenarios_by_state_file(scenarios) -> dict[str, list[ScenarioFile]]:
+    """Group in first-seen order. The two `*_for` readers above take ONE
+    connection and refuse a mixed list; the `*_for_suite` helpers below are
+    what a caller with several state files (the suite since the T2/T3 probe
+    redesign, spec §7) uses instead."""
+    groups: dict[str, list[ScenarioFile]] = {}
+    for scenario in scenarios:
+        groups.setdefault(scenario.state_file, []).append(scenario)
+    return groups
+
+
+async def derived_scalars_for_suite(connect_for, scenarios, *, topology_path
+                                    ) -> dict[str, dict[str, float]]:
+    """`derived_scalars_for` once per state file, one fresh connection each.
+    `connect_for(state_file)()` is an async context manager yielding a
+    client connected against that file."""
+    out: dict[str, dict[str, float]] = {}
+    for state_file, group in scenarios_by_state_file(scenarios).items():
+        async with connect_for(state_file)() as client:
+            out.update(await derived_scalars_for(
+                client, group, topology_path=topology_path))
+    return out
+
+
+async def flip_scalars_for_suite(connect_for, scenarios, *, topology_path
+                                 ) -> dict[str, FlipScalars]:
+    """`flip_scalars_for`, once per state file (see `derived_scalars_for_suite`)."""
+    out: dict[str, FlipScalars] = {}
+    for state_file, group in scenarios_by_state_file(scenarios).items():
+        async with connect_for(state_file)() as client:
+            out.update(await flip_scalars_for(
+                client, group, topology_path=topology_path))
+    return out

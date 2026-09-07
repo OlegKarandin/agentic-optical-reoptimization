@@ -9,13 +9,12 @@ import pytest
 from storm_reoptimizer.eval.assertions import (
     PairInvalid, assert_no_single_variable_rule_solves,
 )
-from storm_reoptimizer.eval.derived import derived_scalars_for
+from storm_reoptimizer.eval.derived import derived_scalars_for_suite
 from storm_reoptimizer.eval.rules import (
     OBSERVABLE_VARS, _distinct_within_tolerance, best_rule, candidate_rules,
     score_rule, split_points,
 )
 from storm_reoptimizer.eval.scenario_file import load_all_scenarios
-from storm_reoptimizer.mcp_client import connect_server
 
 DISCARDED = Path(__file__).parent / "fixtures" / "discarded"
 TOPOLOGY_PATH = (
@@ -113,7 +112,7 @@ def test_the_shipped_suite_is_not_solved_by_any_single_rule():
 
 
 def test_the_shipped_suite_is_not_solved_by_any_rule_over_DERIVED_geometry(
-    loaded_state_path, local_server_command, local_server_env,
+    connect_for,
 ):
     """The same check, over the numbers the episodes' `forecast` blocks
     actually imply rather than the ones their authors typed into `metadata`
@@ -154,13 +153,8 @@ def test_the_shipped_suite_is_not_solved_by_any_rule_over_DERIVED_geometry(
         pytest.skip("episodes not authored yet (Tasks 14-17)")
 
     async def _derived():
-        async with connect_server(
-            TOPOLOGY_PATH, server_command=local_server_command,
-            env=local_server_env,
-            extra_args=["--state", str(loaded_state_path)],
-        ) as client:
-            return await derived_scalars_for(client, episodes,
-                                             topology_path=TOPOLOGY_PATH)
+        return await derived_scalars_for_suite(connect_for, episodes,
+                                               topology_path=TOPOLOGY_PATH)
 
     derived = asyncio.run(_derived())
     assert_no_single_variable_rule_solves(episodes, derived)

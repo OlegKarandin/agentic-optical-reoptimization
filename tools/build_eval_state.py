@@ -90,7 +90,9 @@ CLAIMANT_SERVICES = [
 # cover jabalpur alongside satna/allahabad for the claimant pair above, and
 # (2026-09-05, Task 15) jalgaon/indore/dhulia for the T1 pins below.
 PIN_SPARE_INVENTORY = {"satna": 4, "allahabad": 4, "jabalpur": 4,
-                       "jalgaon": 4, "indore": 4, "dhulia": 4}
+                       "jalgaon": 4, "indore": 4, "dhulia": 4,
+                       "nagpur": 4, "khandwa": 4, "aurangabad": 4,
+                       "ahmednagar": 4, "nasik": 4}
 # The REDESIGNED T1 pair's own service under test and claimant corridor
 # (T1 spend-or-hold redesign spec 2026-09-05 §4.1-4.2; plan Task 15). The old
 # T1 graded storm-svc-1, whose protection leg (satna<->jhansi) sat outside
@@ -131,6 +133,48 @@ T1_PINS: list[dict] = [
     {"id": "t1-claimant-jalgaon-dhulia-rev", "src": "dhulia",
      "dst": "jalgaon", "demand_gbps": 100.0, "protected": False},
 ]
+# The T2/T3 probe redesign's pins (spec 2026-09-06, §4.1/§4.2; plan Task 7).
+# Each pair gets its OWN state file built from loaded-s17.json with
+# --base-state, so T1's state, menus, gold and frozen scalars are untouched
+# and T3's survivor lightpaths never appear in T2's or T1's menus as free
+# grooms. jalgaon still needs no mount-type change: both SUTs' first hops
+# (buldhana/dhulia, read back live in the authoring note) and the claimant
+# corridors (khandwa, dhulia) are aerial, the escape (surat/aurangabad) is
+# buried.
+T2_PINS: list[dict] = [
+    {"id": "t2-svc-jalgaon-nagpur", "src": "jalgaon", "dst": "nagpur",
+     "demand_gbps": 300.0, "protected": True},
+    {"id": "t2-claimant-jalgaon-khandwa", "src": "jalgaon", "dst": "khandwa",
+     "demand_gbps": 200.0, "protected": False},
+]
+# Single-hop unprotected services along dhulia's BURIED alternative path,
+# sized so each lightpath keeps >= 200 G headroom for the dhulia claimant's
+# zero-spare ip_reroute (spec 4.2). Whether route_service actually offers
+# that groom is the one unverified element of the design; Task 8 checks it
+# live before anything is authored and records the answer.
+T3_SURVIVOR_PINS: list[dict] = [
+    {"id": "t3-survivor-jalgaon-aurangabad", "src": "jalgaon",
+     "dst": "aurangabad", "demand_gbps": 100.0, "protected": False},
+    {"id": "t3-survivor-aurangabad-ahmednagar", "src": "aurangabad",
+     "dst": "ahmednagar", "demand_gbps": 100.0, "protected": False},
+    {"id": "t3-survivor-ahmednagar-nasik", "src": "ahmednagar",
+     "dst": "nasik", "demand_gbps": 100.0, "protected": False},
+    {"id": "t3-survivor-nasik-dhulia", "src": "nasik", "dst": "dhulia",
+     "demand_gbps": 100.0, "protected": False},
+]
+# Order matters: SUT, claimants, THEN survivors. Pins solve in order, and a
+# survivor lightpath that already existed could absorb a claimant as an IP
+# groom, taking it off the aerial corridor the pair is about.
+T3_PINS: list[dict] = [
+    {"id": "t3-svc-jalgaon-nagpur", "src": "jalgaon", "dst": "nagpur",
+     "demand_gbps": 300.0, "protected": False},
+    {"id": "t3-claimant-jalgaon-khandwa", "src": "jalgaon", "dst": "khandwa",
+     "demand_gbps": 200.0, "protected": False},
+    {"id": "t3-claimant-jalgaon-dhulia", "src": "jalgaon", "dst": "dhulia",
+     "demand_gbps": 200.0, "protected": False},
+    *T3_SURVIVOR_PINS,
+]
+PIN_SETS: dict[str, list[dict]] = {"t2": T2_PINS, "t3": T3_PINS}
 # NOT "srlg": the toy topology has zero static SRLGs (confirmed:
 # toy_india_topology.json's "srlgs" is 0), and generate_demands'/
 # solve_allocation_model's own docs say srlg-basis disjointness is a NO-OP
@@ -468,6 +512,11 @@ def main() -> None:
              "CLAIMANT_SERVICES + T1_PINS) wholesale, rather than extending "
              "it.")
     parser.add_argument(
+        "--pin-set", default=None, choices=sorted(PIN_SETS),
+        help="A named pin set (tools/build_eval_state.PIN_SETS) to pin, "
+             "e.g. `t2` or `t3`. Combined with any --pin given (named set "
+             "first). Meant for --base-state mode.")
+    parser.add_argument(
         "--pin-inventory", default=None, metavar="JSON",
         help="Spare inventory for the pin stage, as a JSON object of "
              "site -> count. Defaults to PIN_SPARE_INVENTORY widened with 4 "
@@ -479,7 +528,9 @@ def main() -> None:
              "--pin(s) onto it as a new stage. Makes adding a new SUT/pair "
              "cheap: no full rebuild needed.")
     args = parser.parse_args()
-    pins = [json.loads(p) for p in args.pin] if args.pin is not None else None
+    pins = [*PIN_SETS[args.pin_set]] if args.pin_set else []
+    pins += [json.loads(p) for p in args.pin or []]
+    pins = pins or None
     pin_inventory = (json.loads(args.pin_inventory)
                       if args.pin_inventory is not None else None)
     build(args.topology, args.out, seed=args.seed,

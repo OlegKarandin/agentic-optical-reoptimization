@@ -511,3 +511,48 @@ def test_flip_scalars_from_spans_threads_protection_spans_for_the_claimant(
             < unprotected.claimant_ecar_at_exposure_horizon)
     assert protected.claimant_ecar_at_exposure_horizon == pytest.approx(
         0.0, abs=1e-3)
+
+
+import asyncio
+from contextlib import asynccontextmanager
+
+from storm_reoptimizer.eval.derived import (
+    derived_scalars_for_suite, scenarios_by_state_file,
+)
+
+
+@pytest.fixture
+def scenario(write_scenario, example_scenario_yaml):
+    return load_scenario(write_scenario(example_scenario_yaml))
+
+
+def test_scenarios_are_grouped_by_state_file_in_first_seen_order(scenario):
+    import dataclasses
+    a = dataclasses.replace(scenario, id="A", state_file="eval/states/x.json")
+    b = dataclasses.replace(scenario, id="B", state_file="eval/states/y.json")
+    c = dataclasses.replace(scenario, id="C", state_file="eval/states/x.json")
+    groups = scenarios_by_state_file([a, b, c])
+    assert list(groups) == ["eval/states/x.json", "eval/states/y.json"]
+    assert [s.id for s in groups["eval/states/x.json"]] == ["A", "C"]
+
+
+def test_the_suite_helper_connects_once_per_state_file(scenario, monkeypatch):
+    import dataclasses
+    from storm_reoptimizer.eval import derived
+    a = dataclasses.replace(scenario, id="A", state_file="eval/states/x.json")
+    b = dataclasses.replace(scenario, id="B", state_file="eval/states/y.json")
+    opened = []
+
+    def connect_for(state_file):
+        @asynccontextmanager
+        async def _connect():
+            opened.append(state_file)
+            yield object()
+        return _connect
+
+    async def fake_scalars(client, scenarios, *, topology_path):
+        return {s.id: {"sut_p_cut_at_exposure_horizon": 0.5} for s in scenarios}
+    monkeypatch.setattr(derived, "derived_scalars_for", fake_scalars)
+    out = asyncio.run(derived_scalars_for_suite(connect_for, [a, b], topology_path="t"))
+    assert opened == ["eval/states/x.json", "eval/states/y.json"]
+    assert set(out) == {"A", "B"}

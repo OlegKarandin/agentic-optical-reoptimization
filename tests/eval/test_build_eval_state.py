@@ -197,3 +197,46 @@ def test_the_rebuild_preserves_every_background_service_geometry(
     for svc, expected_working in _BACKGROUND_WORKING_PATHS.items():
         assert svc in geometry.paths, svc
         assert geometry.paths[svc]["working"] == expected_working, svc
+
+
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "tools"))
+import build_eval_state  # noqa: E402
+
+
+def test_the_t2_and_t3_pin_sets_are_the_specs():
+    """Spec 4.1/4.2 (T2/T3 probe redesign): the pins, verbatim. T3's SUT is
+    UNPROTECTED and its survivors run along dhulia's buried alternative."""
+    t2 = {p["id"]: p for p in build_eval_state.T2_PINS}
+    assert t2["t2-svc-jalgaon-nagpur"] == {
+        "id": "t2-svc-jalgaon-nagpur", "src": "jalgaon", "dst": "nagpur",
+        "demand_gbps": 300.0, "protected": True}
+    assert t2["t2-claimant-jalgaon-khandwa"]["demand_gbps"] == 200.0
+    assert t2["t2-claimant-jalgaon-khandwa"]["protected"] is False
+    t3 = {p["id"]: p for p in build_eval_state.T3_PINS}
+    assert t3["t3-svc-jalgaon-nagpur"]["protected"] is False
+    assert {t3["t3-claimant-jalgaon-khandwa"]["dst"],
+            t3["t3-claimant-jalgaon-dhulia"]["dst"]} == {"khandwa", "dhulia"}
+    survivors = [(p["src"], p["dst"]) for p in build_eval_state.T3_SURVIVOR_PINS]
+    assert survivors == [("jalgaon", "aurangabad"), ("aurangabad", "ahmednagar"),
+                         ("ahmednagar", "nasik"), ("nasik", "dhulia")]
+    assert build_eval_state.PIN_SETS == {
+        "t2": build_eval_state.T2_PINS, "t3": build_eval_state.T3_PINS}
+    # Pins solve in order: SUT, claimants, THEN survivors -- a survivor
+    # lightpath that existed first could absorb a claimant as an ip groom
+    # and take it off the aerial corridor the pair is about.
+    ids = [p["id"] for p in build_eval_state.T3_PINS]
+    assert ids.index("t3-claimant-jalgaon-dhulia") < ids.index(
+        build_eval_state.T3_SURVIVOR_PINS[0]["id"])
+
+
+def test_the_pair_state_files_carry_their_pins_and_the_base(eval_state_paths):
+    base = {s["id"] for s in json.loads(
+        eval_state_paths["eval/states/loaded-s17.json"].read_text(encoding="utf-8"))["services"]}
+    for state_file, pin_set in (("eval/states/t2-jalgaon-s17.json", "t2"),
+                                ("eval/states/t3-jalgaon-s17.json", "t3")):
+        doc = json.loads(eval_state_paths[state_file].read_text(encoding="utf-8"))
+        ids = {s["id"] for s in doc["services"]}
+        assert base <= ids
+        assert {p["id"] for p in build_eval_state.PIN_SETS[pin_set]} <= ids
+        assert doc["meta"]["pins"] == [p["id"] for p in build_eval_state.PIN_SETS[pin_set]]

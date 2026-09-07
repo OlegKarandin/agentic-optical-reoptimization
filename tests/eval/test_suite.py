@@ -63,24 +63,26 @@ def test_select_episodes_does_not_mutate_the_full_roster():
     assert set(all_episodes) == original_ids
 
 
-def _connect_factory(state_path, server_command, server_env):
-    @asynccontextmanager
-    async def _connect():
-        async with connect_server(
-            TOPOLOGY_PATH, server_command=server_command, env=server_env,
-            extra_args=["--state", str(state_path)],
-        ) as client:
-            yield client
-    return _connect
+def _connect_for(state_paths, server_command, server_env):
+    def _factory(state_file):
+        @asynccontextmanager
+        async def _connect():
+            async with connect_server(
+                TOPOLOGY_PATH, server_command=server_command, env=server_env,
+                extra_args=["--state", str(state_paths[state_file])],
+            ) as client:
+                yield client
+        return _connect
+    return _factory
 
 
 def test_baseline_is_deterministic_across_runs(
-    tmp_path, loaded_state_path, local_server_command, local_server_env,
+    tmp_path, eval_state_paths, local_server_command, local_server_env,
 ):
     d1 = {"D1": load_all_scenarios()["D1"]}
     results = asyncio.run(run_suite(
-        _connect_factory(loaded_state_path, local_server_command,
-                         local_server_env),
+        _connect_for(eval_state_paths, local_server_command,
+                    local_server_env),
         topology_path=TOPOLOGY_PATH,
         deciders=[ForecastBlindBaseline("immediate")],
         runs_per_episode=2, scenarios=d1, traces_dir=tmp_path,
@@ -92,11 +94,11 @@ def test_baseline_is_deterministic_across_runs(
 
 
 def test_the_results_table_reports_both_claims_separately(
-    tmp_path, loaded_state_path, local_server_command, local_server_env,
+    tmp_path, eval_state_paths, local_server_command, local_server_env,
 ):
     results = asyncio.run(run_suite(
-        _connect_factory(loaded_state_path, local_server_command,
-                         local_server_env),
+        _connect_for(eval_state_paths, local_server_command,
+                    local_server_env),
         topology_path=TOPOLOGY_PATH,
         deciders=[ForecastBlindBaseline(v) for v in ("immediate", "at_deadline")],
         runs_per_episode=1, traces_dir=tmp_path))
@@ -188,7 +190,7 @@ def test_the_results_table_reports_n_a_when_no_run_has_a_regret_figure():
 
 
 def test_only_narrowed_main_does_not_crash_the_whole_suite_gates(
-    monkeypatch, capsys, loaded_state_path, local_server_command,
+    monkeypatch, capsys, eval_state_paths, local_server_command,
 ):
     """Integration-level regression lock for the `--only` bug (2026-09-06,
     T1 spend-or-hold redesign plan, Task 17): `main()` initially routed the
@@ -232,11 +234,11 @@ def test_only_narrowed_main_does_not_crash_the_whole_suite_gates(
 
 
 def test_traces_land_on_disk(
-    tmp_path, loaded_state_path, local_server_command, local_server_env,
+    tmp_path, eval_state_paths, local_server_command, local_server_env,
 ):
     asyncio.run(run_suite(
-        _connect_factory(loaded_state_path, local_server_command,
-                         local_server_env),
+        _connect_for(eval_state_paths, local_server_command,
+                    local_server_env),
         topology_path=TOPOLOGY_PATH,
         deciders=[ForecastBlindBaseline("immediate")],
         runs_per_episode=1,

@@ -3,7 +3,6 @@ rollout is scored (eval design spec, "Twin-pair discipline"). A pair failing
 these is cut, not shipped."""
 import asyncio
 import json
-from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
@@ -25,13 +24,14 @@ from storm_reoptimizer.eval.baseline import ForecastBlindBaseline
 from storm_reoptimizer.eval.decisions import (
     ConstraintDecision, ObjectiveDecision, TimingDecision,
 )
-from storm_reoptimizer.eval.derived import derived_scalars_for, flip_scalars_for
+from storm_reoptimizer.eval.derived import (
+    derived_scalars_for_suite, flip_scalars_for_suite,
+)
 from storm_reoptimizer.eval.runner import run_episode
 from storm_reoptimizer.eval.scenario_file import (
     SCENARIOS_DIR as SCENARIOS, load_all_scenarios, load_scenario,
 )
 from storm_reoptimizer.eval.scoring import episode_metrics
-from storm_reoptimizer.mcp_client import connect_server
 
 TOPOLOGY_PATH = (
     Path(__file__).parent.parent.parent
@@ -73,47 +73,27 @@ def test_pair_passes_the_static_assertions(pair):
     assert_shared_scalars_equal(a, b)
 
 
-async def _menus(a, b, state_path, server_command, server_env):
-    @asynccontextmanager
-    async def _connect():
-        async with connect_server(
-            TOPOLOGY_PATH, server_command=server_command, env=server_env,
-            extra_args=["--state", str(state_path)],
-        ) as client:
-            yield client
-
-    async with _connect() as client_a, _connect() as client_b:
+async def _menus(a, b, connect_for):
+    async with connect_for(a.state_file)() as client_a, \
+            connect_for(b.state_file)() as client_b:
         await assert_menus_identical(client_a, client_b, a, b)
 
 
 @pytest.mark.parametrize("pair", _pair_params())
-def test_pair_menus_are_identical_under_reference_avoid(
-    pair, loaded_state_path, local_server_command, local_server_env,
-):
+def test_pair_menus_are_identical_under_reference_avoid(pair, connect_for):
     episodes = load_all_scenarios()
-    asyncio.run(_menus(episodes[f"{pair}a"], episodes[f"{pair}b"],
-                       loaded_state_path, local_server_command,
-                       local_server_env))
+    asyncio.run(_menus(episodes[f"{pair}a"], episodes[f"{pair}b"], connect_for))
 
 
-async def _derived(a, b, state_path, server_command, server_env):
-    @asynccontextmanager
-    async def _connect():
-        async with connect_server(
-            TOPOLOGY_PATH, server_command=server_command, env=server_env,
-            extra_args=["--state", str(state_path)],
-        ) as client:
-            yield client
-
-    async with _connect() as client_a, _connect() as client_b:
+async def _derived(a, b, connect_for):
+    async with connect_for(a.state_file)() as client_a, \
+            connect_for(b.state_file)() as client_b:
         await assert_pair_derived_geometry_is_equal(
             client_a, client_b, a, b, topology_path=TOPOLOGY_PATH)
 
 
 @pytest.mark.parametrize("pair", _pair_params())
-def test_pair_derived_geometry_is_equal_across_the_halves(
-    pair, loaded_state_path, local_server_command, local_server_env,
-):
+def test_pair_derived_geometry_is_equal_across_the_halves(pair, connect_for):
     """test_pair_passes_the_static_assertions checks the scalars the episode's
     AUTHOR declared. This checks the ones its `forecast` block actually
     implies -- the service under test's real p_cut at the exposure horizon,
@@ -124,35 +104,24 @@ def test_pair_derived_geometry_is_equal_across_the_halves(
     service under test's real working-path coordinates -- the same contract
     test_pair_menus_are_identical_under_reference_avoid already has."""
     episodes = load_all_scenarios()
-    asyncio.run(_derived(episodes[f"{pair}a"], episodes[f"{pair}b"],
-                         loaded_state_path, local_server_command,
-                         local_server_env))
+    asyncio.run(_derived(episodes[f"{pair}a"], episodes[f"{pair}b"], connect_for))
 
 
 @pytest.mark.parametrize("pair", _pair_params())
-def test_each_baseline_variant_scores_exactly_one_half(
-    pair, loaded_state_path, local_server_command, local_server_env,
-):
+def test_each_baseline_variant_scores_exactly_one_half(pair, connect_for):
     episodes = load_all_scenarios()
     a, b = episodes[f"{pair}a"], episodes[f"{pair}b"]
 
     async def _run():
-        @asynccontextmanager
-        async def _connect():
-            async with connect_server(
-                TOPOLOGY_PATH, server_command=local_server_command,
-                env=local_server_env,
-                extra_args=["--state", str(loaded_state_path)],
-            ) as client:
-                yield client
-
-        # _connect is already a zero-arg async-context-manager factory --
-        # matches assert_each_baseline_variant_ties's client_factory_a/
-        # client_factory_b signature directly (fixed Task 11 this session:
-        # reusing one connection across both baseline-variant replays
-        # corrupted the second replay with state the first had mutated).
+        # connect_for(state_file) is already a zero-arg async-context-manager
+        # factory -- matches assert_each_baseline_variant_ties's
+        # client_factory_a/client_factory_b signature directly (fixed Task 11
+        # this session: reusing one connection across both baseline-variant
+        # replays corrupted the second replay with state the first had
+        # mutated).
         await assert_each_baseline_variant_ties(
-            _connect, _connect, a, b, topology_path=TOPOLOGY_PATH)
+            connect_for(a.state_file), connect_for(b.state_file), a, b,
+            topology_path=TOPOLOGY_PATH)
 
     asyncio.run(_run())
 
@@ -213,24 +182,14 @@ def _t1_gold_replay(scenario):
 
 
 @pytest.mark.parametrize("half", ("T1a", "T1b"))
-def test_t1_non_flip_decisions_are_non_binding(
-    half, loaded_state_path, local_server_command, local_server_env,
-):
+def test_t1_non_flip_decisions_are_non_binding(half, connect_for):
     scenario = load_all_scenarios()[half]
     gold_decisions, gold_by_hour, objective_fn = _t1_gold_replay(scenario)
 
     async def _run():
-        @asynccontextmanager
-        async def _connect():
-            async with connect_server(
-                TOPOLOGY_PATH, server_command=local_server_command,
-                env=local_server_env,
-                extra_args=["--state", str(loaded_state_path)],
-            ) as client:
-                yield client
-
         await assert_non_flip_decisions_non_binding(
-            _connect, scenario, topology_path=TOPOLOGY_PATH,
+            connect_for(scenario.state_file), scenario,
+            topology_path=TOPOLOGY_PATH,
             gold_decisions=gold_decisions, gold_by_hour=gold_by_hour,
             non_flip=("constraints",), objective_fn=objective_fn)
 
@@ -238,9 +197,7 @@ def test_t1_non_flip_decisions_are_non_binding(
 
 
 @pytest.mark.parametrize("half", ("T1a", "T1b"))
-def test_t1_both_legs_exposed(
-    half, loaded_state_path, local_server_command, local_server_env,
-):
+def test_t1_both_legs_exposed(half, connect_for):
     """Invariant 9a (redesign spec 4.7): the SUT's WORKING and PROTECTION
     legs each carry a non-trivial cut probability at the decision-hour
     issuance's own latest horizon, in BOTH halves. This is what makes
@@ -251,11 +208,7 @@ def test_t1_both_legs_exposed(
     scenario = load_all_scenarios()[half]
 
     async def _run():
-        async with connect_server(
-            TOPOLOGY_PATH, server_command=local_server_command,
-            env=local_server_env,
-            extra_args=["--state", str(loaded_state_path)],
-        ) as client:
+        async with connect_for(scenario.state_file)() as client:
             await assert_both_legs_exposed(client, scenario,
                                            topology_path=TOPOLOGY_PATH)
 
@@ -263,9 +216,7 @@ def test_t1_both_legs_exposed(
 
 
 @pytest.mark.parametrize("half", ("T1a", "T1b"))
-def test_t1_spend_is_real(
-    half, loaded_state_path, local_server_command, local_server_env,
-):
+def test_t1_spend_is_real(half, connect_for):
     """Invariant 9b (redesign spec 4.7): the escape `oracle.spend_decider`
     would actually take exists, moves the service, does not ride its own
     protection corridor, costs exactly one transponder pair at the depot,
@@ -277,11 +228,7 @@ def test_t1_spend_is_real(
     scenario = load_all_scenarios()[half]
 
     async def _run():
-        async with connect_server(
-            TOPOLOGY_PATH, server_command=local_server_command,
-            env=local_server_env,
-            extra_args=["--state", str(loaded_state_path)],
-        ) as client:
+        async with connect_for(scenario.state_file)() as client:
             await assert_spend_is_real(client, scenario,
                                        topology_path=TOPOLOGY_PATH)
 
@@ -289,9 +236,7 @@ def test_t1_spend_is_real(
 
 
 @pytest.mark.parametrize("half", ("T1a", "T1b"))
-def test_t1_gold_matches_oracle_outcomes(
-    half, loaded_state_path, local_server_command, local_server_env,
-):
+def test_t1_gold_matches_oracle_outcomes(half, connect_for):
     """The frozen `gold.label`/`gold.outcome_gbps_h` are re-enumerated LIVE
     (`gold.enumerate_outcomes`, the same function `tools/compute_gold.py`
     wrote them with) and must still argmin to the frozen label by at least
@@ -301,17 +246,8 @@ def test_t1_gold_matches_oracle_outcomes(
     scenario = load_all_scenarios()[half]
 
     async def _run():
-        @asynccontextmanager
-        async def _connect():
-            async with connect_server(
-                TOPOLOGY_PATH, server_command=local_server_command,
-                env=local_server_env,
-                extra_args=["--state", str(loaded_state_path)],
-            ) as client:
-                yield client
-
-        return await enumerate_outcomes(_connect, scenario,
-                                        topology_path=TOPOLOGY_PATH)
+        return await enumerate_outcomes(connect_for(scenario.state_file),
+                                        scenario, topology_path=TOPOLOGY_PATH)
 
     outcomes = asyncio.run(_run())
     assert_gold_matches_outcomes(
@@ -365,9 +301,7 @@ _T2_NON_FLIP_GOLD_DECISIONS = {
 # are known-stale on the joint-exposure model -- see PAIRS/STALE_PAIRS above.
 @pytest.mark.stale_pair
 @pytest.mark.parametrize("half", ("T2a", "T2b"))
-def test_t2_non_flip_decisions_are_non_binding(
-    half, loaded_state_path, local_server_command, local_server_env,
-):
+def test_t2_non_flip_decisions_are_non_binding(half, connect_for):
     scenario = load_all_scenarios()[half]
     timing, constraints, objective = _T2_NON_FLIP_GOLD_DECISIONS[half]
     # T2a/T2b both declare `gold.decision_at_t0: wait`: gold HOLDS at t0 and
@@ -382,17 +316,9 @@ def test_t2_non_flip_decisions_are_non_binding(
     gold_by_hour = {"timing": {scenario.decision_hour: timing}}
 
     async def _run():
-        @asynccontextmanager
-        async def _connect():
-            async with connect_server(
-                TOPOLOGY_PATH, server_command=local_server_command,
-                env=local_server_env,
-                extra_args=["--state", str(loaded_state_path)],
-            ) as client:
-                yield client
-
         await assert_non_flip_decisions_non_binding(
-            _connect, scenario, topology_path=TOPOLOGY_PATH,
+            connect_for(scenario.state_file), scenario,
+            topology_path=TOPOLOGY_PATH,
             gold_decisions=gold_decisions, gold_by_hour=gold_by_hour,
             non_flip=("timing", "objective"))
 
@@ -443,9 +369,7 @@ _T3_NON_FLIP_GOLD_DECISIONS = {
 # are known-stale on the joint-exposure model -- see PAIRS/STALE_PAIRS above.
 @pytest.mark.stale_pair
 @pytest.mark.parametrize("half", ("T3a", "T3b"))
-def test_t3_non_flip_decisions_are_non_binding(
-    half, loaded_state_path, local_server_command, local_server_env,
-):
+def test_t3_non_flip_decisions_are_non_binding(half, connect_for):
     scenario = load_all_scenarios()[half]
     timing, constraints, objective = _T3_NON_FLIP_GOLD_DECISIONS[half]
     # T3a/T3b both declare `gold.decision_at_t0: wait`. Acting at t0 as well
@@ -462,17 +386,9 @@ def test_t3_non_flip_decisions_are_non_binding(
     gold_by_hour = {"timing": {scenario.decision_hour: timing}}
 
     async def _run():
-        @asynccontextmanager
-        async def _connect():
-            async with connect_server(
-                TOPOLOGY_PATH, server_command=local_server_command,
-                env=local_server_env,
-                extra_args=["--state", str(loaded_state_path)],
-            ) as client:
-                yield client
-
         await assert_non_flip_decisions_non_binding(
-            _connect, scenario, topology_path=TOPOLOGY_PATH,
+            connect_for(scenario.state_file), scenario,
+            topology_path=TOPOLOGY_PATH,
             gold_decisions=gold_decisions, gold_by_hour=gold_by_hour,
             non_flip=("timing", "constraints"))
 
@@ -483,20 +399,14 @@ def test_t3_non_flip_decisions_are_non_binding(
 # invariants are known-stale on the joint-exposure model -- see
 # PAIRS/STALE_PAIRS above.
 @pytest.mark.stale_pair
-def test_d1_menu_contains_no_ip_reroute_candidate(
-    loaded_state_path, local_server_command, local_server_env,
-):
+def test_d1_menu_contains_no_ip_reroute_candidate(connect_for):
     """A zero-lead-time option makes waiting free and silently inverts D1's
     gold answer. A topology or seed change would do it, so this is asserted
     rather than assumed (eval design spec, "D1's menu precondition")."""
     d1 = load_all_scenarios()["D1"]
 
     async def _menu():
-        async with connect_server(
-            TOPOLOGY_PATH, server_command=local_server_command,
-            env=local_server_env,
-            extra_args=["--state", str(loaded_state_path)],
-        ) as client:
+        async with connect_for(d1.state_file)() as client:
             from storm_reoptimizer.eval.assertions import menu_at_decision_hour
             return await menu_at_decision_hour(client, d1)
 
@@ -591,9 +501,7 @@ class _WidensOnDisjointnessRejection:
 # live invariants are known-stale on the joint-exposure model -- see
 # PAIRS/STALE_PAIRS above.
 @pytest.mark.stale_pair
-def test_t2a_carries_a_real_validate_plan_rejection(
-    loaded_state_path, local_server_command, local_server_env,
-):
+def test_t2a_carries_a_real_validate_plan_rejection(connect_for):
     """Re-derived 2026-08-30 (Task 14, exposure-and-depot plan) against the
     live server -- see `_WidensOnDisjointnessRejection`'s own docstring
     for the full mechanism. Before Task 5 of this plan made satna<->jabalpur
@@ -631,11 +539,7 @@ def test_t2a_carries_a_real_validate_plan_rejection(
     t2a = load_all_scenarios()["T2a"]
 
     async def _run():
-        async with connect_server(
-            TOPOLOGY_PATH, server_command=local_server_command,
-            env=local_server_env,
-            extra_args=["--state", str(loaded_state_path)],
-        ) as client:
+        async with connect_for(t2a.state_file)() as client:
             return await run_episode(client, t2a,
                                      _WidensOnDisjointnessRejection(),
                                      topology_path=TOPOLOGY_PATH)
@@ -654,21 +558,15 @@ def test_t2a_carries_a_real_validate_plan_rejection(
         "widen from")
 
 
-def test_the_claimant_aggregates_are_derivable_for_every_twin_half(
-        loaded_state_path, local_server_command, local_server_env):
+def test_the_claimant_aggregates_are_derivable_for_every_twin_half(connect_for):
     """W1.1's acceptance: the numbers F1's arithmetic is built on, measured
     against a live server rather than asserted from the spec."""
     episodes = [load_scenario(SCENARIOS / f"{name}.yaml")
                 for name in ("T1a", "T1b", "T2a", "T2b", "T3a", "T3b")]
 
     async def _run():
-        async with connect_server(
-            TOPOLOGY_PATH, server_command=local_server_command,
-            env=local_server_env,
-            extra_args=["--state", str(loaded_state_path)],
-        ) as client:
-            return await flip_scalars_for(client, episodes,
-                                          topology_path=TOPOLOGY_PATH)
+        return await flip_scalars_for_suite(connect_for, episodes,
+                                            topology_path=TOPOLOGY_PATH)
 
     flips = asyncio.run(_run())
 
@@ -686,8 +584,7 @@ def test_the_claimant_aggregates_are_derivable_for_every_twin_half(
         for sid, f in sorted(flips.items())))
 
 
-def test_no_global_policy_solves_the_shipped_suite(
-        loaded_state_path, local_server_command, local_server_env):
+def test_no_global_policy_solves_the_shipped_suite(connect_for):
     """GATE A, as a real assertion: no ONE threshold, on ONE of
     `derived.FLIP_VARS`, under ONE fixed orientation, answers all six twin
     halves.
@@ -750,13 +647,8 @@ def test_no_global_policy_solves_the_shipped_suite(
                 for n in ("T1a", "T1b", "T2a", "T2b", "T3a", "T3b")]
 
     async def _run():
-        async with connect_server(
-            TOPOLOGY_PATH, server_command=local_server_command,
-            env=local_server_env,
-            extra_args=["--state", str(loaded_state_path)],
-        ) as client:
-            return await flip_scalars_for(client, episodes,
-                                          topology_path=TOPOLOGY_PATH)
+        return await flip_scalars_for_suite(connect_for, episodes,
+                                            topology_path=TOPOLOGY_PATH)
 
     flips = asyncio.run(_run())
     flip_values = {sid: f.values() for sid, f in flips.items()}
@@ -764,9 +656,7 @@ def test_no_global_policy_solves_the_shipped_suite(
 
 
 @pytest.mark.parametrize("pair", _pair_params())
-def test_the_flip_dominates_every_equal_signal(pair, loaded_state_path,
-                                               local_server_command,
-                                               local_server_env):
+def test_the_flip_dominates_every_equal_signal(pair, connect_for):
     """W1.5. No equal-in-both-halves signal about the service under test may
     outweigh the flip -- the check that would have caught T1 before a suite
     run was spent on it."""
@@ -774,13 +664,8 @@ def test_the_flip_dominates_every_equal_signal(pair, loaded_state_path,
     b = load_scenario(SCENARIOS / f"{pair}b.yaml")
 
     async def _run():
-        async with connect_server(
-            TOPOLOGY_PATH, server_command=local_server_command,
-            env=local_server_env,
-            extra_args=["--state", str(loaded_state_path)],
-        ) as client:
-            return await flip_scalars_for(client, [a, b],
-                                          topology_path=TOPOLOGY_PATH)
+        return await flip_scalars_for_suite(connect_for, [a, b],
+                                            topology_path=TOPOLOGY_PATH)
 
     flips = asyncio.run(_run())
     assert_flip_dominates(a, b, flips[a.id], flips[b.id])
@@ -825,7 +710,7 @@ def test_the_flip_dominates_every_equal_signal(pair, loaded_state_path,
 @pytest.mark.stale_pair
 @pytest.mark.parametrize("scenario_id", ("T2b", "T3b"))
 def test_a_conserve_gold_with_an_unexploitable_free_escape_passes(
-    scenario_id, loaded_state_path, local_server_command, local_server_env,
+    scenario_id, connect_for,
 ):
     """T2b/T3b: the free `ip_reroute` onto storm-svc-1's static protection
     lightpath exists in the menu, but taking it reads the SAME label gold
@@ -834,11 +719,7 @@ def test_a_conserve_gold_with_an_unexploitable_free_escape_passes(
     scenario = load_scenario(SCENARIOS / f"{scenario_id}.yaml")
 
     async def _run():
-        async with connect_server(
-            TOPOLOGY_PATH, server_command=local_server_command,
-            env=local_server_env,
-            extra_args=["--state", str(loaded_state_path)],
-        ) as client:
+        async with connect_for(scenario.state_file)() as client:
             await assert_wait_gold_has_no_free_escape(client, scenario)
 
     asyncio.run(_run())
@@ -899,20 +780,14 @@ def _unwrap_lone_exception(exc: BaseException) -> BaseException:
 # If a later pair re-introduces a conserve half on a label rule where a
 # zero-pair commit CAN change the graded label, this check becomes meaningful
 # again with no change to it.
-def test_a_conserve_gold_has_no_free_escape(
-    loaded_state_path, local_server_command, local_server_env,
-):
+def test_a_conserve_gold_has_no_free_escape(connect_for):
     """W1.6, T1a only -- see the module-level comment above for why T2b/T3b
     were split out into their own test, and the comment directly above for
     why this one is unmarked and currently unfalsifiable."""
     scenario = load_scenario(SCENARIOS / "T1a.yaml")
 
     async def _run():
-        async with connect_server(
-            TOPOLOGY_PATH, server_command=local_server_command,
-            env=local_server_env,
-            extra_args=["--state", str(loaded_state_path)],
-        ) as client:
+        async with connect_for(scenario.state_file)() as client:
             await assert_wait_gold_has_no_free_escape(client, scenario)
 
     try:
@@ -968,7 +843,7 @@ _GOLD_COMMITTED_LEVER = {
         pytest.param(s, marks=pytest.mark.stale_pair)
         for s in ("T2a", "T2b", "T3a", "T3b")))
 def test_gold_spare_action_is_grounded_in_a_real_candidate(
-    scenario_id, loaded_state_path, local_server_command, local_server_env,
+    scenario_id, connect_for,
 ):
     """The test that would have caught Finding #4: for every half, the
     declared `metadata.gold_spare_action` must be achievable by a REAL
@@ -978,11 +853,7 @@ def test_gold_spare_action_is_grounded_in_a_real_candidate(
     scenario = load_all_scenarios()[scenario_id]
 
     async def _run():
-        async with connect_server(
-            TOPOLOGY_PATH, server_command=local_server_command,
-            env=local_server_env,
-            extra_args=["--state", str(loaded_state_path)],
-        ) as client:
+        async with connect_for(scenario.state_file)() as client:
             await assert_gold_spare_action_is_grounded(
                 client, scenario,
                 committed_lever=_GOLD_COMMITTED_LEVER[scenario_id])
@@ -1011,9 +882,7 @@ FROZEN_SCALARS_PATH = (
 # the model change could not shift them.
 #
 # The guarantee below is unchanged and bites again from this snapshot forward.
-def test_the_probability_model_scalars_are_unmoved(
-    loaded_state_path, local_server_command, local_server_env,
-):
+def test_the_probability_model_scalars_are_unmoved(connect_for):
     """cone.py's outputs are frozen against a snapshot taken before the
     hazard-footprint seam fix (plan 2026-09-01, Task 1).
 
@@ -1032,21 +901,11 @@ def test_the_probability_model_scalars_are_unmoved(
     episodes = load_all_scenarios()
     scenarios = list(episodes.values())
 
-    @asynccontextmanager
-    async def _connect():
-        async with connect_server(
-            TOPOLOGY_PATH, server_command=local_server_command,
-            env=local_server_env,
-            extra_args=["--state", str(loaded_state_path)],
-        ) as client:
-            yield client
-
     async def _run():
-        async with _connect() as client:
-            derived = await derived_scalars_for(
-                client, scenarios, topology_path=TOPOLOGY_PATH)
-            flip = await flip_scalars_for(
-                client, scenarios, topology_path=TOPOLOGY_PATH)
+        derived = await derived_scalars_for_suite(
+            connect_for, scenarios, topology_path=TOPOLOGY_PATH)
+        flip = await flip_scalars_for_suite(
+            connect_for, scenarios, topology_path=TOPOLOGY_PATH)
         return derived, {sid: f.values() for sid, f in flip.items()}
 
     derived, flip = asyncio.run(_run())
@@ -1056,7 +915,7 @@ def test_the_probability_model_scalars_are_unmoved(
 
 @pytest.mark.parametrize("scenario_id", sorted(load_all_scenarios()))
 def test_no_episode_defines_an_empty_risk_group_where_something_is_at_risk(
-    scenario_id, loaded_state_path, local_server_command, local_server_env,
+    scenario_id, connect_for,
 ):
     """The hazard-footprint invariant (spec 2026-08-31 §3.3). This FAILED on
     T1a before the seam fix: both its issuances' cones contain no aerial span
@@ -1066,11 +925,7 @@ def test_no_episode_defines_an_empty_risk_group_where_something_is_at_risk(
     scenario = load_all_scenarios()[scenario_id]
 
     async def _run():
-        async with connect_server(
-            TOPOLOGY_PATH, server_command=local_server_command,
-            env=local_server_env,
-            extra_args=["--state", str(loaded_state_path)],
-        ) as client:
+        async with connect_for(scenario.state_file)() as client:
             from storm_reoptimizer.mcp_client import call_tool_json
             oms = (await call_tool_json(
                 client, "get_topology", {"layer": "optical"}))["oms"]

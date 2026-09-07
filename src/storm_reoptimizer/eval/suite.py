@@ -66,13 +66,14 @@ def _redact_volatile_ids(trace_dict: dict) -> dict:
     return redacted
 
 
-async def run_suite(connect, *, topology_path, deciders,
+async def run_suite(connect_for, *, topology_path, deciders,
                     runs_per_episode: int = RUNS_PER_EPISODE,
                     scenarios: dict[str, ScenarioFile] | None = None,
                     traces_dir: Path | None = None,
                     collapse_deterministic: bool = True) -> dict:
-    """`connect` is a zero-arg async context manager factory yielding a fresh
-    server connection -- one per rollout, because a rollout mutates state.
+    """`connect_for(state_file)` returns a zero-arg async context manager
+    factory yielding a fresh connection against that scenario's own state
+    file -- one per rollout, because a rollout mutates state.
 
     `collapse_deterministic` runs a deterministic decider once instead of
     `runs_per_episode` times; set it False to prove the determinism rather
@@ -97,7 +98,7 @@ async def run_suite(connect, *, topology_path, deciders,
                  else runs_per_episode)
             for run_index in range(n):
                 safe = decider.name.replace(":", "_")
-                async with connect() as client:
+                async with connect_for(scenario.state_file)() as client:
                     trace = await run_episode(
                         client, scenario, decider, topology_path=topology_path,
                         run_index=run_index,
@@ -298,16 +299,17 @@ async def _groups_for(client, scenario: ScenarioFile, *,
 
 
 async def _run_dimensional_coherence_invariants(
-    connect, episodes: dict[str, ScenarioFile], *, topology_path: Path,
+    connect_for, episodes: dict[str, ScenarioFile], *, topology_path: Path,
 ) -> None:
     """Task 12 (exposure-and-depot plan, §6 invariants 1-8): the
     dimensional-coherence class, checked over the FULL episode set before
     any rollout runs -- a build-time gate, exactly like the two checks
-    above it in `main()`. `connect` is the same zero-arg async context
-    manager factory `run_suite` takes; each scenario gets its own fresh
-    connection (the same contract every client-taking check in
-    assertions.py already has), except the one topology read shared across
-    all seven episodes, since they share one state file.
+    above it in `main()`. `connect_for` is the same `connect_for(state_file)`
+    factory `run_suite` takes; each scenario gets its own fresh connection
+    (the same contract every client-taking check in assertions.py already
+    has), except the one topology read shared across all seven episodes
+    (the OMS list is a property of the topology file, identical across
+    state files).
 
     Invariant 8 (`assert_sampling_error_within_margin`) is NOT called here:
     it takes the whole suite's `FlipScalars.values()` map directly (the same
@@ -324,7 +326,7 @@ async def _run_dimensional_coherence_invariants(
     probability for protected services, so those two invariants are
     known-stale there pending D1/T2/T3's own redesign turn -- see the ruling
     in `tests/eval/test_episodes.py`'s `PAIRS`/`STALE_PAIRS` comment."""
-    async with connect() as client:
+    async with connect_for(next(iter(episodes.values())).state_file)() as client:
         from ..mcp_client import call_tool_json
         oms_by_id_list = (await call_tool_json(
             client, "get_topology", {"layer": "optical"}))["oms"]
@@ -358,7 +360,7 @@ async def _run_dimensional_coherence_invariants(
             f"scenario's checks across separate connections (one per side of "
             f"the replay) instead of relying on that assumption")
 
-        async with connect() as client:
+        async with connect_for(scenario.state_file)() as client:
             await assert_claimants_have_filterable_exposure(
                 client, scenario, topology_path=topology_path)
             await assert_claimants_depot_eligible(
@@ -391,7 +393,9 @@ def main(argv: list[str] | None = None) -> None:
     import os
     from contextlib import asynccontextmanager
 
-    from .derived import FlipScalars, derived_scalars_for, flip_scalars_for
+    from .derived import (
+        FlipScalars, derived_scalars_for_suite, flip_scalars_for_suite,
+    )
     from ..mcp_client import connect_server
 
     args = build_arg_parser().parse_args(argv)
@@ -421,12 +425,6 @@ def main(argv: list[str] | None = None) -> None:
     # narrows exactly one thing: the actual rollout (`episodes`, below) --
     # never any of these three validation gates.
     all_episodes = load_all_scenarios()
-    # state_file is recorded relative to the repo root (see scenario_file.py's
-    # module docstring and every scenario YAML's "eval/states/..." value), not
-    # relative to the current working directory -- resolve it against
-    # REPO_ROOT so `python -m storm_reoptimizer.eval.suite` works regardless
-    # of the caller's cwd.
-    state = REPO_ROOT / all_episodes["D1"].state_file
     episodes = select_episodes(all_episodes, args.only)
 
     # A real install puts `multilayer-optical-mcp` on PATH and
@@ -443,21 +441,25 @@ def main(argv: list[str] | None = None) -> None:
     env = dict(os.environ) if os.environ.get(
         "STORM_REOPTIMIZER_MCP_SERVER_CMD") else None
 
-    @asynccontextmanager
-    async def _connect():
-        async with connect_server(
-            topology, env=env, extra_args=["--state", str(state)]) as client:
-            yield client
+    def _connect_for(state_file: str):
+        # state_file is repo-relative (scenario_file.py's module docstring);
+        # resolve against REPO_ROOT so the module runs from any cwd.
+        state = REPO_ROOT / state_file
+
+        @asynccontextmanager
+        async def _connect():
+            async with connect_server(
+                topology, env=env, extra_args=["--state", str(state)]) as client:
+                yield client
+        return _connect
 
     async def _derived_scalars() -> dict[str, dict[str, float]]:
-        async with _connect() as client:
-            return await derived_scalars_for(
-                client, list(all_episodes.values()), topology_path=topology)
+        return await derived_scalars_for_suite(
+            _connect_for, list(all_episodes.values()), topology_path=topology)
 
     async def _flip_scalars() -> dict[str, FlipScalars]:
-        async with _connect() as client:
-            return await flip_scalars_for(
-                client, list(all_episodes.values()), topology_path=topology)
+        return await flip_scalars_for_suite(
+            _connect_for, list(all_episodes.values()), topology_path=topology)
 
     # Widened with DERIVED (not just author-declared) geometry -- the
     # declared-only check is exactly what missed T1's p_cut confound for
@@ -499,10 +501,10 @@ def main(argv: list[str] | None = None) -> None:
     # review: the first fix here only widened the two checks immediately
     # above, leaving this third one still narrowed).
     asyncio.run(_run_dimensional_coherence_invariants(
-        _connect, all_episodes, topology_path=topology))
+        _connect_for, all_episodes, topology_path=topology))
 
     results = asyncio.run(run_suite(
-        _connect, topology_path=topology, deciders=build_deciders(args),
+        _connect_for, topology_path=topology, deciders=build_deciders(args),
         scenarios=episodes, runs_per_episode=args.runs))
     print(render_results_table(results))
 
