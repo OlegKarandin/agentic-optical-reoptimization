@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .ledger import spares_needed
 from .observation import lead_time_hours_for
 
 
@@ -83,11 +84,11 @@ async def restore_after_cuts(
     `basis="physical"`, `level="link"`, `best_effort=False`), avoiding this
     hour's own risk group if one was defined; annotate with
     `menu_with_path_facts` so the selection below can tell a real reroute
-    from an inert one; pick the FIRST candidate that would fully restore the
-    service (`shortfall_gbps == 0`), actually move it
+    from an inert one; pick the CHEAPEST-in-spares candidate that would fully
+    restore the service (`shortfall_gbps == 0`), actually move it
     (`path_delta.changes_working_path` -- an inert candidate restores
     nothing, so it is never a valid pick here), and that the ledger can
-    afford. `try_commit` (runner.py, Task 2) does the validate/commit pair
+    afford (menu order among equals). `try_commit` (runner.py, Task 2) does the validate/commit pair
     under `baseline="standing"`; on success the ledger is debited with
     `origin="harness"` (SpareLedger.debit, Task 2) so later scoring can tell
     a decider's own spend from the harness's, and `index_factory` is called
@@ -160,6 +161,14 @@ async def restore_after_cuts(
         workable = [c for c in (menu.get("candidates") or [])
                    if c.get("shortfall_gbps") == 0
                    and c.get("path_delta", {}).get("changes_working_path")]
+        # Spec 5.4 (T2/T3 probe redesign): CHEAPEST in spares first, not
+        # first in menu order, so a zero-spare ip_reroute over an existing
+        # lightpath with headroom is taken over a spare-charging lightpath.
+        # `sorted` is stable, so equal-cost candidates keep menu order. This
+        # is also what makes probe.answer_probe's min_spares_needed_by_site
+        # equal to what this replay would actually spend.
+        workable.sort(key=lambda c: sum(
+            spares_needed(c, ledger.oms_nodes).values()))
         if not workable:
             records.append(_empty_record(hour, service, "no_candidate"))
             continue

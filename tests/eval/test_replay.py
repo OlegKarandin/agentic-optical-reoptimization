@@ -6,6 +6,7 @@ redesign, section 5.1). No server: `counting` is a hand-rolled fake and
 candidate selection, affordability, commit bookkeeping), not the MCP
 plumbing that `tests/eval/test_runner.py`'s live tests already cover."""
 import asyncio
+import dataclasses
 import textwrap
 
 from storm_reoptimizer.eval.ledger import SpareLedger
@@ -286,3 +287,86 @@ def test_a_duplicated_priority_id_is_attempted_only_once(write_scenario):
                             priority=("c-fwd", "c-fwd"))
     assert [r["service_id"] for r in records] == ["c-fwd", "s"]
     assert len(actions) == 1
+
+
+GROOM_CANDIDATE = {
+    # A zero-spare ip_reroute that genuinely MOVES the service: its reused
+    # lightpath resolves to oms_alt, which is not on the (empty) working
+    # path, so path_delta.changes_working_path is True.
+    "lever": "ip_reroute", "reused_lightpaths": ["lp-groom"],
+    "new_lightpaths": [], "shortfall_gbps": 0.0}
+
+
+class _GroomLastCounting(_FakeCounting):
+    """The lightpath first, the free groom LAST in menu order -- the order a
+    first-workable pick would get wrong."""
+
+    async def call(self, name, arguments=None, **kw):
+        if name == "route_service":
+            self.calls.append((name, arguments))
+            return {"status": "solution",
+                    "candidates": [dict(MENU_CANDIDATES[1]),
+                                   dict(GROOM_CANDIDATE)]}
+        if name == "get_topology":
+            layer = (arguments or {}).get("layer")
+            if layer == "optical":
+                # Add oms_alt to the topology for the groom lightpath.
+                return {"oms": [{"id": "oms_new", "src_node_id": "tirupati",
+                                 "dst_node_id": "nellore",
+                                 "elements": ["fiber_x"]},
+                               {"id": "oms_alt", "src_node_id": "tirupati",
+                                "dst_node_id": "nellore",
+                                "elements": ["fiber_alt"]}]}
+            if layer == "ip":
+                # Add the groom lightpath that connects c-fwd endpoints.
+                return {"routers": [{"site": "tirupati", "id": "router_tirupati"},
+                                    {"site": "nellore", "id": "router_nellore"}],
+                        "ip_links": [{"lightpath_id": "lp-groom",
+                                      "id": "lp-groom",
+                                      "a_router": "router_tirupati",
+                                      "z_router": "router_nellore"}]}
+            raise AssertionError(f"unexpected layer {layer!r}")
+        if name == "get_lightpaths":
+            # Return the groom lightpath so the commit can find it.
+            return [{"id": "lp-groom", "oms_id": "oms_alt",
+                     "src_site": "tirupati", "dst_site": "nellore"}]
+        return await super().call(name, arguments, **kw)
+
+
+def _groom_geometry():
+    geometry = _geometry()
+    return dataclasses.replace(
+        geometry,
+        oms_nodes={**geometry.oms_nodes, "oms_alt": ["tirupati", "nellore"]},
+        oms_sequences={"lp-groom": ("oms_alt",)})
+
+
+def test_the_replay_prefers_the_cheapest_workable_candidate(write_scenario):
+    """Spec 5.4: a zero-spare groom must be taken over a spare-charging
+    lightpath even when it is listed after it, else T3's 'free' restoration
+    silently spends the spare."""
+    scenario = load_scenario(
+        write_scenario(REPLAY_SCENARIO_YAML, "REPLAY_TEST.yaml"))
+    counting = _GroomLastCounting()
+    # Ledger must include oms_alt for the groom lightpath.
+    ledger = SpareLedger(
+        inventory={"tirupati": 1}, depot_site="tirupati",
+        oms_nodes={"oms_new": ["tirupati", "nellore"],
+                   "oms_alt": ["tirupati", "nellore"]})
+    actions, records = asyncio.run(restore_after_cuts(
+        counting, scenario=scenario, hour="t1", hour_index=1,
+        affected=["c-fwd"], priority=(), ledger=ledger,
+        geometry=_groom_geometry(), issuance=_issuance(), rg_for_cut_hour=None,
+        index_factory=_index_factory(counting)))
+    [record] = records
+    assert record["outcome"] == "restored"
+    assert record["lever"] == "ip_reroute"
+    assert record["spares"] == {}
+    assert ledger.on_hand == 1, "the groom must not have spent the spare"
+    assert actions[0].spares == {}
+
+
+def test_ties_in_spare_cost_keep_menu_order(write_scenario):
+    # Two lightpaths at equal cost: the first in menu order wins, as today.
+    _actions, records = _run(write_scenario, affected=["c-fwd"], priority=())
+    assert records[0]["lever"] == "optical_reroute"
