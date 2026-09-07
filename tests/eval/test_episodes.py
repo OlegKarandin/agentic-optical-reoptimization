@@ -873,10 +873,7 @@ _GOLD_COMMITTED_LEVER = {
 
 
 @pytest.mark.parametrize(
-    "scenario_id",
-    ("T1a", "T1b", "T2a", "T2b") + tuple(
-        pytest.param(s, marks=pytest.mark.stale_pair)
-        for s in ("T3a", "T3b")))
+    "scenario_id", ("T1a", "T1b", "T2a", "T2b", "T3a", "T3b"))
 def test_gold_spare_action_is_grounded_in_a_real_candidate(
     scenario_id, connect_for,
 ):

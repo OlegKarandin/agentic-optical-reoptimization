@@ -127,7 +127,7 @@ def test_the_t1_parser_defaults_are_unchanged_and_the_new_flags_default_to_t1():
         "T1", "protected", "claimants", "sut")
     assert args.alt_span is None and args.probe_flip is None
     assert args.away_bearing is None and args.pcut_match_claimant is None
-    assert args.require_flip_tie is False
+    assert args.require_flip_tie is None
 
 
 def test_derive_t2_and_t3_defaults_are_the_specs():
@@ -145,10 +145,13 @@ def test_derive_t2_and_t3_defaults_are_the_specs():
     leg whose only near-depot aerial span IS `jalgaon<->dhulia`, so a dhulia
     claimant is perfectly correlated with the SUT and its realized cut IS
     the SUT's own first-hop cut (2026-09-06, Task 11; see
-    `tools/derive_t3.py`'s docstring and `T3_PINS`). `--require-flip-tie` is
-    deliberately OFF for the same task's reason: four of the five FLIP_VARS
-    are a network-wide sum that two different cones cannot tie bit for bit,
-    and a full tie would fail `assert_flip_dominates` anyway."""
+    `tools/derive_t3.py`'s docstring and `T3_PINS`). `--require-flip-tie`
+    names ONLY `largest_restorable_group_ecar_gbps` (Task 11 followup):
+    four of the five FLIP_VARS are a network-wide sum that two different
+    cones cannot tie bit for bit and a full tie would fail
+    `assert_flip_dominates` anyway, but this one var is exactly what the
+    two-corridor construction's p_cut match holds equal, and T3's whole
+    premise needs that enforced, not decorative."""
     t2 = derive_t2.build_parser().parse_args(
         ["--t0-radius", "1", "--t0-bearing", "0", "--toward-bearing", "350",
          "--toward-radius", "60", "--away-bearing", "358"])
@@ -172,10 +175,82 @@ def test_derive_t2_and_t3_defaults_are_the_specs():
     assert t3.alt_span == ["khandwa:dhar:out:out", "buldhana:amravati:in:in"]
     assert t3.pcut_match_claimant == (
         "t3-claimant-jalgaon-khandwa:t3-claimant-jalgaon-buldhana")
-    assert t3.require_flip_tie is False
+    assert t3.require_flip_tie == "largest_restorable_group_ecar_gbps"
     assert t3.state == "eval/states/t3-jalgaon-s17.json"
     assert derive_t1._parse_probe_flip(t3.probe_flip) == {
         "A": {"kind": "restorable", "claimant": "t3-claimant-jalgaon-khandwa",
               "expected": "restorable"},
         "B": {"kind": "restorable", "claimant": "t3-claimant-jalgaon-buldhana",
               "expected": "not_restorable"}}
+
+
+def test_require_flip_tie_accepts_bare_all_or_a_named_subset():
+    """Task 11 followup: `--require-flip-tie` used to be a `store_true`
+    boolean (all-or-nothing across every `FLIP_VARS` member, or off). It is
+    now `nargs="?"` with `const="__all__"`, so three shapes must all work:
+    omitted entirely (no requirement -- T1/T2's own default), given bare
+    (still means "all of FLIP_VARS", the ORIGINAL meaning, for backward
+    compatibility), and given a comma-separated value (only those named
+    vars -- T3's own use, since a full tie is unreachable for a two-cone
+    pair and incompatible with `assert_flip_dominates`)."""
+    parser = derive_t1._build_parser(defaults={
+        "sut": "s", "depot": "d", "claimants": "c", "escape_node": "e",
+        "t0_radius": 1.0, "t0_bearing": 0.0, "toward_bearing": 0.0,
+        "toward_radius": 1.0})
+
+    omitted = parser.parse_args(["--away-bearing", "10"])
+    assert omitted.require_flip_tie is None
+
+    bare = parser.parse_args(["--away-bearing", "10", "--require-flip-tie"])
+    assert bare.require_flip_tie == "__all__"
+
+    named = parser.parse_args([
+        "--away-bearing", "10", "--require-flip-tie",
+        "largest_restorable_group_ecar_gbps"])
+    assert named.require_flip_tie == "largest_restorable_group_ecar_gbps"
+
+    multi = parser.parse_args([
+        "--away-bearing", "10", "--require-flip-tie",
+        "largest_restorable_group_ecar_gbps,claimant_ecar_at_exposure_horizon"])
+    assert multi.require_flip_tie == (
+        "largest_restorable_group_ecar_gbps,claimant_ecar_at_exposure_horizon")
+
+
+def test_flip_tie_vars_resolves_the_cli_value_and_rejects_unknown_names():
+    assert derive_t1._flip_tie_vars(None) == ()
+    assert derive_t1._flip_tie_vars("__all__") == derive_t1.FLIP_VARS
+    assert derive_t1._flip_tie_vars("largest_restorable_group_ecar_gbps") == (
+        "largest_restorable_group_ecar_gbps",)
+    assert derive_t1._flip_tie_vars(
+        "largest_restorable_group_ecar_gbps, claimant_ecar_at_exposure_horizon"
+    ) == ("largest_restorable_group_ecar_gbps",
+          "claimant_ecar_at_exposure_horizon")
+    with pytest.raises(SystemExit):
+        derive_t1._flip_tie_vars("not_a_real_flip_var")
+
+
+def test_flip_tie_mismatches_limits_itself_to_the_named_vars():
+    """The whole point of Task 11's followup: a specific-list tie must NOT
+    also demand equality on vars nobody named, even when those other vars
+    (correctly, per T3's own docstring) differ across the halves."""
+    common = {var: 1.0 for var in derive_t1.FLIP_VARS}
+    flip_values = {
+        "A": {**common, "largest_restorable_group_ecar_gbps": 114.763,
+              "claimant_ecar_at_exposure_horizon": 4094.96},
+        "B": {**common, "largest_restorable_group_ecar_gbps": 114.763,
+              "claimant_ecar_at_exposure_horizon": 1090.17},
+    }
+    # Named var ties: no mismatch, even though the OTHER var (not named)
+    # differs hugely between the halves.
+    assert derive_t1._flip_tie_mismatches(
+        flip_values, ("largest_restorable_group_ecar_gbps",)) == []
+    # Naming the var that actually differs surfaces it.
+    assert derive_t1._flip_tie_mismatches(
+        flip_values, ("claimant_ecar_at_exposure_horizon",)) == [
+        "claimant_ecar_at_exposure_horizon"]
+    # All-vars ("__all__" already resolved to FLIP_VARS by the caller)
+    # surfaces every var that differs, not just the first.
+    resolved = derive_t1._flip_tie_vars("__all__")
+    mismatches = derive_t1._flip_tie_mismatches(flip_values, resolved)
+    assert "claimant_ecar_at_exposure_horizon" in mismatches
+    assert "largest_restorable_group_ecar_gbps" not in mismatches

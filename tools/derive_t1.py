@@ -209,6 +209,40 @@ def _parse_alt_span(text: str) -> tuple[str, str, str, str]:
     return parts[0], parts[1], parts[2], parts[3]
 
 
+def _flip_tie_vars(spec: str | None) -> tuple[str, ...]:
+    """Resolve `--require-flip-tie`'s CLI value into the `FLIP_VARS` names
+    the two halves must tie bit-identically. `None` (flag omitted
+    entirely) -> `()`, no requirement at all -- T1/T2's own default, and
+    the flag's original behaviour for every caller that never sets it. The
+    sentinel `"__all__"` (the flag given BARE, no value -- see `_build_
+    parser`'s `const`) -> all of `FLIP_VARS`, preserving the flag's
+    original all-or-nothing meaning. Anything else is a comma-separated
+    list of specific names (T3's own use: only `largest_restorable_group_
+    ecar_gbps` need tie, not the four network-wide sums that cannot -- see
+    `tools/derive_t3.py`'s own docstring)."""
+    if spec is None:
+        return ()
+    if spec == "__all__":
+        return FLIP_VARS
+    names = tuple(v.strip() for v in spec.split(",") if v.strip())
+    unknown = [v for v in names if v not in FLIP_VARS]
+    if unknown:
+        raise SystemExit(
+            f"--require-flip-tie: unknown FLIP_VARS name(s) {unknown!r}; "
+            f"choices are {list(FLIP_VARS)}")
+    return names
+
+
+def _flip_tie_mismatches(flip_values: dict[str, dict[str, float]],
+                         tie_vars: tuple[str, ...]) -> list[str]:
+    """Every named var that is NOT bit-identical across the two halves --
+    the actual tie check, extracted so a test can exercise it directly
+    against a synthetic `flip_values` without going through argparse or a
+    live server."""
+    return [var for var in tie_vars
+           if flip_values["A"][var] != flip_values["B"][var]]
+
+
 def _parse_probe_flip(text: str) -> dict[str, dict]:
     """`A:kind:claimant:expected,B:kind:claimant:expected` -> per-half
     `metadata.probe_flip` dicts (assertions.probe_flip_mismatches' shape)."""
@@ -780,9 +814,9 @@ async def derive(args: argparse.Namespace) -> dict:
         for var in FLIP_VARS:
             print(f"  {var:45s} A={flip_values['A'][var]!r:>20s}  "
                  f"B={flip_values['B'][var]!r}")
-        if args.require_flip_tie:
-            not_tied = [var for var in FLIP_VARS
-                       if flip_values["A"][var] != flip_values["B"][var]]
+        tie_vars = _flip_tie_vars(args.require_flip_tie)
+        if tie_vars:
+            not_tied = _flip_tie_mismatches(flip_values, tie_vars)
             if not_tied:
                 raise SystemExit(
                     "--require-flip-tie: these FLIP_VARS are not "
@@ -959,7 +993,16 @@ def _build_parser(defaults: dict | None = None) -> argparse.ArgumentParser:
                              "and joint deltas, claimant p_cuts; write nothing")
     parser.add_argument("--probe-flip", default=None,
                         metavar="A:kind:claimant:expected,B:kind:claimant:expected")
-    parser.add_argument("--require-flip-tie", action="store_true")
+    parser.add_argument("--require-flip-tie", nargs="?", const="__all__",
+                        default=None, metavar="VAR1,VAR2,...",
+                        help="require bit-identical FLIP_VARS across the "
+                             "halves; bare flag (no value) means ALL of "
+                             "FLIP_VARS (T1's own original all-or-nothing "
+                             "meaning), a comma-separated list means only "
+                             "those named vars (T3's own use, since a full "
+                             "tie is unreachable/incompatible with "
+                             "assert_flip_dominates for a two-cone pair), "
+                             "omitted entirely means no requirement")
     parser.add_argument("--damage-radius-km", type=float, default=74.0)
     parser.add_argument("--seed", type=int, default=17)
     parser.add_argument("--track", default="hudhud")

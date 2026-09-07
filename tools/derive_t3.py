@@ -61,19 +61,38 @@ T3's own question: the two halves put an identically-sized claim in front of
 the decider (`claimed_competing_ecar_gbps` is the same number in both), so
 the observation carries no signal at all and only the probe separates them.
 
-**`--require-flip-tie` is deliberately NOT set** (it was, before this pair
-was first derived live). Four of the five `derived.FLIP_VARS` are the
-NETWORK-WIDE claimant ECAR at the exposure horizon, summed over every
-non-SUT service; two cones that differ at all -- and they must differ, or
-the probe cannot flip -- move that sum by hundreds of Gbps, so a bit-
-identical tie across all of FLIP_VARS is unreachable by construction. It is
-also incompatible with `assertions.assert_flip_dominates`, which requires
-the LARGEST inter-half FLIP_VARS difference to exceed the SUT's own
-equal-in-both-halves ECAR: a full tie makes that difference exactly 0 and
-fails. The tie T3 actually contributes to
-`assert_no_global_policy_solves_the_suite` is on
-`largest_restorable_group_ecar_gbps`, which the claimant p_cut match above
-holds equal to the float.
+**`--require-flip-tie` names ONE var, not all of them** (it was a bare,
+all-of-FLIP_VARS flag before this pair was first derived live; Task 11's
+followup gave the flag an optional value for exactly this). Four of the
+five `derived.FLIP_VARS` are the NETWORK-WIDE claimant ECAR at the exposure
+horizon, summed over every non-SUT service; two cones that differ at all --
+and they must differ, or the probe cannot flip -- move that sum by hundreds
+of Gbps, so a bit-identical tie across ALL of FLIP_VARS is unreachable by
+construction. It is also incompatible with `assertions.assert_flip_
+dominates`, which requires the LARGEST inter-half FLIP_VARS difference to
+exceed the SUT's own equal-in-both-halves ECAR: a full tie makes that
+difference exactly 0 and fails. The tie T3 actually contributes to
+`assert_no_global_policy_solves_the_suite` -- and the one this pair's whole
+premise rests on -- is on `largest_restorable_group_ecar_gbps` alone, which
+the claimant p_cut match above holds equal to the float; naming only that
+var here makes the CLI enforce exactly the property this pair claims,
+instead of leaving it decorative.
+
+**T3's tie is not this variable's ONLY blocker of the whole-suite gate**
+(2026-09-06/07, Task 11 followup, re-checked live against the authoring
+note's own table). On the frozen values -- T1a=148.931 (conserve),
+T1b=24.643 (spend), T2a=114.763 (conserve), T2b=197.076 (spend) -- T1's
+spend half already sits BELOW both conserve halves while T2's spend half
+sits ABOVE them, so T1 and T2 ALONE already INTERLEAVE on this variable
+(sorted by value: spend, conserve, conserve, spend) -- no single threshold
+in either orientation separates the conserve halves from the spend halves,
+with or without T3 in the sweep. T3's exact tie (both halves 114.763,
+landing squarely inside the already-interleaved T1/T2 range) is a real,
+now-enforced property of THIS pair, but it is an ADDITIONAL, redundant
+blocker of the whole-suite gate on this variable, not the sole one --
+correcting the design spec's (`docs/superpowers/specs/2026-09-06-t2-t3-
+probe-redesign-design.md`, S3/S4.2) "T3 blocks the whole-suite gate by
+TIE" wording, which overclaimed T3 as the mechanism.
 
 Every derive_t1 flag still applies; the bearings and radii are the
 authoring inputs (docs/superpowers/plans/notes/2026-09-06-t2-t3-authoring.md
@@ -117,6 +136,10 @@ T3_DEFAULTS = dict(
                          "t3-claimant-jalgaon-buldhana"),
     probe_flip=("A:restorable:t3-claimant-jalgaon-khandwa:restorable,"
                 "B:restorable:t3-claimant-jalgaon-buldhana:not_restorable"),
+    # Only THIS var, not all of FLIP_VARS (see the module docstring above)
+    # -- the docstring's whole "T3 blocks the gate by TIE" claim was, before
+    # Task 11's followup, enforced by nothing at all.
+    require_flip_tie="largest_restorable_group_ecar_gbps",
 )
 
 
