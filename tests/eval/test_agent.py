@@ -1223,7 +1223,8 @@ def test_the_prompt_describes_the_probe_without_saying_when_to_use_it():
         assert needle in p
     lowered = p.lower()
     for banned in ("probe before", "you should probe", "always probe",
-                   "probe when", "use the probe if"):
+                   "probe when", "use the probe if", "probe the claimant",
+                   "probe a competing", "probe other"):
         assert banned not in lowered
 
 
@@ -1234,3 +1235,29 @@ def test_the_prompt_states_that_a_restoration_may_cost_zero_spares():
 def test_the_prompt_keeps_the_joint_p_cut_sentence_and_drops_legs():
     assert "BOTH its working and protection paths are cut" in SYSTEM_PROMPT
     assert "`legs`" not in SYSTEM_PROMPT
+
+
+def test_the_prompt_no_longer_teaches_geometry():
+    p = SYSTEM_PROMPT
+    for banned in ("`offset_km`", "`width_km`", "`damage_radius_km`",
+                   "`unconstrained_menu`", "`cones`"):
+        assert banned not in p
+    assert "`horizons`" in p
+
+
+def test_the_prompt_says_claim_priority_cannot_create_inventory():
+    p = SYSTEM_PROMPT
+    assert "cannot create inventory" in p
+    assert "one way you act on behalf" not in p
+
+
+def test_the_prompt_describes_hold_and_infeasible_as_distinct():
+    p = SYSTEM_PROMPT
+    assert "`hold`" in p
+    assert "as if you had waited" in p
+
+
+def test_the_probe_section_precedes_the_three_decisions():
+    p = SYSTEM_PROMPT
+    assert p.index("## One question you may ask") < p.index("## The three decisions")
+    assert "at any of the three decisions" in p

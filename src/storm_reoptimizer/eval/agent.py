@@ -275,10 +275,7 @@ OBJECTIVE_TOOL = "submit_objective_decision"
 # The prompt is assembled from three literals -- not re-flowed into one --
 # because `_RIVAL_TOTALS_BULLET` has to slot into the "What you can see"
 # list below as its own bullet, right after `omitted_services` and before
-# the "## The three decisions" section starts. Concatenated, HEAD +
-# _RIVAL_TOTALS_BULLET + TAIL is byte-identical to what the now-removed
-# rival-totals arm used to send -- diff against that before believing
-# otherwise if either seam is ever touched again.
+# the "## The three decisions" section starts.
 _SYSTEM_PROMPT_HEAD = """\
 You are the restoration decision-maker for a multi-layer IP-over-optical \
 network during a tropical storm.
@@ -286,11 +283,11 @@ network during a tropical storm.
 ## The situation
 
 A storm cone advances across the network's region. A forecast issuance \
-publishes, for each future hour (a "horizon"), a cone with a cross-track \
-diameter `width_km` and a centre. The convention is that the realized track \
-falls inside the cone about two thirds of the time, so an asset sitting \
-`offset_km` off the cone's centre has a cut probability `p_cut` that falls \
-off smoothly with distance -- it is not a hard in-or-out test.
+publishes, for each future hour (a "horizon"), a cone. For every service \
+the harness has already turned that cone into `p_cut`, the probability the \
+storm cuts the service at that horizon. It is a smooth probability, not a \
+hard in-or-out test: a service near the track but outside it still carries \
+risk.
 
 The hazard this creates is specific. A service's working path and its \
 protection path were certified disjoint at design time, against buried \
@@ -310,12 +307,12 @@ nothing to say.
 Each request carries one observation:
 
 - `hour`, `hours_remaining` -- where you are in the event.
-- `issued_at`, `cones` -- the most recent forecast issuance and its \
-horizons. You never see the CONTENT of a future issuance; `issuance_schedule` \
-lists the hours at which issuances arrive, so you know whether one is still \
-coming. Waiting is what buys the next one.
-- `exposure` -- per service, per horizon: `hours_ahead`, `offset_km`, \
-`width_km`, `p_cut`, `demand_gbps`, and `expected_capacity_at_risk_gbps` -- \
+- `issued_at`, `horizons` -- the most recent forecast issuance and the \
+horizon hours it covers. You never see the CONTENT of a future issuance; \
+`issuance_schedule` lists the hours at which issuances arrive, so you know \
+whether one is still coming. Waiting is what buys the next one.
+- `exposure` -- per service, per horizon: `hours_ahead`, `p_cut`, \
+`demand_gbps`, and `expected_capacity_at_risk_gbps` -- \
 the product `p_cut * demand_gbps`, already computed for you. It is the \
 quantity that makes two competing claims on one resource comparable, and it \
 is in Gbps. For a protected service `p_cut` is the probability BOTH its \
@@ -342,13 +339,14 @@ simulated, but their claim on this site's inventory is real.
 not competing for this inventory, because restoring them draws on their own \
 sites' depots.
 - `claim_priority` (yours to state on the timing decision) -- an ordering of \
-the services shown, most deserving first. When a service is cut, the harness \
-restores cut services in this order with whatever spares remain, each \
-effective after its lever's lead time. Such a restoration may cost zero \
-spares when an existing lightpath with headroom can carry the service, and \
-one spare pair otherwise. Services you leave out are restored after the \
-ones you list, larger demand first. This is the one way you act on behalf \
-of a service other than the actionable one.
+the services shown, most deserving first. When a cut drops services, the \
+harness restores the dropped ones in this order, using only the spares that \
+REMAIN in the depot at that moment, each effective after its lever's lead \
+time. Such a restoration may cost zero spares when an existing lightpath \
+with headroom can carry the service, and one spare pair otherwise. Services \
+you leave out are restored after the ones you list, larger demand first. \
+The ordering cannot create inventory: if the depot's last spare has already \
+been spent, it restores nothing that needs one, whoever is first in it.
 - `actions_taken` and `spares_spent` -- what YOU have already committed \
 earlier in this episode: per action its hour, its lever, the spare pairs it \
 cost, the `avoid` set it was routed under, and `effective_at_hour` -- the \
@@ -367,10 +365,6 @@ the action lands after the cut.
 issued and still be effective at or before the latest published horizon, or \
 `null` if that hour has passed. Acting before the deadline forgoes \
 information; acting after it lands after the cut.
-- `damage_radius_km` -- how far damage can reach beyond the storm track \
-itself. A risk group's avoid-radius is `width_km/2 + damage_radius_km`, not \
-just the track's own half-width -- do not judge how much room a reroute has \
-to clear by `width_km` alone.
 - `risk_group_ids` -- horizon hour -> the id of the risk group defined for \
 that cone. These ids are what you name when you constrain routing.
 - `iteration`, `last_rejection` -- within one hour you may get up to five \
@@ -419,6 +413,19 @@ restoring lightpath, not just the total.
 
 _SYSTEM_PROMPT_TAIL = """\
 
+## One question you may ask
+
+`""" + PROBE_TOOL + """` takes a `service_id` from `exposure` and a \
+`risk_group_id` from `risk_group_ids`, and returns what the routing tools \
+would offer that service if every asset in that risk group were unusable: \
+`status`, `full_restore_candidates` (how many candidates restore its full \
+demand on a genuinely different path), `min_spares_needed_by_site` (the \
+cheapest such candidate's spare transponders per site, or null if there is \
+none) and `levers`. It computes and changes nothing. You may call it up to \
+""" + str(MAX_PROBES_PER_DECISION) + """ times per decision, before the \
+decision tool; the answer comes back as a tool result. You may call it at \
+any of the three decisions, ahead of that decision's tool call.
+
 ## The three decisions
 
 1. **Timing** (`""" + TIMING_TOOL + """`). Act now, or wait for the next \
@@ -442,10 +449,17 @@ when the constraint you mean is a forecast risk group rather than a physical \
 link. This decision changes which candidates EXIST.
 
 3. **Objective** (`""" + OBJECTIVE_TOOL + """`). Which candidate from the \
-routing menu? Answer with the `candidate_label` of the entry you want, or \
-`infeasible` if none is acceptable. This only reorders a menu that already \
-exists; it does not create options. `priority`, when you state one, is an \
-ordering over these seven cost terms:
+routing menu? Answer with the `candidate_label` of the entry you want, \
+`infeasible` if none is acceptable, or `hold` to commit nothing this hour.
+
+Two answers commit nothing. `infeasible` says none of these candidates is \
+acceptable under the constraints you set; you will be asked for constraints \
+again and can loosen them. `hold` says you decline to commit anything this \
+hour after seeing the menu: the hour ends exactly as if you had waited, \
+nothing is spent, and the spare stays in the depot.
+
+This only reorders a menu that already exists; it does not create options. \
+`priority`, when you state one, is an ordering over these seven cost terms:
 
 - `spectrum_used` -- slots consumed. Cost.
 - `transponders` -- **network-wide**: 2.0 x the count of every lightpath in \
@@ -487,18 +501,6 @@ service never moved.
 
 A committed candidate that changes no path and costs no spare is recorded as \
 a wait, not an action.
-
-## One question you may ask
-
-`""" + PROBE_TOOL + """` takes a `service_id` from `exposure` and a \
-`risk_group_id` from `risk_group_ids`, and returns what the routing tools \
-would offer that service if every asset in that risk group were unusable: \
-`status`, `full_restore_candidates` (how many candidates restore its full \
-demand on a genuinely different path), `min_spares_needed_by_site` (the \
-cheapest such candidate's spare transponders per site, or null if there is \
-none) and `levers`. It computes and changes nothing. You may call it up to \
-""" + str(MAX_PROBES_PER_DECISION) + """ times per decision, before the \
-decision tool; the answer comes back as a tool result.
 
 ## Your reasoning
 
