@@ -43,10 +43,7 @@ from ..events.filters import get_filter
 from ..events.geo import damage_footprint
 from ..geo_mapper import Edge, load_edges, map_geo_event_to_assets
 from ..mcp_client import call_tool_json
-from .cone import (
-    Segment, expected_capacity_at_risk_gbps, nearest_span_offset_km,
-    p_cut_region,
-)
+from .cone import Segment, expected_capacity_at_risk_gbps, p_cut_region
 from .decisions import ConstraintDecision, Decider, candidate_index
 from .ledger import SpareLedger, spares_needed
 from .observation import build_observation, latest_issuance, lead_time_hours_for
@@ -246,8 +243,6 @@ def _residual_exposure(candidate_oms: tuple[str, ...],
         p_cut = round(p_cut_region(spans, lat, lon, cone.width_km,
                                    damage_radius_km), 3)
         per_horizon[horizon] = {
-            "offset_km": (round(nearest_span_offset_km(spans, lat, lon), 1)
-                         if spans else None),
             "p_cut": p_cut,
             "ecar_gbps": round(
                 expected_capacity_at_risk_gbps(p_cut, demand_gbps), 3),

@@ -92,8 +92,7 @@ def _candidate(*, changes_path, collides, spares_needed, shortfall, p_cut,
                                      "oms_shared_with_protection": []},
         "spares_needed": spares_needed,
         "shortfall_gbps": shortfall,
-        "residual_exposure": {horizon: {"offset_km": 1.0, "p_cut": p_cut,
-                                        "ecar_gbps": 1.0}},
+        "residual_exposure": {horizon: {"p_cut": p_cut, "ecar_gbps": 1.0}},
     }
 
 

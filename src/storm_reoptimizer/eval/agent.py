@@ -482,7 +482,7 @@ current working and protection corridors: `path_delta.changes_working_path` \
 -- whether the service ends up on a different set of OMS at all; \
 `path_delta.oms_retained_cuttable` -- which storm-cuttable spans you are on \
 now you would STILL be on; `residual_exposure` -- this candidate's own \
-`p_cut`/`offset_km`/`ecar_gbps` per horizon, computed the same way `exposure` \
+`p_cut`/`ecar_gbps` per horizon, computed the same way `exposure` \
 above is; and `collides_with_protection` -- whether this candidate would put \
 the service on its own protection corridor, which would remove the \
 automatic 1:1 switchover that protects it today. Surviving `avoid` is not \
