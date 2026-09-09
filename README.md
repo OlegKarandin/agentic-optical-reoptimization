@@ -67,9 +67,20 @@ pairs). The extra correct episode is `D1`, not a change within any pair; see
 `docs/superpowers/rehearsals/D1.md`'s rewritten Q3 for the live-verified
 mechanism. **Superseded 2026-09-06 by the T2/T3 probe redesign plan**, which
 moved this further to 4/7 (T2 and T3 rebuilt on T1's own label rule) — see
-the results table above and "Reading `episodes correct` honestly" below for
-the current mechanism; this entry is kept only as the historical record of
-the 1/7 -> 2/7 step.
+"Reading `episodes correct` honestly" below for the current mechanism; this
+entry is kept only as the historical record of the 1/7 -> 2/7 step.
+**Superseded again 2026-09-09 (Task 5, fair-scoring plan): the results
+table above is now STALE.** It still prints `4/7`, pasted from the
+2026-09-07 run and not re-run since — `timing_at_decision_hour` was
+changed to read `record["timing_effective"]` instead of the raw declared
+`record["timing"]["action"]` (an act that commits nothing, or commits
+inertly, is a wait), which flips `D1`'s label from correct to incorrect for
+both baseline variants. The current, correct figure is **3/7** for both
+variants; see "Reading `episodes correct` honestly" below for the full
+mechanism and evidence. The table above must not be hand-edited per the
+Boundary note (Finding #9) — it stays `4/7` until the next real
+`render_results_table()` run repastes it; until then, treat this note and
+the section below as authoritative over the stale table.
 
 **Claim 1 (provable).** The agent beats every fixed policy that does not read
 the forecast: the twins' menus and observables are identical by construction,
