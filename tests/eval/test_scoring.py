@@ -63,6 +63,7 @@ def _scenario(tmp_path, sid, label, *, label_rule="timing_at_decision_hour",
 
 
 def _trace(*, timing_at_t1="wait", raw_at_t0="wait", effective_at_t0="wait",
+           effective_at_t1=None,
            actions=(), dropped=(), affected=None,
            rejections_at=(), committed_at=(), reasoning="the cone is centred "
            "on svc-b, so the spare is worth more held",
@@ -83,10 +84,18 @@ def _trace(*, timing_at_t1="wait", raw_at_t0="wait", effective_at_t0="wait",
             action = timing_at_t1
         else:
             action = "wait"
-        # timing_effective defaults to the raw timing action -- only t0's can
-        # be forced to disagree (effective_at_t0), matching what the runner
-        # actually produces when a t0 "act" commit turns out inert.
-        effective = effective_at_t0 if hour == "t0" else action
+        # timing_effective defaults to the raw timing action -- t0 and t1 can
+        # each be forced to disagree (effective_at_t0/effective_at_t1),
+        # matching what the runner actually produces when a declared "act"
+        # commits nothing at all, or commits inertly (Task 5:
+        # timing_at_decision_hour then reads the disagreement too, not just
+        # first_shot_correct at t0).
+        if hour == "t0":
+            effective = effective_at_t0
+        elif hour == "t1" and effective_at_t1 is not None:
+            effective = effective_at_t1
+        else:
+            effective = action
         records.append({
             "hour": hour,
             "services": ["storm-svc-1", "svc-b"],
@@ -114,6 +123,19 @@ def test_timing_label_reads_the_decision_hour_not_t0(tmp_path):
     s = _scenario(tmp_path, "Pa", "act")
     assert decision_label(s, _trace(timing_at_t1="act")) == "act"
     assert decision_label(s, _trace(timing_at_t1="wait")) == "wait"
+
+
+def test_timing_label_reads_effective_not_declared_at_the_decision_hour(
+    tmp_path,
+):
+    """Task 5: an act that commits nothing (or commits inertly) is a wait.
+    `timing_at_decision_hour` must read the decision hour's own
+    `timing_effective`, not the raw declared `timing.action` -- a declared
+    "act" that turned out to commit nothing (or commit inertly) grades as
+    "wait", matching `first_shot_correct`'s own fallback expression."""
+    s = _scenario(tmp_path, "Pa", "act")
+    trace = _trace(timing_at_t1="act", effective_at_t1="wait")
+    assert decision_label(s, trace) == "wait"
 
 
 def test_services_survived_excludes_dropped_services(tmp_path):

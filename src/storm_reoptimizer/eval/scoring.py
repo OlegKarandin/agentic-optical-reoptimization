@@ -150,7 +150,9 @@ def _spare_action_by_deadline_label(scenario: ScenarioFile,
 
 def decision_label(scenario: ScenarioFile, trace: EpisodeTrace) -> str | None:
     """The one categorical this episode is scored on, read off the trace by
-    the rule the scenario declares."""
+    the rule the scenario declares. Under `timing_at_decision_hour`, an act
+    that commits nothing (or commits inertly) is a wait -- see
+    `timing_effective`."""
     rule = scenario.metadata.get("label_rule")
     if rule not in LABEL_RULES:
         raise ValueError(
@@ -165,7 +167,8 @@ def decision_label(scenario: ScenarioFile, trace: EpisodeTrace) -> str | None:
         return None
 
     if rule == "timing_at_decision_hour":
-        return record.get("timing", {}).get("action")
+        # Same fallback expression `first_shot_correct` uses (:251-253).
+        return record.get("timing_effective", record.get("timing", {}).get("action"))
 
     raise ValueError(f"unhandled label_rule {rule!r}")
 

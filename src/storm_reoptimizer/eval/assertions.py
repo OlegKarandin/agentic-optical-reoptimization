@@ -752,6 +752,7 @@ def assert_flip_dominates(a: ScenarioFile, b: ScenarioFile,
 
 def _label_if_committed(*, label_rule: str, candidate: dict,
                         avoid_used: dict,
+                        changes_working_path: bool = True,
                         depot_spares_needed: int = 0) -> str | None:
     """The label `scoring.decision_label` would read off a HYPOTHETICAL commit
     of `candidate` under `avoid_used`, without a trace or a rollout -- the same
@@ -765,15 +766,29 @@ def _label_if_committed(*, label_rule: str, candidate: dict,
     depot's own share of that total. Defaulted to 0 so every other
     `label_rule`'s existing callers are unaffected.
 
+    `changes_working_path` is the analogous input for `timing_at_decision_
+    hour` (Task 5): this function never sees the service's OWN current
+    working lightpaths either (only `_check_no_free_escape` does, as
+    `current`), and recomputing runner.py's OMS-level `path_delta` here
+    would mean reimplementing `_candidate_oms`/`_path_delta` against a raw
+    menu candidate that carries no `path_delta` of its own. Defaulted to
+    True so a caller that (like every one shipped today) already filtered
+    down to candidates that move the service does not have to pass it.
+
     Finding #5 (2026-08-26 re-review of W1.6) is why this function exists at
     all; the two retired rules' branches lived here until 2026-09-06.
 
-    `timing_at_decision_hour` is unconditionally "act": there is no candidate
-    commit in this harness without having acted at that hour (`run_episode`
-    only ever commits following a timing decision of "act"), so a candidate
-    reaching this function under that rule always reads "act" if taken."""
+    `timing_at_decision_hour` no longer reads unconditionally as "act"
+    (Task 5): `scoring.timing_at_decision_hour` now reads `timing_effective`,
+    which downgrades an INERT commit -- one that neither moves the working
+    path nor needs a depot spare, mirroring `runner.py`'s own `step["inert"]`
+    check (runner.py:1078-1080) -- to "wait", on the reasoning that an act
+    that commits nothing (or commits inertly) is a wait. A candidate reaching
+    this function under that rule therefore reads "wait" when it is inert by
+    that same test, else "act"."""
     if label_rule == "timing_at_decision_hour":
-        return "act"
+        inert = not changes_working_path and depot_spares_needed == 0
+        return "wait" if inert else "act"
     if label_rule == "spare_action_by_deadline":
         return "spend" if depot_spares_needed else "hold"
     raise ValueError(f"unknown label_rule {label_rule!r}")
@@ -817,6 +832,12 @@ def _check_no_free_escape(scenario_id: str, menu: dict, current: set[str], *,
         label = _label_if_committed(
             label_rule=label_rule, candidate=candidate,
             avoid_used=reference_avoid,
+            # Always True here: the `current <= reused` gate just above
+            # already `continue`d away every candidate that reuses everything
+            # currently working, so every candidate reaching this call drops
+            # at least one of the service's own current lightpaths -- this
+            # file's own cheap proxy for path_delta.changes_working_path.
+            changes_working_path=True,
             # Always 0 here: the gate above already requires this
             # candidate's total spares_needed (summed across every site) to
             # be zero, so its depot-specific share can never be nonzero

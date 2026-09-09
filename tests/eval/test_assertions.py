@@ -387,9 +387,15 @@ _T1_KW = dict(label_rule="timing_at_decision_hour", gold_label="wait",
 def test_a_free_candidate_that_moves_the_service_defeats_a_conserve_gold():
     """The T1a failure mode: a 0-pair candidate the agent can take to improve
     its own position while keeping the spare. Gold says "don't spend"; the
-    label rule reads "acted"; both are satisfiable at once -- and for
-    `timing_at_decision_hour`, ANY commit reads "act", so this is a genuine
-    escape regardless of lever."""
+    label rule reads "acted"; both are satisfiable at once. Task 5: for
+    `timing_at_decision_hour`, a commit reads "act" unless it is INERT (moves
+    nothing and needs no spare) -- but `_check_no_free_escape` already
+    filters out every candidate that reuses everything currently working
+    (see the `current <= reused` `continue` above), so every candidate that
+    reaches `_label_if_committed` from here already moves the service, and
+    this remains a genuine escape regardless of lever. See
+    `test_label_if_committed_reads_wait_for_an_inert_commit` below for the
+    direct case where an inert commit reads "wait"."""
     menu = {"status": "solution", "candidates": [
         {"lever": "ip_reroute", "reused_lightpaths": ["lp-somewhere-else"],
          "new_lightpaths": [], "restored_gbps": 300.0,
@@ -442,6 +448,32 @@ def test_label_if_committed_rejects_a_retired_rule():
     with pytest.raises(ValueError, match="unknown label_rule"):
         _label_if_committed(label_rule="avoid_horizon_at_decision_hour",
                             candidate={}, avoid_used={})
+
+
+def test_label_if_committed_reads_wait_for_an_inert_commit():
+    """Task 5: `timing_at_decision_hour` is no longer unconditionally "act".
+    A commit that neither moves the working path nor needs a depot spare is
+    INERT, and mirrors `runner.py`'s own `step["inert"]` -- reads "wait", the
+    same as a genuine no-op hour, per `scoring.decision_label`'s own
+    docstring: "an act that commits nothing (or commits inertly) is a
+    wait"."""
+    from storm_reoptimizer.eval.assertions import _label_if_committed
+    assert _label_if_committed(
+        label_rule="timing_at_decision_hour", candidate={}, avoid_used={},
+        changes_working_path=False, depot_spares_needed=0) == "wait"
+
+
+def test_label_if_committed_reads_act_for_a_substantive_commit():
+    """The other half of the same flip: a commit that DOES move the working
+    path (regardless of whether it also spends a depot spare) is substantive,
+    not inert, and still reads "act"."""
+    from storm_reoptimizer.eval.assertions import _label_if_committed
+    assert _label_if_committed(
+        label_rule="timing_at_decision_hour", candidate={}, avoid_used={},
+        changes_working_path=True, depot_spares_needed=0) == "act"
+    assert _label_if_committed(
+        label_rule="timing_at_decision_hour", candidate={}, avoid_used={},
+        changes_working_path=False, depot_spares_needed=1) == "act"
 
 
 # --------------------------------------------------------------------------

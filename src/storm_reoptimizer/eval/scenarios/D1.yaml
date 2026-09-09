@@ -189,10 +189,14 @@ metadata:
   # Confirmed directly, not merely deduced: defining that real risk group
   # and calling route_service(avoid={risk_groups:[...]}, basis=risk_group,
   # level=risk_group) against the live server returns status=no_solution/0
-  # candidates. D1's own graded mechanic (`timing_at_decision_hour`, the raw
+  # candidates. D1's own graded mechanic (`timing_at_decision_hour`, the
   # act/wait choice) is unaffected -- gold's actual avoid at t0 is
   # `reference_avoid` (see top of file), never this named risk group. Was
   # `true` before this fix.
+  # 2026-09-09 (Task 5, fair-scoring plan): `timing_at_decision_hour` now
+  # reads `record["timing_effective"]`, not the raw declared
+  # `record["timing"]["action"]` -- see README's "Reading `episodes
+  # correct` honestly" and docs/superpowers/rehearsals/D1.md's Q3.
   widest_avoid_feasible: false
   no_ip_reroute_in_menu: true
   # 2026-09-05 plan, Task 11: D1's live invariants (assert_depot_is_the_

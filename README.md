@@ -226,11 +226,14 @@ the test.
 
 ### Reading `episodes correct` honestly
 
-The `episodes correct` column above is 4/7 for both baseline variants
+The `episodes correct` column above is 3/7 for both baseline variants
 (re-measured 2026-09-07, T2/T3 probe redesign plan, Task 14, against the
-rebuilt T2/T3 pairs) — exactly the "roughly half, plus `D1`" a reading of
-"both baselines tie every pair at exactly one half" predicts, not the 2/7
-an earlier revision of this section reported. This is not a bug in the
+rebuilt T2/T3 pairs, then revised again by Task 5 of the fair-scoring plan
+below once `timing_at_decision_hour` was changed to read `timing_effective`
+instead of the raw declared `timing.action` — see `D1`'s own paragraph
+below) — exactly the "roughly half" a reading of "both baselines tie every
+pair at exactly one half" predicts, not the 2/7 an earlier revision of this
+section reported. This is not a bug in the
 harness or a confounded pair — `T1a`/`T1b` (`test_each_baseline_variant_
 scores_exactly_one_half`) and `T2`/`T3`'s equivalent checks already pass in
 `tests/eval/test_episodes.py`, which is the pre-flight signal that would
@@ -261,29 +264,49 @@ have caught a genuinely confounded twin. What actually happens:
 
 So the true count is: 6 halves discriminating (all three pairs correctly
 land 1/2, as Claim 1 requires) plus `D1` — 6/12 raw label-correct halves
-across the three pairs' six halves, plus `D1` correct in both variants, for
-4/7 raw episodes correct per variant (`T1b`, one of `T2a`/`T2b`, one of
-`T3a`/`T3b`, and `D1`). **Claim 1 still holds exactly as stated**: it is a
-claim about `pair_solved` (a fixed policy that reads only current exposure
-can never get *both* halves of a well-built pair right), not about hitting
-any particular raw label-accuracy fraction — and `pair_solved` is `0.00`
-for both variants over all three pairs, confirmed by the run above. See
+across the three pairs' six halves, plus `D1` INCORRECT in both variants
+(see below), for 3/7 raw episodes correct per variant (`T1b`, one of
+`T2a`/`T2b`, one of `T3a`/`T3b` — a "one correct half per pair, nothing
+else" count, with `D1` contributing nothing to either side). **Claim 1
+still holds exactly as stated**: it is a claim about `pair_solved` (a fixed
+policy that reads only current exposure can never get *both* halves of a
+well-built pair right), not about hitting any particular raw
+label-accuracy fraction — and `pair_solved` is `0.00` for both variants
+over all three pairs, confirmed by the run above. See
 `docs/superpowers/rehearsals/T2.md` and `T3.md` §8 for the live, per-pair
-numbers this section summarizes.
+numbers this section summarizes. `D1` cannot move this claim either way:
+`pair_solved` is computed over `T1`/`T2`/`T3` only (`D1` declares no
+`pair` key, so `rules._by_pair` groups it alone and `cross_twin_metrics`
+never runs on it), and even if it did, `D1`'s own `label_rule`
+(`timing_at_decision_hour`) is not the rule any pair is scored on — `T1`,
+`T2` and `T3` are all `spare_action_by_deadline` (grep the scenario
+files: `timing_at_decision_hour` is `D1`'s alone). Task 5's change to
+`timing_at_decision_hour` therefore cannot touch Claim 1 by construction,
+independent of what it does to `D1`'s own raw score.
 
-`D1` (the seventh episode, and not part of any pair) is CORRECT for both
-baseline variants (`ForecastBlindBaseline` run for real against the current
-server state: both variants' `timing.action` at `t0` is `"act"`, matching
-`gold.label`). `decision_label` for `D1` (`timing_at_decision_hour`) reads
-the raw timing action regardless of whether anything later commits.
-(`docs/superpowers/rehearsals/D1.md`'s Q3 records a second, independent
-finding: the baseline still never physically COMMITS anything in `D1`
-either, for a `basis="physical"`/static-protection-leg reason specific to
-`storm-svc-1` — but that does not change `decision_label`, which is scored
-on the raw timing action, not on whether a candidate committed.) This is
-not a discriminating twin and is not counted in `pair_solved`, but it is
-why the total lands on 4/7 rather than the 3/7 a "one correct half per
-pair, nothing else" count alone would give.
+`D1` (the seventh episode, and not part of any pair) is now INCORRECT for
+both baseline variants, which is a change from the 4/7-with-`D1`-correct
+count an earlier revision of this section reported. `ForecastBlindBaseline`
+still answers `timing.action = "act"` at `t0` in both variants — that has
+not changed — but Task 5 of the fair-scoring plan (2026-09-09) moved
+`decision_label`'s `timing_at_decision_hour` branch off the raw declared
+`timing.action` and onto `record["timing_effective"]`
+(`scoring.timing_at_decision_hour`, same fallback expression
+`first_shot_correct` already used), on the reasoning that an act that
+commits nothing (or commits inertly) is a wait.
+`docs/superpowers/rehearsals/D1.md`'s own Q3 already documents,
+live-verified against the real server (2026-08-31, predating this plan),
+that neither baseline
+variant ever actually commits anything in `D1`: `ForecastBlindBaseline`'s
+hardcoded `basis="physical"` constraint collides with `storm-svc-1`'s own
+static protection leg on every one of its 5 retries at `t0`
+(`outcome: None, committed_lever: None` for both variants — see Q3's
+verbatim probe output), so `timing_effective` at `t0` is `"wait"` for both,
+not `"act"`. `decision_label(D1)` under the new rule is therefore `"wait"`
+for both variants, against `gold.label = "act"` — INCORRECT. This is not a
+discriminating twin and is still not counted in `pair_solved`, but it is
+why the total lands on 3/7 rather than the 4/7 an earlier revision of this
+section reported.
 
 ### The one tension the three pairs share
 
