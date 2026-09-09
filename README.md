@@ -374,8 +374,9 @@ which acting is still possible. Gold: `act`.
 **What the model is shown.** `project_observation` trims the loaded state's
 573 services down to the service under test plus every service clearing
 `p_cut >= 0.005` (`eval/agent.py`'s `P_CUT_ENUMERATION_THRESHOLD`) — here,
-just `storm-svc-1` and `d0361`. Reconstructed for readability (the real
-payload's `n_services_total` was 573, `omitted_services.count` 571):
+just `storm-svc-1` and `d0361`. Reconstructed for readability, captured
+pre-2026-08-30 per the caveat above (the real payload's `n_services_total`
+was 573, `omitted_services.count` 571):
 
 ```json
 {
@@ -401,6 +402,18 @@ payload's `n_services_total` was 573, `omitted_services.count` 571):
                        "summed_expected_capacity_at_risk_gbps": 0.0}
 }
 ```
+
+**2026-09-09 (Task 7, fair-scoring plan): the JSON above is historical and
+must not be read as today's wire shape.** Tasks 1-2 of that plan trimmed
+`offset_km`/`width_km`/`damage_radius_km` and the `cones` key itself (now
+`horizons`, a plain list of horizon-hour strings with no geometry) out of
+what `project_observation` actually sends the model — they were found to be
+distractors the agent double-counted against `p_cut`, which already prices
+distance in. This captured D1 trace predates that trim (and, per the caveat
+above, the exposure-model correction too), so it still shows `cones` and
+`offset_km` — left as-is because the whole block is an unedited historical
+record, not a current-format spec. See "Current wire format" below for a
+same-length, live example against today's trimmed shape.
 
 `horizon_totals` (`eval/agent.py`'s `P_CUT_ENUMERATION_THRESHOLD` neighbor,
 `_horizon_totals` in `observation.py`) is always present now, summed over
@@ -487,6 +500,63 @@ Full traces for all three of `D1`'s rollouts live in `eval/traces/D1-agent_
 claude-sonnet-5-{0,1,2}.json`; the audit sidecar recording exactly what was
 shown on every one of the 18 calls that produced them is
 `eval/traces/agent-calls.jsonl`.
+
+### Current wire format (2026-09-09, fair-scoring plan)
+
+The `D1` trace above is frozen and, per the note under its JSON, now shows a
+stale field set. For a live comparison, this is `tools/probe_episode.py
+--dump-prompt t1` run today against `T2a`'s own state
+(`eval/states/t2-jalgaon-s17.json`) — the same `project_observation` payload
+a real `ClaudeDecider` would receive at `t1`, trimmed here to the SUT plus
+its two largest claimants (`d0422`, tied with `d0346` at the same
+`expected_capacity_at_risk_gbps`, is elided; the full payload lists both):
+
+```json
+{
+  "scenario_id": "T2a", "actionable_service": "t2-svc-jalgaon-nagpur",
+  "hour": "t1", "hours_remaining": 6, "issued_at": "t1",
+  "exposure": {
+    "t2-svc-jalgaon-nagpur": {"t3": {"hours_ahead": 2, "p_cut": 0.145,
+                              "demand_gbps": 300.0,
+                              "expected_capacity_at_risk_gbps": 43.5}},
+    "t2-claimant-jalgaon-khandwa": {"t3": {"hours_ahead": 2, "p_cut": 0.574,
+                              "demand_gbps": 200.0,
+                              "expected_capacity_at_risk_gbps": 114.8}},
+    "d0346": {"t3": {"hours_ahead": 2, "p_cut": 0.145, "demand_gbps": 100.0,
+                     "expected_capacity_at_risk_gbps": 14.5}}
+  },
+  "horizon_totals": {
+    "t3": {"sut_ecar_gbps": 43.5, "non_sut_ineligible_ecar_gbps": 3731.0,
+           "largest_restorable_group_ecar_gbps": 114.8}
+  },
+  "spares_on_hand": 1,
+  "lead_time_hours": {"ip_reroute": 0, "hybrid": 2, "optical_reroute": 2},
+  "risk_group_ids": {"t3": "rg_T2a_t1_t3"},
+  "horizons": ["t3"],
+  "n_services_total": 577,
+  "omitted_services": {
+    "p_cut_threshold": 0.005,
+    "below_threshold": {"count": 296, "max_p_cut": 0.0,
+                        "summed_expected_capacity_at_risk_gbps": 0},
+    "ineligible_for_depot": {"count": 277, "max_p_cut": 0.574,
+                        "summed_expected_capacity_at_risk_gbps": 3731.0}
+  }
+}
+```
+
+Note what is gone relative to the `D1` example above: no `cones` key, and no
+`offset_km`/`width_km`/`damage_radius_km` anywhere in `exposure` — `p_cut`
+is the only distance-derived number the model sees now. `horizons` replaces
+`cones` as a plain list of horizon-hour strings. `omitted_services` also now
+splits `below_threshold` (quiet services) from `ineligible_for_depot`
+(exposed but not depot-eligible) rather than D1's single flat bucket — a
+change from an earlier refinement, unrelated to this plan's field trim, kept
+here only because this is a live, unedited capture. The full untrimmed
+payload additionally carries `services` (path-level detail per kept
+service), `restorable_groups`, `issuance_schedule`, `deadline_hour`,
+`iteration`, `last_rejection`, `actions_taken`, and `spares_spent`, all
+omitted above for length the same way the `D1` example omits some of them —
+neither JSON block claims to be the full payload.
 
 ## Viewing a run
 
