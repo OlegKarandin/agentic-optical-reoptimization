@@ -551,7 +551,7 @@ is the only distance-derived number the model sees now. `horizons` replaces
 splits `below_threshold` (quiet services) from `ineligible_for_depot`
 (exposed but not depot-eligible) rather than D1's single flat bucket — a
 change from an earlier refinement, unrelated to this plan's field trim, kept
-here only because this is a live, unedited capture. The full untrimmed
+here only because this is a live, trimmed but otherwise unedited capture. The full untrimmed
 payload additionally carries `services` (path-level detail per kept
 service), `restorable_groups`, `issuance_schedule`, `deadline_hour`,
 `iteration`, `last_rejection`, `actions_taken`, and `spares_spent`, all

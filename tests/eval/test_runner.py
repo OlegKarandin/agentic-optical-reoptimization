@@ -1229,6 +1229,11 @@ def test_reusing_the_own_working_lightpath_reports_an_unchanged_path():
         "changes_working_path": False, "oms_added": [], "oms_removed": [],
         "oms_retained_cuttable": ["oms_satna_rewa"]}
     assert candidate["residual_exposure"]["t1"]["p_cut"] > 0.5
+    # Task 2 (fair-scoring plan) removed offset_km from _residual_exposure's
+    # output; menu_for_prompt passes candidates through with **candidate, so
+    # this is what actually reaches the model at the wire -- assert its
+    # absence here, not just at _residual_exposure's own return value.
+    assert "offset_km" not in candidate["residual_exposure"]["t1"]
     assert candidate["collides_with_protection"] == {
         "collides": False, "oms_shared_with_protection": []}
 
