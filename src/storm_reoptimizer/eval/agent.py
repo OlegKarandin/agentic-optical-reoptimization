@@ -546,9 +546,10 @@ TOOLS = [
           CONSTRAINT_JSON_SCHEMA),
     _tool(OBJECTIVE_TOOL,
           "Submit which candidate from the routing menu to commit, or "
-          "`infeasible` if none is acceptable. Call this exactly once, after "
-          "comparing the candidates on the terms that matter for this "
-          "service and this event state.",
+          "`infeasible` if none is acceptable under these constraints, or "
+          "`hold` to commit nothing this hour. Call this exactly once, "
+          "after comparing the candidates on the terms that matter for "
+          "this service and this event state.",
           OBJECTIVE_JSON_SCHEMA),
     _tool(PROBE_TOOL,
           "Ask what the routing tools would offer one service shown in "

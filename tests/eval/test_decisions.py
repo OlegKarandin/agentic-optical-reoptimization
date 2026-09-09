@@ -101,6 +101,7 @@ def test_candidate_index_parses_the_choice_label():
     assert candidate_index("candidate_0") == 0
     assert candidate_index("candidate_12") == 12
     assert candidate_index("infeasible") is None
+    assert candidate_index("hold") is None
     with pytest.raises(DecisionError):
         candidate_index("candidate_x")
 

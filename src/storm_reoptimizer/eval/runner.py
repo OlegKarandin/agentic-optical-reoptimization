@@ -44,7 +44,8 @@ from ..events.geo import damage_footprint
 from ..geo_mapper import Edge, load_edges, map_geo_event_to_assets
 from ..mcp_client import call_tool_json
 from .cone import Segment, expected_capacity_at_risk_gbps, p_cut_region
-from .decisions import ConstraintDecision, Decider, candidate_index
+from .decisions import (ConstraintDecision, Decider, HOLD_CHOICE,
+                        candidate_index)
 from .ledger import SpareLedger, spares_needed
 from .observation import build_observation, latest_issuance, lead_time_hours_for
 from .plans import PlanTranslationError, build_topology_index, plan_from_candidate
@@ -997,6 +998,17 @@ async def run_episode(
                                              None),
                         "objective": choice.to_dict()}
                 record["iterations"].append(step)
+
+                if choice.choice == HOLD_CHOICE:
+                    # "I looked at this hour's menu and I'd rather not spend
+                    # anything after all." Ends the hour outright -- unlike
+                    # `infeasible` below, this does NOT loop back for new
+                    # constraints. The `break` skips the `for...else` below,
+                    # so `terminal_status` stays "converged", `committed`
+                    # stays False, and `record["timing_effective"]` reads
+                    # "wait" for free (see the comment at its assignment).
+                    step["outcome"] = "held"
+                    break
 
                 idx = candidate_index(choice.choice)
                 if idx is None:

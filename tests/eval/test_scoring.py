@@ -227,6 +227,21 @@ def test_harness_debit_never_counts_as_spend(tmp_path):
     assert decision_label(s, t) == "hold"
 
 
+def test_a_held_iteration_with_no_debits_labels_hold(tmp_path):
+    # The `hold` exit at the objective step (decisions.py, HOLD_CHOICE): an
+    # hour whose timing action was "act" but whose only iteration ended
+    # `held` -- no ledger debit was ever made -- must not be mistaken for a
+    # spend just because the hour's raw timing action was "act".
+    s = _scenario(tmp_path, "X", "hold", label_rule="spare_action_by_deadline")
+    trace = _trace(timing_at_t1="act")
+    hours = list(trace.hours)
+    idx = [h["hour"] for h in hours].index("t1")
+    hours[idx] = {**hours[idx], "iterations": [{"outcome": "held"}]}
+    trace = dataclasses.replace(trace, hours=tuple(hours))
+    assert trace.ledger_debits == ()
+    assert decision_label(s, trace) == "hold"
+
+
 def test_gbps_hours_lost_counts_until_restoration_lands(tmp_path):
     # hours t0..t5; svc-b (100G) dropped at t3 (index 3); harness restoration
     # effective at index 5 -> down for t3 and t4 = 2 h x 100 G.

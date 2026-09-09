@@ -907,6 +907,53 @@ def test_declaring_infeasible_feeds_back_a_rejection_and_the_loop_retries(
     assert trace.actions
 
 
+class _HoldAtObjective:
+    """Says `act` at t0 and, on the first iteration, `hold` at the objective
+    step -- Decision 3's third exit (decisions.py, HOLD_CHOICE): "I looked at
+    this hour's menu and I'd rather not spend anything after all," distinct
+    from `infeasible`'s "give me new constraints and I'll retry." Answers
+    `wait` at every other hour so `constraints` is only ever asked once,
+    proving the hold ends the hour WITHOUT looping back for a new one."""
+
+    name = "hold-at-objective"
+
+    def __init__(self):
+        self.constraints_calls = 0
+
+    async def timing(self, obs):
+        action = "act" if obs.hour == "t0" else "wait"
+        return TimingDecision(action, f"{action}: scripted for the test")
+
+    async def constraints(self, obs, unconstrained_menu=None):
+        self.constraints_calls += 1
+        return ConstraintDecision(avoid={}, reasoning="unconstrained probe")
+
+    async def objective(self, obs, menu):
+        return ObjectiveDecision(
+            "hold", None, "the menu is fine; I'd rather hold the spare")
+
+
+def test_holding_at_the_objective_step_ends_the_hour_as_a_wait(
+    tmp_path, loaded_state_path, local_server_command, local_server_env,
+):
+    decider = _HoldAtObjective()
+    trace = asyncio.run(_run(
+        _scenario(tmp_path), decider,
+        loaded_state_path, local_server_command, local_server_env))
+
+    first_hour = trace.hours[0]
+    assert len(first_hour["iterations"]) == 1
+    assert first_hour["iterations"][0]["outcome"] == "held"
+    assert first_hour["rejections"] == []
+    assert first_hour["committed"] is False
+    assert first_hour["timing_effective"] == "wait"
+    assert trace.actions == ()
+    assert trace.ledger_debits == ()
+    assert trace.terminal_status == "converged"
+    # Unlike `infeasible`, `hold` never loops back for a new constraint set.
+    assert decider.constraints_calls == 1
+
+
 def test_a_decider_that_only_ever_declares_infeasible_still_terminates(
     tmp_path, loaded_state_path, local_server_command, local_server_env,
 ):

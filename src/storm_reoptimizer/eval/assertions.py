@@ -1601,7 +1601,10 @@ async def assert_spend_is_real(
     apart), reads the real menu under it, and runs `oracle.escape_objective`
     over it -- the SAME function `oracle.spend_decider` is wired to.
 
-    The pick must exist (not `"infeasible"`), charge exactly one spare
+    The pick must exist (not `"infeasible"` -- and never `"hold"` either:
+    that literal is a real decider's own third exit at the objective step
+    (decisions.py, HOLD_CHOICE), not something `oracle.escape_objective`'s
+    fixed escape rule ever answers), charge exactly one spare
     transponder pair at `scenario.depot_site` (a real, single-lightpath
     escape -- not a free reuse, and not a multi-lightpath spend the
     episode's own `spares_on_hand` could not actually afford), and land the

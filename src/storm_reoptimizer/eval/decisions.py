@@ -30,6 +30,12 @@ BENEFIT_TERMS = frozenset({"total_margin"})
 
 _AVOID_KEYS = {"assets", "srlgs", "risk_groups"}
 _ACTIONS = {"act", "wait"}
+# The objective step's third exit: "I looked at this hour's menu and I'd
+# rather not spend anything after all" -- distinct from `infeasible`, which
+# says "none of these candidates work, give me new constraints and I'll
+# retry." `hold` ends the hour outright; see candidate_index and runner.py's
+# iteration loop.
+HOLD_CHOICE = "hold"
 _BASES = {"physical", "srlg", "risk_group"}
 # `risk_group` is load-bearing, not decorative: T2a/T3a/T3b's gold
 # constraint decision only validates under basis="risk_group"/
@@ -214,7 +220,7 @@ class ConstraintDecision:
 
 @dataclass(frozen=True)
 class ObjectiveDecision:
-    choice: str                          # "candidate_<i>" | "infeasible"
+    choice: str                          # "candidate_<i>" | "infeasible" | "hold"
     priority: tuple[str, ...] | None     # interpretability artifact, optional
     reasoning: str
     # The rival claim on the shared depot this decision weighed. Last field so
@@ -248,14 +254,14 @@ class ObjectiveDecision:
 
 
 def candidate_index(choice: str) -> int | None:
-    """`"candidate_2"` -> 2; `"infeasible"` -> None."""
-    if choice == "infeasible":
+    """`"candidate_2"` -> 2; `"infeasible"` or `"hold"` -> None."""
+    if choice in ("infeasible", HOLD_CHOICE):
         return None
     prefix = "candidate_"
     if not choice.startswith(prefix) or not choice[len(prefix):].isdigit():
         raise DecisionError(
-            f"objective: `choice` must be 'candidate_<i>' or 'infeasible', "
-            f"got {choice!r}")
+            f"objective: `choice` must be 'candidate_<i>', 'infeasible' or "
+            f"'hold', got {choice!r}")
     return int(choice[len(prefix):])
 
 
