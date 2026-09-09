@@ -373,16 +373,6 @@ just the track's own half-width -- do not judge how much room a reroute has \
 to clear by `width_km` alone.
 - `risk_group_ids` -- horizon hour -> the id of the risk group defined for \
 that cone. These ids are what you name when you constrain routing.
-- `unconstrained_menu` -- present on the constraints request only. The \
-routing menu as it stands with nothing avoided: each entry's \
-`candidate_label`, its `lever`, and `spares_needed`, its own cost in spare \
-transponders PER SITE. Cost vectors are not shown here; they belong to the \
-objective decision. Constraining removes entries from this list -- an entry \
-that reuses a path your `avoid` set forbids will not survive into the menu \
-you are given at the next step. Labels here are positions within THIS list \
-only -- the menu you receive at the objective step is renumbered from its \
-own surviving entries, so a label you see here does not necessarily name \
-the same candidate there.
 - `iteration`, `last_rejection` -- within one hour you may get up to five \
 attempts. `last_rejection` tells you why the previous attempt failed.
 - `n_services_total` and `omitted_services` -- the observation shows you the \
@@ -648,11 +638,8 @@ class ClaudeDecider:
         return self._client
 
     def _user_content(self, payload: dict, instruction: str, *,
-                      menu: dict | None = None,
-                      unconstrained_menu: dict | None = None) -> str:
+                      menu: dict | None = None) -> str:
         body = {"observation": payload}
-        if unconstrained_menu is not None:
-            body["unconstrained_menu"] = unconstrained_menu
         if menu is not None:
             body["menu"] = _menu_for_prompt(menu, self.oms_nodes)
         rendered = json.dumps(body, indent=2, sort_keys=True, default=str)
@@ -848,11 +835,13 @@ class ClaudeDecider:
     async def constraints(self, obs: Observation,
                           unconstrained_menu: dict | None = None
                           ) -> ConstraintDecision:
+        # Accepted and IGNORED. The model no longer sees this menu -- see
+        # `_user_content` -- but the Decider protocol (decisions.py) and
+        # runner.py still pass it positionally.
         payload = self._project(obs)
         return await self._decide(
             CONSTRAINT_TOOL, ConstraintDecision, obs, payload,
-            self._user_content(payload, CONSTRAINT_INSTRUCTION,
-                               unconstrained_menu=unconstrained_menu))
+            self._user_content(payload, CONSTRAINT_INSTRUCTION))
 
     async def objective(self, obs: Observation, menu: dict) -> ObjectiveDecision:
         payload = self._project(obs)

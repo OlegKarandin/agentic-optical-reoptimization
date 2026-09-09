@@ -687,32 +687,24 @@ PROBE = {"status": "solution",
                          "lever": "optical_reroute", "pairs_needed": 1}]}
 
 
-def test_the_constraints_prompt_shows_what_exists_before_it_is_narrowed():
-    decider, client = _decider(
-        FakeResponse(FakeToolUse(CONSTRAINT_TOOL, CONSTRAINT_OK)))
-    _run(decider.constraints(_obs(others=CLAIMANTS), PROBE))
-    content = client.messages.calls[0]["messages"][0]["content"]
-    body = json.loads(content.split("\n\n")[0])
-    assert body["unconstrained_menu"] == PROBE
-    for candidate in body["unconstrained_menu"]["candidates"]:
-        assert "cost_vector" not in candidate
-
-
-def test_the_timing_and_objective_prompts_never_carry_the_probe():
-    # A timing decision made against a costed menu is a different experiment
-    # (the spec's deferred A9/D7), and the objective step has the real menu.
+def test_no_prompt_carries_the_unconstrained_menu():
+    # Trace evidence showed the model treating unconstrained_menu as an
+    # invitation to act on options that don't survive the real constraint
+    # step -- a distractor it never cited correctly. runner.py still
+    # computes, records and passes it (for the audit/viewer, and because the
+    # Decider protocol requires the parameter), but no prompt -- for any of
+    # the three decisions -- may put it in front of the model.
     decider, client = _decider(
         FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_OK)),
+        FakeResponse(FakeToolUse(CONSTRAINT_TOOL, CONSTRAINT_OK)),
         FakeResponse(FakeToolUse(OBJECTIVE_TOOL, OBJECTIVE_OK)))
     _run(decider.timing(_obs(others=CLAIMANTS)))
+    _run(decider.constraints(_obs(others=CLAIMANTS), PROBE))
     _run(decider.objective(_obs(others=CLAIMANTS), MENU))
     for call in client.messages.calls:
         body = json.loads(call["messages"][0]["content"].split("\n\n")[0])
         assert "unconstrained_menu" not in body
-
-
-def test_the_system_prompt_describes_the_unconstrained_menu():
-    assert "unconstrained_menu" in SYSTEM_PROMPT
+    assert "unconstrained_menu" not in SYSTEM_PROMPT
 
 
 def test_the_system_prompt_warns_that_transponders_is_a_network_wide_count():
