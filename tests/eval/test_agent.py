@@ -253,6 +253,11 @@ def test_projection_strips_geometry_from_exposure_entries():
         for entry in per_horizon.values():
             assert set(entry) == {"hours_ahead", "p_cut", "demand_gbps",
                                   "expected_capacity_at_risk_gbps"}
+    # The recompute (agent.py's `_project_exposure_entry`) must land on the
+    # same value `observation.py` would have stored: p_cut(0.3410) x
+    # demand_gbps(300.0), rounded to 3 decimals -- not just the right keys.
+    sut_entry = payload["exposure"]["storm-svc-1"][HORIZON]
+    assert sut_entry["expected_capacity_at_risk_gbps"] == pytest.approx(102.3)
     # The raw observation is untouched -- projection must not mutate it.
     assert set(obs.exposure["storm-svc-1"][HORIZON]) == {
         "hours_ahead", "offset_km", "width_km", "p_cut", "demand_gbps"}

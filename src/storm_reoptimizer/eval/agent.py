@@ -123,10 +123,12 @@ def project_observation(
     `demand_gbps`, `expected_capacity_at_risk_gbps` (`_project_exposure_
     entry`); `offset_km` and `width_km` are dropped, `damage_radius_km` is
     dropped from the payload entirely, and `cones` is replaced with
-    `horizons` -- a plain sorted list of the horizon hours this issuance
-    publishes, not the raw cone objects. `p_cut` already integrates all of
-    this geometry, so surfacing it separately added nothing a decider could
-    act on; in practice it was misread as forecast uncertainty rather than
+    `horizons` -- a plain list of the horizon hours this issuance publishes,
+    in the same ascending-hours order `risk_group_ids` is built in (dict
+    iteration order, NOT a lexicographic sort -- "t10" would sort before
+    "t2"), not the raw cone objects. `p_cut` already integrates all of this
+    geometry, so surfacing it separately added nothing a decider could act
+    on; in practice it was misread as forecast uncertainty rather than
     corroborating detail behind a number already shown.
 
     `restorable_groups` keeps a group WHOLE -- every member, and `ecar_gbps`
@@ -160,9 +162,13 @@ def project_observation(
     rest."""
     payload = obs.to_dict()
     payload.pop("damage_radius_km")
-    # Ordered by hour, not by whatever order `to_dict()` happened to build
-    # the horizons dict in -- matches `risk_group_ids`' own key order.
-    payload["horizons"] = sorted(payload.pop("cones"))
+    # `list(...)`, NOT `sorted(...)` -- horizon-hour labels ("t2", "t10", ...)
+    # sort lexicographically, which would put "t10" before "t2". Dict
+    # iteration order is insertion order, and `observation.py` builds `cones`
+    # by iterating `issuance.horizons` in the same ascending-hours order
+    # `risk_group_ids` is built in, so plain `list()` is what actually
+    # matches `risk_group_ids`' own key order.
+    payload["horizons"] = list(payload.pop("cones"))
     exposure = payload["exposure"]
 
     keep = {obs.service_under_test}
