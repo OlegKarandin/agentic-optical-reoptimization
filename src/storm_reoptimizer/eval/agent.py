@@ -62,6 +62,28 @@ def _peak_capacity_at_risk_gbps(per_horizon: dict) -> float:
                 for e in per_horizon.values()), default=0.0)
 
 
+def _project_exposure_entry(entry: dict) -> dict:
+    """One exposure entry, trimmed to the four decision-relevant fields and
+    rebuilt as a FRESH dict -- never mutate `entry` itself, since
+    `to_dict()["exposure"]` IS `obs.exposure` (observation.py:253) and the
+    runner writes the Observation to the trace after projection runs
+    (runner.py:926/937).
+
+    `expected_capacity_at_risk_gbps` is recomputed here rather than read off
+    `entry`, so a hand-built entry that omits it (as the unit tests' fixture
+    observations do) projects identically to a real one: both derive it from
+    `p_cut`/`demand_gbps` the same way `observation.py` does."""
+    p_cut = float(entry["p_cut"])
+    demand_gbps = float(entry["demand_gbps"])
+    return {
+        "hours_ahead": entry["hours_ahead"],
+        "p_cut": entry["p_cut"],
+        "demand_gbps": entry["demand_gbps"],
+        "expected_capacity_at_risk_gbps": round(
+            expected_capacity_at_risk_gbps(p_cut, demand_gbps), 3),
+    }
+
+
 def _depot_eligible(svc: str, obs: Observation) -> bool:
     """Whether `svc` terminates at this episode's depot site, so a spare
     spent there is a real claim against the same inventory `spares_on_hand`
@@ -97,6 +119,16 @@ def project_observation(
     the same set -- `exposure` already carries each service's `demand_gbps`,
     so the roster is nearly redundant with it for decision purposes.
 
+    Each kept exposure entry is itself trimmed to `hours_ahead`, `p_cut`,
+    `demand_gbps`, `expected_capacity_at_risk_gbps` (`_project_exposure_
+    entry`); `offset_km` and `width_km` are dropped, `damage_radius_km` is
+    dropped from the payload entirely, and `cones` is replaced with
+    `horizons` -- a plain sorted list of the horizon hours this issuance
+    publishes, not the raw cone objects. `p_cut` already integrates all of
+    this geometry, so surfacing it separately added nothing a decider could
+    act on; in practice it was misread as forecast uncertainty rather than
+    corroborating detail behind a number already shown.
+
     `restorable_groups` keeps a group WHOLE -- every member, and `ecar_gbps`
     unchanged -- if it contains AT LEAST ONE kept member, and drops the group
     entirely otherwise. Two things this is NOT: it does not drop a member
@@ -127,6 +159,10 @@ def project_observation(
     dropped services that do have exposure, and contribute 0.0 for the
     rest."""
     payload = obs.to_dict()
+    payload.pop("damage_radius_km")
+    # Ordered by hour, not by whatever order `to_dict()` happened to build
+    # the horizons dict in -- matches `risk_group_ids`' own key order.
+    payload["horizons"] = sorted(payload.pop("cones"))
     exposure = payload["exposure"]
 
     keep = {obs.service_under_test}
@@ -150,9 +186,10 @@ def project_observation(
         }
 
     all_services = payload["services"]
-    payload["exposure"] = {svc: per_horizon
-                           for svc, per_horizon in exposure.items()
-                           if svc in keep}
+    payload["exposure"] = {
+        svc: {horizon: _project_exposure_entry(entry)
+             for horizon, entry in per_horizon.items()}
+        for svc, per_horizon in exposure.items() if svc in keep}
     payload["services"] = [s for s in all_services if s["id"] in keep]
     payload["restorable_groups"] = {
         horizon: tuple(g for g in groups

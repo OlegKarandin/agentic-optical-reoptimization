@@ -180,7 +180,11 @@ def test_the_service_under_test_survives_even_when_its_own_p_cut_is_zero():
 def test_projection_keys_on_cut_probability_not_cone_containment():
     # D1's lesson: offset 58.4 km against a 15 km-wide cone (half-width
     # 7.5 km) is OUTSIDE the polygon, yet p_cut is 0.976. A containment
-    # filter would drop the most exposed service in that episode.
+    # filter would drop the most exposed service in that episode. The wire
+    # no longer carries `offset_km` at all (it is trimmed from the projected
+    # exposure entry), so this fixture's containment-vs-p_cut contrast lives
+    # only in the raw observation this test builds, never in what the
+    # decider is shown.
     obs = _obs(sut_p_cut=0.0)
     obs.exposure["d0001"] = {HORIZON: {
         "hours_ahead": 2, "offset_km": 58.4, "width_km": 15.0,
@@ -228,10 +232,30 @@ def test_projection_preserves_every_field_the_decision_points_read():
     payload = project_observation(obs)
     raw = obs.to_dict()
     for key in ("scenario_id", "actionable_service", "hour",
-                "hours_remaining", "issued_at", "cones", "spares_on_hand",
+                "hours_remaining", "issued_at", "spares_on_hand",
                 "lead_time_hours", "risk_group_ids", "iteration",
                 "last_rejection"):
         assert payload[key] == raw[key]
+    assert payload["horizons"] == [HORIZON]
+    assert "cones" not in payload
+    assert "damage_radius_km" not in payload
+
+
+def test_projection_strips_geometry_from_exposure_entries():
+    # `offset_km`/`width_km` are the cone geometry `p_cut` already
+    # integrates -- distractors, not decision-relevant content (D1's own
+    # lesson: p_cut, not containment/offset, is what tracks the real risk).
+    # Kept as a fresh dict per agent.py's `_project_exposure_entry`, never a
+    # `del` on the observation's own inner dicts.
+    obs = _obs(others=CLAIMANTS)
+    payload = project_observation(obs)
+    for per_horizon in payload["exposure"].values():
+        for entry in per_horizon.values():
+            assert set(entry) == {"hours_ahead", "p_cut", "demand_gbps",
+                                  "expected_capacity_at_risk_gbps"}
+    # The raw observation is untouched -- projection must not mutate it.
+    assert set(obs.exposure["storm-svc-1"][HORIZON]) == {
+        "hours_ahead", "offset_km", "width_km", "p_cut", "demand_gbps"}
 
 
 def test_projection_bounds_the_prompt_against_a_full_573_service_roster():
