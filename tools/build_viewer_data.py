@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 import yaml
@@ -76,7 +77,55 @@ def load_episode(path: Path) -> dict:
         "lead_time_hours": raw["lead_time_hours"],
         "spares_on_hand": raw["spares_on_hand"],
         "gold": gold, "forecast": forecast, "runs": [],
+        # Raw fiber ids, resolved to topology node pairs by _resolve_realized_
+        # cuts once the topology is loaded (fold() does this; load_episode
+        # has no topology to check ids against).
+        "realized": dict(raw.get("realized") or {}),
     }
+
+
+_FIBER_ID_RE = re.compile(r"^fiber_(.+)_\d+$")
+
+
+def _resolve_realized_cuts(realized: dict, node_ids: set[str],
+                           *, episode_id: str) -> dict[str, list[list[str]]]:
+    """`scenario.realized`: {hour: [fiber_<src>_<dst>_<n>, ...]} -- the
+    ground-truth edges the harness's own deterministic event injection
+    actually severs, verbatim from the YAML (authoring note, "Realized cuts
+    at t3"). Resolve each fiber id to a (src, dst) node pair by finding the
+    split of the id's middle segment where BOTH halves are known node ids --
+    node ids can themselves contain '_' (e.g. `kot_kapura`), so a naive
+    first/last-underscore split is wrong on this topology; every split point
+    is tried and the first that resolves both halves wins.
+
+    Unresolvable ids are dropped with a warning rather than raising: the
+    viewer is a reader, and one bad id should not blank the whole overlay."""
+    resolved: dict[str, list[list[str]]] = {}
+    for hour, fiber_ids in (realized or {}).items():
+        pairs: list[list[str]] = []
+        for fid in fiber_ids:
+            m = _FIBER_ID_RE.match(fid)
+            if not m:
+                print(f"build_viewer_data: WARNING {episode_id}: realized "
+                      f"cut {fid!r} does not match fiber_<a>_<b>_<n>, "
+                      f"skipping", flush=True)
+                continue
+            core = m.group(1)
+            parts = core.split("_")
+            found = None
+            for i in range(1, len(parts)):
+                a, b = "_".join(parts[:i]), "_".join(parts[i:])
+                if a in node_ids and b in node_ids:
+                    found = [a, b]
+                    break
+            if found is None:
+                print(f"build_viewer_data: WARNING {episode_id}: realized "
+                      f"cut {fid!r}: no split of {core!r} matches two known "
+                      f"node ids, skipping", flush=True)
+                continue
+            pairs.append(found)
+        resolved[hour] = pairs
+    return resolved
 
 
 def _exposure_rows(hour: dict) -> list[dict]:
@@ -183,7 +232,12 @@ def fold(traces_dir: Path, scenarios_dir: Path, topology_path: Path) -> dict:
     for episode in episodes.values():
         episode["runs"].sort(
             key=lambda r: (r["decider_name"], r["run_index"]))
-    return {"topology": load_topology(topology_path), "episodes": episodes}
+    topology = load_topology(topology_path)
+    node_ids = set(topology["nodes"])
+    for episode in episodes.values():
+        episode["realized_cuts"] = _resolve_realized_cuts(
+            episode.pop("realized"), node_ids, episode_id=episode["id"])
+    return {"topology": topology, "episodes": episodes}
 
 
 _HTML_TEMPLATE = """<!doctype html>
@@ -192,25 +246,34 @@ _HTML_TEMPLATE = """<!doctype html>
 <style>__CSS__</style></head>
 <body>
 <header id="controls">
-  <select id="episode"></select>
-  <select id="run"></select>
-  <label><input type="checkbox" id="plant"> aerial plant</label>
-  <button id="reset-view" type="button">reset view</button>
+  <div id="controls-row">
+    <select id="episode"></select>
+    <select id="run"></select>
+    <label id="projected-risk-label" class="toggle-btn">
+      <input type="checkbox" id="projected-risk" checked> projected risk
+    </label>
+    <button id="reset-view" type="button">reset view</button>
+    <span id="gold"></span>
+  </div>
   <div id="legend">
+    <span class="hint">dotted = aerial</span>
+    <span><span class="swatch" style="background:#1f8a4c"></span>SUT</span>
     <span><span class="swatch" style="background:#1a1a1a"></span>working</span>
     <span><span class="swatch" style="background:#888"></span>protection</span>
     <span><span class="swatch" style="background:#1a4fcc"></span>working (spotlit)</span>
     <span><span class="swatch" style="background:#a626cc"></span>protection (spotlit)</span>
+    <span><span class="cross-swatch">&#10005;</span>at-risk aerial span</span>
     <span><span class="swatch" style="background:#cc6633"></span>committed route</span>
+    <span><span class="swatch" style="background:#cc0000"></span>realized cut</span>
   </div>
-  <span id="gold"></span>
 </header>
 <main>
   <svg id="map" viewBox="0 0 800 800" preserveAspectRatio="xMidYMid meet">
     <g id="layer-plant"></g><g id="layer-cones"></g>
+    <g id="layer-at-risk"></g><g id="layer-cuts"></g>
     <g id="layer-paths"></g><g id="layer-candidate"></g>
-    <g id="layer-points"></g>
   </svg>
+  <div id="divider" title="drag to resize"></div>
   <aside id="panels">
     <section id="saw"></section>
     <section id="said"></section>
@@ -226,21 +289,42 @@ _HTML_TEMPLATE = """<!doctype html>
 _CSS = """
 * { box-sizing: border-box; }
 body { margin: 0; font-family: ui-monospace, "Cascadia Code", Consolas,
-       monospace; font-size: 13px; color: #1a1a1a; background: #fff; }
-#controls { display: flex; align-items: center; gap: 10px; padding: 8px 12px;
-            border-bottom: 1px solid #ccc; }
+       monospace; font-size: 13px; color: #1a1a1a; background: #fff;
+       height: 100vh; display: flex; flex-direction: column; }
+#controls { flex: 0 0 auto; padding: 8px 12px; border-bottom: 1px solid #ccc; }
+#controls-row { display: flex; align-items: center; gap: 10px; }
 #controls select, #controls label { font: inherit; }
 #gold { margin-left: auto; font-weight: bold; }
 #reset-view { font: inherit; cursor: pointer; }
-#legend { display: flex; gap: 10px; font-size: 11px; color: #555;
-          align-items: center; white-space: nowrap; }
+/* A checkbox styled to look pressed rather than merely checked, so the one
+   control that changes what's ON THE MAP (as against episode/run, which
+   change WHICH RUN) reads as a toggle, not a stray box among five others. */
+.toggle-btn { display: inline-flex; align-items: center; gap: 5px;
+              padding: 3px 10px; border: 1px solid #d98c00; border-radius: 12px;
+              cursor: pointer; user-select: none; color: #8a5c00; }
+.toggle-btn input { margin: 0; }
+.toggle-btn.on { background: rgba(217,140,0,0.16); font-weight: bold; }
+#legend { display: flex; flex-wrap: wrap; gap: 5px 14px; font-size: 11px;
+          color: #555; align-items: center; margin-top: 6px; }
 .swatch { display: inline-block; width: 14px; height: 3px;
           margin-right: 3px; vertical-align: middle; }
-main { display: grid; grid-template-columns: 1fr 380px; gap: 0;
-       height: calc(100vh - 90px); }
+.hint { font-style: italic; }
+.cross-swatch { display: inline-block; margin-right: 3px; color: #d98c00;
+                font-weight: bold; }
+/* flex: 1 1 auto + min-height: 0, not a height: calc(100vh - Npx) -- the
+   header's own height is no longer a fixed number now the legend wraps to
+   however many rows it needs, so main must take "whatever body has left"
+   rather than assume a header height that would drift out of sync. */
+/* --panel-width, not a literal 380px: the divider (below) rewrites this
+   custom property directly, so dragging never has to touch the grid
+   template itself, only the one number it depends on. */
+main { flex: 1 1 auto; min-height: 0; display: grid;
+       grid-template-columns: 1fr 6px var(--panel-width, 380px); gap: 0; }
 #map { width: 100%; height: 100%; background: #f7f7f5; cursor: grab; }
 #map.dragging { cursor: grabbing; }
-#panels { overflow-y: auto; border-left: 1px solid #ccc; padding: 8px; }
+#divider { background: #ddd; cursor: col-resize; }
+#divider:hover, #divider.dragging { background: #999; }
+#panels { overflow-y: auto; padding: 8px; }
 #panels section { margin-bottom: 16px; }
 #panels h3 { margin: 0 0 4px 0; font-size: 12px; text-transform: uppercase;
              letter-spacing: 0.04em; color: #555; }
@@ -259,7 +343,7 @@ th { background: #f0f0ee; }
 .exposure-row { cursor: pointer; }
 .exposure-row:hover { background: #f0f4ff; }
 .exposure-row.selected { outline: 2px solid #1a4fcc; background: #eaf0ff; }
-footer { border-top: 1px solid #ccc; padding: 6px 12px; }
+footer { flex: 0 0 auto; border-top: 1px solid #ccc; padding: 6px 12px; }
 #scrubber { display: flex; gap: 1px; }
 .hcell { flex: 1; padding: 3px 2px; text-align: center; cursor: pointer;
          border: 1px solid #ddd; background: #f5f5f3; }
@@ -276,6 +360,13 @@ pre.reasoning { white-space: pre-wrap; background: #f7f7f5; padding: 6px;
 .rejection { color: #a33; margin: 2px 0; }
 .contested { background: #fff4e0; border: 1px solid #e0c080; padding: 4px;
              margin: 4px 0; }
+.probes { background: #eef6ff; border: 1px solid #b8d4f0; padding: 4px 6px;
+          margin: 4px 0; font-size: 12px; }
+.probes-label { font-weight: bold; margin-bottom: 2px; }
+.probe-error { color: #a33; }
+.sut-row { font-weight: bold; }
+.sut-badge { background: #1f8a4c; color: #fff; font-size: 9px;
+             padding: 0 4px; border-radius: 3px; vertical-align: middle; }
 .step-label { margin: 10px 0 2px; font-weight: bold; }
 details.raw-json { margin: 4px 0 10px; }
 details.raw-json summary { cursor: pointer; font-size: 11px; color: #555; }
@@ -293,6 +384,9 @@ let state = {episode: null, run: null, hourIndex: 0, spotlight: null,
 // ---- geometry -------------------------------------------------------
 
 const BBOX = {latMin: 8, latMax: 35, lonMin: 68, lonMax: 97};
+// Mirrors events.geo.EARTH_RADIUS_KM -- kept equal so a point the viewer
+// computes as "inside" a radius agrees with the same test in Python.
+const EARTH_RADIUS_KM = 6371.0;
 
 function project(lat, lon) {
     const x = (lon - BBOX.lonMin) / (BBOX.lonMax - BBOX.lonMin) * 800;
@@ -393,9 +487,46 @@ window.addEventListener('mouseup', () => {
 });
 document.getElementById('reset-view').addEventListener('click', resetView);
 
+// ---- panel divider ------------------------------------------------------
+// Drags main's --panel-width custom property directly (the grid template
+// above reads it via var()) rather than resizing #panels itself -- one
+// number to keep consistent, and the SVG's own viewBox/preserveAspectRatio
+// already handles the map reflowing into whatever width is left.
+
+(function initDivider() {
+    const divider = document.getElementById('divider');
+    const mainEl = document.querySelector('main');
+    let dragging = false;
+
+    function setPanelWidth(px) {
+        const minPanel = 200, minMap = 200;
+        const maxPanel = Math.max(minPanel, mainEl.clientWidth - minMap - 6);
+        px = Math.max(minPanel, Math.min(maxPanel, px));
+        mainEl.style.setProperty('--panel-width', px + 'px');
+    }
+
+    divider.addEventListener('mousedown', (ev) => {
+        dragging = true;
+        divider.classList.add('dragging');
+        document.body.style.userSelect = 'none';
+        ev.preventDefault();
+    });
+    window.addEventListener('mousemove', (ev) => {
+        if (!dragging) return;
+        const rect = mainEl.getBoundingClientRect();
+        setPanelWidth(rect.right - ev.clientX);
+    });
+    window.addEventListener('mouseup', () => {
+        if (!dragging) return;
+        dragging = false;
+        divider.classList.remove('dragging');
+        document.body.style.userSelect = '';
+    });
+})();
+
 // ---- plant ------------------------------------------------------------
 
-function drawPlant(showAerial) {
+function drawPlant() {
     clearLayer('plant');
     const g = layer('plant');
     const nodes = P.topology.nodes;
@@ -405,7 +536,7 @@ function drawPlant(showAerial) {
         if (!a || !b) continue;
         const [x1, y1] = project(a[0], a[1]);
         const [x2, y2] = project(b[0], b[1]);
-        const aerial = showAerial && e.mount_type === 'aerial';
+        const aerial = e.mount_type === 'aerial';
         const path = svgEl('path', {
             d: `M${x1},${y1}L${x2},${y2}`,
             stroke: '#ccc', 'stroke-width': 1, fill: 'none',
@@ -453,35 +584,190 @@ function drawPolyline(nodes, opts) {
     }
 }
 
-// ---- cones --------------------------------------------------------------
+// ---- cones ----------------------------------------------------------
 
-function drawCones(episode, hour) {
-    clearLayer('cones');
-    const g = layer('cones');
-    const forecast = episode.forecast || {};
+// The issuance "in force" at an hour is the latest one issued at or before
+// it -- shared by drawCones and drawAtRiskEdges so the two layers can never
+// disagree about which issuance is graded.
+function inForceIssuance(forecast, hour) {
     const issuances = Object.keys(forecast).sort();
-    // The issuance "in force" at this hour is the latest one issued at or
-    // before this hour.
     let inForce = null;
     for (const issued of issuances) {
         if (issued <= hour.hour) inForce = issued;
     }
     if (inForce === null && issuances.length) inForce = issuances[0];
+    return {issuances, inForce};
+}
+
+// Mirrors events.geo.damage_footprint_radius_km exactly: TWO different
+// circles, kept deliberately apart (that function's own docstring). The
+// published `cone.polygon` (radius width_km/2) is where the storm CENTRE
+// probably goes; this radius is what it actually BREAKS once it gets
+// there -- the same radius map_geo_event_to_assets and the exposure model
+// (cone.p_cut_region) both key off. A viewer that draws only the inner
+// circle as if it were the danger zone understates the true radius by
+// `damage_radius_km` (T2a at t1: drawn 30 km vs actual 80 km).
+function damageFootprintRadiusKm(widthKm, damageRadiusKm) {
+    return widthKm / 2.0 + damageRadiusKm;
+}
+
+// Mirrors events.geo.circle_polygon's own per-point formula, so a point
+// segmentDistanceKm (below) scores as inside `radiusKm` is exactly a point
+// this ring encloses -- the two are inverses of the same metric.
+function circleRingLatLon(centerLat, centerLon, radiusKm, nPoints) {
+    nPoints = nPoints || 48;
+    const latRad = centerLat * Math.PI / 180;
+    const pts = [];
+    for (let i = 0; i <= nPoints; i++) {
+        const theta = 2 * Math.PI * i / nPoints;
+        const dlat = (radiusKm / EARTH_RADIUS_KM) * Math.cos(theta);
+        const dlon = (radiusKm / (EARTH_RADIUS_KM * Math.cos(latRad))) * Math.sin(theta);
+        pts.push([centerLat + dlat * 180 / Math.PI,
+                  centerLon + dlon * 180 / Math.PI]);
+    }
+    return pts;
+}
+
+// Minimum distance from the cone centre to a NODE-TO-NODE SEGMENT, in the
+// same locally-flat km frame eval.cone.radial_offset_km projects a single
+// point into -- so a long span can be "at risk" via its middle even when
+// both endpoints sit outside the radius. The cheap geometric analogue of
+// cone.p_cut_region's own span-buffer test for a map overlay; it does not
+// reproduce that function's probability falloff (NEGLIGIBLE_SIGMAS etc.),
+// only the radius.
+function segmentDistanceKm(centerLat, centerLon, aLat, aLon, bLat, bLon) {
+    const toXY = (lat, lon) => {
+        const dlat = (lat - centerLat) * Math.PI / 180;
+        const dlon = (lon - centerLon) * Math.PI / 180
+            * Math.cos(centerLat * Math.PI / 180);
+        return [EARTH_RADIUS_KM * dlon, EARTH_RADIUS_KM * dlat];
+    };
+    const [ax, ay] = toXY(aLat, aLon);
+    const [bx, by] = toXY(bLat, bLon);
+    const abx = bx - ax, aby = by - ay;
+    const len2 = abx * abx + aby * aby;
+    let t = len2 > 0 ? -(ax * abx + ay * aby) / len2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(ax + t * abx, ay + t * aby);
+}
+
+function drawCones(episode, hour) {
+    clearLayer('cones');
+    const g = layer('cones');
+    const forecast = episode.forecast || {};
+    const {issuances, inForce} = inForceIssuance(forecast, hour);
+    const damageRadiusKm = episode.damage_radius_km;
+    // Only the damage footprint is drawn -- the danger zone. The published
+    // track cone (radius width_km/2, storm-CENTRE uncertainty) used to be
+    // drawn alongside it as a second ring; dropped by request, it was one
+    // more thing to read for a question ("which links are in danger")
+    // the footprint alone already answers.
     for (const issued of issuances) {
         const horizons = forecast[issued];
         const graded = issued === inForce;
         for (const horizonKey in horizons) {
             const cone = horizons[horizonKey];
-            const pts = (cone.polygon || []).map(([lat, lon]) => project(lat, lon));
-            if (!pts.length) continue;
-            const d = 'M' + pts.map(p => p.join(',')).join('L') + 'Z';
+            if (damageRadiusKm == null || !cone.center) continue;
+            const footR = damageFootprintRadiusKm(cone.width_km, damageRadiusKm);
+            const ring = circleRingLatLon(
+                cone.center.lat, cone.center.lon, footR);
+            const fpts = ring.map(([lat, lon]) => project(lat, lon));
             g.appendChild(svgEl('path', {
-                d,
-                fill: graded ? 'rgba(51,102,204,0.12)' : 'rgba(150,150,150,0.06)',
-                stroke: graded ? '#3366cc' : '#999',
+                d: 'M' + fpts.map(p => p.join(',')).join('L') + 'Z',
+                fill: graded ? 'rgba(217,140,0,0.12)' : 'rgba(150,150,150,0.04)',
+                stroke: graded ? '#d98c00' : '#bbb',
                 'stroke-width': graded ? 1.5 : 1,
                 'stroke-dasharray': graded ? '' : '2 2',
                 'data-issued': issued, 'data-horizon': horizonKey,
+                'data-kind': 'footprint',
+            }));
+        }
+    }
+}
+
+// ---- at-risk aerial spans ---------------------------------------------
+
+// Every AERIAL topology edge whose nearest point falls inside the GRADED
+// issuance's damage footprint -- independent of the "aerial plant" toggle,
+// since this is now the primary answer to "which links are in danger",
+// not a background layer someone has to opt into.
+//
+// Marked with a small cross AT THE MIDPOINT rather than recolouring the
+// whole span: colouring the edge competed visually with the plant's own
+// grey and the SUT/service paths riding the same span, and a full-length
+// line reads as "this whole thing is happening" -- too strong a claim for
+// a forecast. A cross is a point annotation, not a state change.
+function drawAtRiskEdges(episode, hour) {
+    clearLayer('at-risk');
+    if (!episode || !hour) return;
+    const forecast = episode.forecast || {};
+    const {inForce} = inForceIssuance(forecast, hour);
+    const damageRadiusKm = episode.damage_radius_km;
+    if (inForce === null || damageRadiusKm == null) return;
+    const horizons = forecast[inForce] || {};
+    const g = layer('at-risk');
+    const nodes = P.topology.nodes;
+    const marked = new Set();  // one cross per edge even if >1 horizon flags it
+    for (const horizonKey in horizons) {
+        const cone = horizons[horizonKey];
+        if (!cone.center) continue;
+        const footR = damageFootprintRadiusKm(cone.width_km, damageRadiusKm);
+        for (const e of P.topology.edges) {
+            if (e.mount_type !== 'aerial') continue;
+            const key = e.src + '|' + e.dst;
+            if (marked.has(key)) continue;
+            const a = nodes[e.src], b = nodes[e.dst];
+            if (!a || !b) continue;
+            const dist = segmentDistanceKm(
+                cone.center.lat, cone.center.lon, a[0], a[1], b[0], b[1]);
+            if (dist > footR) continue;
+            marked.add(key);
+            const [x1, y1] = project(a[0], a[1]);
+            const [x2, y2] = project(b[0], b[1]);
+            const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+            const r = 5;
+            g.appendChild(svgEl('path', {
+                d: `M${mx - r},${my - r}L${mx + r},${my + r} ` +
+                   `M${mx - r},${my + r}L${mx + r},${my - r}`,
+                stroke: '#d98c00', 'stroke-width': 2,
+                'stroke-linecap': 'round', fill: 'none',
+                'data-at-risk-horizon': horizonKey,
+            }));
+        }
+    }
+}
+
+// ---- realized cuts --------------------------------------------------
+
+// episode.realized_cuts: {hour: [[srcNode, dstNode], ...]} -- ground-truth
+// edges the harness's OWN deterministic event injection actually severed
+// that hour (scenario YAML's `realized:` block, fiber ids resolved to node
+// pairs by the fold script), not the agent's probabilistic p_cut estimate.
+// A cut is drawn once its hour has been reached and stays drawn afterward
+// (severed fiber does not un-sever); episode.hours gives the hour ordering
+// to compare against.
+function drawRealizedCuts(episode, hour) {
+    clearLayer('cuts');
+    if (!episode || !hour) return;
+    const g = layer('cuts');
+    const cuts = episode.realized_cuts || {};
+    const hours = episode.hours || [];
+    const curIdx = hours.indexOf(hour.hour);
+    const nodes = P.topology.nodes;
+    for (const [cutHour, pairs] of Object.entries(cuts)) {
+        const cutIdx = hours.indexOf(cutHour);
+        if (cutIdx === -1 || curIdx === -1 || cutIdx > curIdx) continue;
+        for (const [a, b] of pairs) {
+            const ca = nodes[a];
+            const cb = nodes[b];
+            if (!ca || !cb) continue;
+            const [x1, y1] = project(ca[0], ca[1]);
+            const [x2, y2] = project(cb[0], cb[1]);
+            g.appendChild(svgEl('path', {
+                d: `M${x1},${y1}L${x2},${y2}`,
+                stroke: '#cc0000', 'stroke-width': 4,
+                'stroke-dasharray': '3 5', 'stroke-linecap': 'round',
+                fill: 'none', 'data-cut-hour': cutHour,
             }));
         }
     }
@@ -493,31 +779,26 @@ function drawService(id, hour, opts) {
     opts = opts || {};
     const dim = !!opts.dim;
     const spot = !!opts.spotlight;
+    // Identity (hue) and physical state (cut, drawn separately in
+    // drawRealizedCuts) are DIFFERENT channels and must never share a hue --
+    // red is reserved exclusively for "this link is cut" (drawRealizedCuts),
+    // so the SUT gets its own colour, green, used nowhere else on the map.
     const paths = (hour.service_paths || {})[id];
     if (paths) {
         if (paths.working) {
             drawPolyline(paths.working, {
                 weight: spot ? 4 : (dim ? 1 : (opts.emphasis ? 3.5 : 2.5)),
-                colour: spot ? '#1a4fcc' : (dim ? '#ddd' : '#1a1a1a'),
+                colour: spot ? '#1a4fcc'
+                    : (dim ? '#ddd' : (opts.emphasis ? '#1f8a4c' : '#1a1a1a')),
                 layer: 'paths'});
         }
         if (paths.protection) {
             drawPolyline(paths.protection, {
                 weight: spot ? 3 : (dim ? 1 : (opts.emphasis ? 2 : 1.2)),
-                colour: spot ? '#a626cc' : (dim ? '#ddd' : '#888'),
+                colour: spot ? '#a626cc'
+                    : (dim ? '#ddd' : (opts.emphasis ? '#7fc7a3' : '#888')),
                 layer: 'paths'});
         }
-    }
-    const point = (hour.service_points || {})[id];
-    if (point) {
-        const [x, y] = project(point[0], point[1]);
-        layer('points').appendChild(svgEl('circle', {
-            cx: x, cy: y, r: spot ? 7 : (opts.emphasis ? 6 : 4),
-            fill: spot ? '#ffd23f' : (dim ? '#ddd' : (opts.colour || '#cc3333')),
-            stroke: spot ? '#1a1a1a' : '#fff',
-            'stroke-width': spot ? 2 : 1,
-            'data-service': id,
-        }));
     }
 }
 
@@ -716,11 +997,14 @@ function renderSaw(hour) {
     table.innerHTML = '<tr><th>service</th><th>horizon</th><th>offset_km</th>' +
         '<th>p_cut</th><th>demand_gbps</th><th>ECAR</th></tr>';
     for (const r of rows) {
+        const isSut = r.service_id === hour.actionable_service;
         const tr = document.createElement('tr');
         tr.className = 'exposure-row' +
-            (r.service_id === state.spotlight ? ' selected' : '');
+            (r.service_id === state.spotlight ? ' selected' : '') +
+            (isSut ? ' sut-row' : '');
         tr.innerHTML =
-            `<td>${esc(r.service_id)}</td><td>${esc(r.horizon)}</td>` +
+            `<td>${esc(r.service_id)}${isSut ? ' <span class="sut-badge">SUT</span>' : ''}</td>` +
+            `<td>${esc(r.horizon)}</td>` +
             `<td>${esc(r.offset_km)}</td><td>${esc(r.p_cut)}</td>` +
             `<td>${esc(r.demand_gbps)}</td>` +
             `<td>${esc(r.expected_capacity_at_risk_gbps)}</td>`;
@@ -741,6 +1025,35 @@ function renderSaw(hour) {
     totalsPre.textContent = 'horizon_totals: ' + JSON.stringify(totals, null, 1);
     el.appendChild(totalsPre);
 
+    // restorable_groups (observation.py: _restorable_groups): depot-eligible
+    // non-SUT services -- ones whose path terminates at the depot site --
+    // clustered by shared endpoints. Members of ONE group co-terminate, so a
+    // single new lightpath restores all of them together; DIFFERENT groups
+    // compete for the same one-lightpath-per-spare-pair budget. A service
+    // this hour's storm exposed but that does NOT terminate at the depot is
+    // excluded entirely -- it cannot draw on this depot's spare regardless of
+    // its own exposure, and never appears here even if shown above.
+    const groups = obs.restorable_groups || {};
+    if (Object.keys(groups).length) {
+        el.appendChild(stepLabel(
+            'restorable_groups -- co-terminating clusters at the depot ' +
+            '(one group shares one lightpath; different groups compete for it)'));
+        const gTable = document.createElement('table');
+        gTable.innerHTML = '<tr><th>horizon</th><th>endpoints</th>' +
+            '<th>members</th><th>ECAR</th></tr>';
+        for (const [horizon, glist] of Object.entries(groups)) {
+            for (const g of glist) {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `<td>${esc(horizon)}</td>` +
+                    `<td>${esc((g.endpoints || []).join(' <-> '))}</td>` +
+                    `<td>${esc((g.members || []).join(', '))}</td>` +
+                    `<td>${esc(g.ecar_gbps)}</td>`;
+                gTable.appendChild(tr);
+            }
+        }
+        el.appendChild(gTable);
+    }
+
     // Every field below is Observation.to_dict()'s own per-hour ledger
     // state -- what the agent actually knew going into THIS hour, not a
     // run-final scalar (spares_remaining) or a flat episode constant
@@ -759,6 +1072,54 @@ function renderSaw(hour) {
     el.appendChild(rawJson('timing', {observation: hour.projected}));
 }
 
+// ---- probes -------------------------------------------------------------
+// probe_restorability: the one read-only tool T2/T3 add (probe.py). One
+// ProbeBinding per hour, so hour.probes is a FLAT list spanning every
+// decision, in the exact chronological order the harness's own
+// probe.begin(decision) calls fired it (runner.py: "timing" once, then
+// "constraints" then "objective" per iteration). Consumed with a cursor
+// rather than grouped by `decision` alone, so two iterations' constraints
+// probes are never merged into one bucket -- the record itself carries no
+// iteration index to group by directly.
+
+function probeRow(p) {
+    const div = document.createElement('div');
+    if (p.error) {
+        div.innerHTML = `probe_restorability(${esc(p.service_id)}, ` +
+            `${esc(p.risk_group_id)}) &rarr; ` +
+            `<span class="probe-error">error: ${esc(p.error)}</span>`;
+        return div;
+    }
+    const a = p.answer || {};
+    const spares = Object.entries(a.min_spares_needed_by_site || {})
+        .map(([site, n]) => `${site}:${n}`).join(', ') || '-';
+    div.innerHTML = `probe_restorability(${esc(p.service_id)}, ` +
+        `${esc(p.risk_group_id)}) &rarr; ${esc(a.status)}, ` +
+        `${esc(a.full_restore_candidates)} full-restore candidate(s), ` +
+        `spares[${esc(spares)}], levers[${esc((a.levers || []).join(', '))}]`;
+    return div;
+}
+
+function probesBlock(probes, label) {
+    if (!probes || !probes.length) return null;
+    const wrap = document.createElement('div');
+    wrap.className = 'probes';
+    const h = document.createElement('div');
+    h.className = 'probes-label';
+    h.textContent = label;
+    wrap.appendChild(h);
+    probes.forEach((p) => wrap.appendChild(probeRow(p)));
+    return wrap;
+}
+
+function takeProbes(probes, cursor, decision) {
+    const start = cursor.i;
+    while (cursor.i < probes.length && probes[cursor.i].decision === decision) {
+        cursor.i += 1;
+    }
+    return probes.slice(start, cursor.i);
+}
+
 function renderSaid(hour) {
     const el = document.getElementById('said');
     el.innerHTML = '<h3>What it said</h3>';
@@ -767,6 +1128,9 @@ function renderSaid(hour) {
         el.appendChild(document.createTextNode('(no reasoning recorded)'));
         return;
     }
+    const probeCursor = {i: 0};
+    const allProbes = hour.probes || [];
+
     el.appendChild(stepLabel('1. Timing'));
     const timing = document.createElement('div');
     timing.innerHTML = `<b>action:</b> ${esc(hour.timing.action)}`;
@@ -783,6 +1147,10 @@ function renderSaid(hour) {
         el.appendChild(cc);
     }
     el.appendChild(rawJson('timing', {observation: hour.projected}));
+    const timingProbes = probesBlock(
+        takeProbes(allProbes, probeCursor, 'timing'),
+        'probe_restorability calls (timing)');
+    if (timingProbes) el.appendChild(timingProbes);
 
     for (const rej of hour.rejections || []) {
         const d = document.createElement('div');
@@ -812,6 +1180,10 @@ function renderSaid(hour) {
         el.appendChild(rawJson(`constraints, iteration ${it.iteration}`,
             {observation: it.projected,
              unconstrained_menu: hour.unconstrained_menu}));
+        const constraintsProbes = probesBlock(
+            takeProbes(allProbes, probeCursor, 'constraints'),
+            `probe_restorability calls (constraints, iteration ${it.iteration})`);
+        if (constraintsProbes) el.appendChild(constraintsProbes);
 
         const constraints = it.constraints || {};
         el.appendChild(stepLabel('2. Constraints decision'));
@@ -832,6 +1204,10 @@ function renderSaid(hour) {
         el.appendChild(candidateTable((it.menu && it.menu.candidates) || []));
         el.appendChild(rawJson(`objective, iteration ${it.iteration}`,
             {observation: it.projected, menu: it.menu}));
+        const objectiveProbes = probesBlock(
+            takeProbes(allProbes, probeCursor, 'objective'),
+            `probe_restorability calls (objective, iteration ${it.iteration})`);
+        if (objectiveProbes) el.appendChild(objectiveProbes);
 
         const objective = it.objective || {};
         el.appendChild(stepLabel('3. Objective decision'));
@@ -925,13 +1301,25 @@ function renderScrubber(episode, run) {
 
 function renderMap() {
     clearLayer('paths');
-    clearLayer('points');
     clearLayer('candidate');
-    drawPlant(document.getElementById('plant').checked);
+    drawPlant();
     const episode = currentEpisode();
     const hour = currentHour();
-    if (!episode || !hour) { clearLayer('cones'); return; }
-    drawCones(episode, hour);
+    if (!episode || !hour) {
+        clearLayer('cones'); clearLayer('at-risk'); clearLayer('cuts');
+        return;
+    }
+    // The only togglable layer -- the forecast-side "might be cut" view.
+    // Realized cuts (ground truth, "was cut") are never gated: liberating
+    // the map means fewer controls, not hiding what already happened.
+    if (document.getElementById('projected-risk').checked) {
+        drawCones(episode, hour);
+        drawAtRiskEdges(episode, hour);
+    } else {
+        clearLayer('cones');
+        clearLayer('at-risk');
+    }
+    drawRealizedCuts(episode, hour);
     // Only the services that actually contend for this hour's spare (the SUT
     // plus every restorable-group member) -- not hour.services, the full
     // ~500+-service network roster, most of which the storm never touches.
@@ -940,11 +1328,7 @@ function renderMap() {
     for (const svc of services) {
         if (svc === spotlightId) continue;
         const emphasis = svc === (hour.actionable_service || episode.actionable_service);
-        drawService(svc, hour, {
-            emphasis,
-            dim: !!spotlightId,
-            colour: emphasis ? '#cc3333' : '#3366cc',
-        });
+        drawService(svc, hour, {emphasis, dim: !!spotlightId});
     }
     // Drawn last, in its own pass, so it sits on top of every dimmed path.
     if (spotlightId) {
@@ -964,7 +1348,8 @@ function renderGold() {
     const el = document.getElementById('gold');
     if (!episode) { el.textContent = ''; return; }
     const gold = episode.gold || {};
-    el.textContent = `gold: ${gold.label || ''} (${gold.gold_spare_action || ''})`;
+    el.textContent = `SUT: ${episode.actionable_service || '?'} -- ` +
+        `gold: ${gold.label || ''} (${gold.gold_spare_action || ''})`;
 }
 
 function renderAll() {
@@ -1024,7 +1409,15 @@ function populateRunDropdown() {
     state.run = 0;
 }
 
-document.getElementById('plant').addEventListener('change', renderMap);
+function syncProjectedRiskToggle() {
+    const checked = document.getElementById('projected-risk').checked;
+    document.getElementById('projected-risk-label').classList.toggle('on', checked);
+}
+document.getElementById('projected-risk').addEventListener('change', () => {
+    syncProjectedRiskToggle();
+    renderMap();
+});
+syncProjectedRiskToggle();
 
 document.addEventListener('keydown', (ev) => {
     const run = currentRun();
