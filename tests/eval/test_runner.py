@@ -197,16 +197,27 @@ def test_a_menu_with_no_solution_projects_to_an_empty_candidate_list():
 # edge is the buried rewa<->allahabad), and allahabad's three accesses --
 # fatehpur, rewa, jhansi -- are ALL BURIED, so no storm risk group can ever
 # name jhansi<->allahabad. route_service's cheapest alternative is therefore
-# satna->jhansi->allahabad, which IS the protection path: a real, first-try
-# `disjointness_collapse` on `oms_jhansi_allahabad` under basis=physical/
-# level=link. A plain ForecastBlindBaseline re-proposes it every iteration
-# and hits the cap with zero commits; `_WidensOnDisjointnessRejection` adds
-# the violation's own shared_assets and commits an optical_reroute on the
-# next iteration (satna->jabalpur->...->fatehpur->allahabad, the one route
-# to allahabad that is genuinely disjoint from protection). Every test in
-# this file that needs SMOKE to COMMIT is therefore paired with that decider;
-# the ones that only need the loop to run, or need a rejection rather than a
-# commit, still use the plain baseline.
+# satna->jhansi->allahabad, which IS the protection path.
+#
+# HISTORICAL, pre-Task-1 (decider-allocation-redesign, 2026-09-10): with
+# `ForecastBlindBaseline.constraints()` hand-pinning basis="physical", this
+# was a real, first-try `disjointness_collapse` on `oms_jhansi_allahabad`,
+# caught and corrected by `_WidensOnDisjointnessRejection` on the next
+# iteration (satna->jabalpur->...->fatehpur->allahabad, the one route to
+# allahabad genuinely disjoint from protection). CURRENT: ConstraintDecision
+# derives basis from `avoid` instead, and the baseline's `avoid` always names
+# a risk group, so this check now runs at basis="risk_group" --
+# `oms_jhansi_allahabad` is not itself a risk-group member (it's buried, so
+# no storm-derived group can ever cover it), so `validate_plan` no longer
+# rejects it and the FIRST candidate commits as-is, still genuinely colliding
+# with protection on that span (verified live; see
+# `_WidensOnDisjointnessRejection`'s own docstring below for the mechanism
+# and task-1-report.md for the concern this raises). Every test in this file
+# that needs SMOKE to COMMIT still pairs with `_WidensOnDisjointnessRejection`
+# for its timing/objective behaviour (unaffected) even though its widen
+# branch itself no longer fires here; the ones that only need the loop to
+# run, or need a rejection rather than a commit, still use the plain
+# baseline or `_LoosenAfterInfeasible`.
 #
 # After the t0 reroute the service's nearest aerial span is satna<->jabalpur
 # at 76.1 km -- outside the 45 km half-width -- so the baseline waits at t1
@@ -283,17 +294,33 @@ SMOKE = textwrap.dedent("""
 # the forecast-blind timing rule fires, p_cut 0.1143); offset to the jhansi
 # and jabalpur spans 95.1 km each (10.1 km outside R, so the group is
 # {satna<->rewa} alone and jabalpur stays open as the egress). After the
-# commit the service rides satna->jabalpur->...->fatehpur->allahabad, whose
-# nearest aerial span sits at 95.1 km: offset_km moves 47.6 -> 95.1 and
-# p_cut 0.1143 -> 0.0196 -- still nonzero, which is the point. The wider cone
-# is what keeps that residual reading measurable rather than a floor at 0.
+# commit the service rides satna->jabalpur->...->allahabad, whose nearest
+# aerial span sits at 95.1 km: offset_km moves 47.6 -> 95.1, still nonzero,
+# which is the point (offset_km/p_cut only read the service's own
+# STORM-CUTTABLE, i.e. aerial, spans -- see the CURRENT note below for why
+# the final buried hop into allahabad does not show up in this figure at
+# all). The wider cone is what keeps that residual reading measurable rather
+# than a floor at 0.
 #
-# As before, a plain ForecastBlindBaseline("immediate") never recovers from
-# the resulting disjointness_collapse on jhansi<->allahabad (it hits the cap
-# with zero commits -- allahabad's three accesses are all BURIED, so no storm
-# risk group can ever name the protection corridor's own segment), so this
-# fixture stays reserved for tests that pair it with
-# `_WidensOnDisjointnessRejection`.
+# HISTORICAL, pre-Task-1 (decider-allocation-redesign, 2026-09-10): a plain
+# ForecastBlindBaseline("immediate") never recovered from the disjointness_
+# collapse on jhansi<->allahabad this corridor forces (hit the cap with zero
+# commits), so this fixture was reserved for tests pairing it with
+# `_WidensOnDisjointnessRejection`, whose widen branch routed the commit via
+# fatehpur (allahabad's third, also-buried access) instead of jhansi.
+# CURRENT: see `_WidensOnDisjointnessRejection`'s own docstring -- basis is
+# now derived and always "risk_group" while exposed, `oms_jhansi_allahabad`
+# is not a risk-group member (buried, so it never can be), and
+# `validate_plan` no longer rejects it. Verified live: the committed
+# candidate here still carries `collides_with_protection:
+# {"oms_shared_with_protection": ["oms_jhansi_allahabad"]}` -- the route is
+# satna->jabalpur->...->jhansi->allahabad now, NOT the fatehpur egress this
+# comment used to describe, even though offset_km still reads 95.1 (jabalpur
+# is what the OFFSET calculation sees; jhansi is a buried hop past it that
+# offset_km is blind to). This fixture still stays reserved for tests
+# pairing it with `_WidensOnDisjointnessRejection` for the timing/objective
+# behaviour that wrapper provides; its widen branch just never fires here
+# any more.
 EXPOSURE_SMOKE = textwrap.dedent("""
     id: EXPOSURE_SMOKE
     seed: 17
@@ -544,12 +571,27 @@ def test_the_constraints_step_is_shown_the_menu_it_is_about_to_narrow(
 ):
     # F3 (remediation spec lines 96-112). decisions.py: decision 2 changes
     # which candidates EXIST. It was made blind to what constraining costs.
-    # Paired with the widening decider because a plain ForecastBlindBaseline
-    # can no longer commit on SMOKE at all (see SMOKE's own note: avoiding the
-    # exposed working span funnels every cheap reroute through the service's
-    # own protection corridor), and this test needs a committed hour to read
-    # `unconstrained_menu` back off the trace.
-    decider = _RecordingDecider(_WidensOnDisjointnessRejection())
+    #
+    # Uses `_LoosenAfterInfeasible`, not `_WidensOnDisjointnessRejection`, to
+    # force the multi-iteration hour this check needs (same-object reuse
+    # WITHIN one hour's iterations). Task 1 (decider-allocation-redesign,
+    # 2026-09-10) derives ConstraintDecision's basis/level from `avoid`
+    # instead of stating them (spec 6.4); ForecastBlindBaseline's own `avoid`
+    # always names a risk group while exposed, so `try_commit`'s disjointness
+    # check now always runs at basis="risk_group", not basis="physical".
+    # SMOKE's real collision is on `oms_jhansi_allahabad`, which is not
+    # itself a member of the one risk group SMOKE ever defines (only the
+    # exposed working span is) -- and that topological fact can never change
+    # for this fixture (allahabad's three accesses are ALL buried, so no
+    # storm-derived risk group can ever name it either). So
+    # `_WidensOnDisjointnessRejection`'s widen branch no longer fires against
+    # SMOKE at all: the first candidate now commits directly, in ONE
+    # iteration, not two (see `test_recording_costs_no_extra_server_calls`'s
+    # own derivation comment). `_LoosenAfterInfeasible` forces two iterations
+    # deterministically instead (declares the menu infeasible on iteration 0,
+    # loosens and commits on iteration 1) -- independent of server-side
+    # disjointness semantics, so it stays robust to this class of change.
+    decider = _RecordingDecider(_LoosenAfterInfeasible())
     trace = asyncio.run(_run(
         _scenario(tmp_path), decider,
         loaded_state_path, local_server_command, local_server_env))
@@ -562,13 +604,15 @@ def test_the_constraints_step_is_shown_the_menu_it_is_about_to_narrow(
         assert set(candidate) == {"candidate_label", "lever", "spares_needed"}
     # The probe is the menu BEFORE the agent's avoid set, so it is the same
     # object for every iteration of ONE hour -- it does not depend on the
-    # answer, and re-probing per iteration would be a wasted tool call.
-    # SMOKE acts at t0 only (after the t0 reroute storm-svc-1's nearest aerial
-    # span is 76.1km out, past the 45km half-width, so t1 waits), and t0 runs
-    # TWO iterations -- the first-try disjointness_collapse and the widened
-    # retry -- which is exactly the case this check exists for: same-object
-    # reuse WITHIN one hour's iterations, walked per hour rather than across
-    # the whole episode so a second acting hour would not be assumed away.
+    # answer, and re-probing per iteration would be a wasted tool call. This
+    # asserts it generically (walked per hour, group size whatever it is)
+    # rather than assuming a specific iteration count for any one hour, so it
+    # keeps proving the property even if the exact shape of the rollout
+    # changes again.
+    assert any(len(h.get("iterations", [])) >= 2 for h in trace.hours), (
+        "this check needs at least one multi-iteration hour to be a real "
+        "test of same-object reuse ACROSS iterations, not just within a "
+        "trivial one-iteration group")
     offset = 0
     for hour_record in trace.hours:
         n_iterations = len(hour_record.get("iterations", []))
@@ -593,31 +637,52 @@ class _WidensOnDisjointnessRejection:
 
     Local to this module (test_runner.py's own docstring: the seven real
     episodes must not be needed to prove the loop works, so this stays
-    self-contained rather than importing from test_episodes.py). Same
-    mechanic, first proven against a real server, as
-    tests/eval/test_episodes.py's `_WidensOnDisjointnessRejection` /
-    `test_t2a_carries_a_real_validate_plan_rejection`: storm-svc-1's own
-    static protection lightpath (satna<->jhansi<->allahabad) is the cheapest
-    way into allahabad from anywhere else, so a plain forecast-blind avoid
-    that also excludes satna<->rewa (working) funnels every real reroute
-    candidate through jhansi<->allahabad -- a real, first-try
-    disjointness_collapse under basis=physical/level=link, not fabricated.
-    Widening with the violation's own shared_assets (naming the specific
-    jhansi<->allahabad fiber/amp/roadm ids) finds a genuinely disjoint route
-    that validates on a later iteration --
-    satna->jabalpur->...->fatehpur->allahabad, the only way into allahabad
-    that touches neither the avoided working span nor the protection leg
-    (allahabad's other two accesses are rewa, a stub behind satna<->rewa, and
-    jhansi, protection's own).
+    self-contained rather than importing from test_episodes.py).
 
-    Since the 2026-09-01 hazard-footprint seam fix this is the ONLY decider in
-    this file that can commit against SMOKE or EXPOSURE_SMOKE while actually
-    honouring the exposed risk group: that group now always names the exposed
-    working span, so every reroute is real and every first try collides with
-    protection. (The scripted deciders still commit, but they route under
-    avoid={} and so never face the collision.) `variant` is forwarded to the
-    wrapped baseline so a test about at_deadline timing still gets a real
-    committed action to assert on."""
+    HISTORICAL premise, no longer live against SMOKE/EXPOSURE_SMOKE (Task 1,
+    decider-allocation-redesign, 2026-09-10 -- see
+    `test_recording_costs_no_extra_server_calls`'s own derivation comment for
+    the mechanism): storm-svc-1's own static protection lightpath
+    (satna<->jhansi<->allahabad) is the cheapest way into allahabad from
+    anywhere else, so a plain forecast-blind avoid that also excludes
+    satna<->rewa (working) funnels every real reroute candidate through
+    jhansi<->allahabad. Before Task 1, `ForecastBlindBaseline.constraints()`
+    pinned basis="physical"/level="link" by hand, so `try_commit`'s
+    disjointness check compared raw physical assets and this WAS a real,
+    first-try `disjointness_collapse` -- widening with the violation's own
+    `shared_assets` then found a genuinely disjoint route on a later
+    iteration (satna->jabalpur->...->fatehpur->allahabad).
+
+    ConstraintDecision now DERIVES basis/level from `avoid` instead (spec
+    6.4), and ForecastBlindBaseline's own `avoid` always names a risk group
+    while the service is exposed, so `try_commit` now always runs at
+    basis="risk_group". `oms_jhansi_allahabad` is not itself a member of the
+    one risk group SMOKE or EXPOSURE_SMOKE ever defines (only the exposed
+    working span is) -- and no storm-derived risk group on this topology can
+    ever cover it either (allahabad's three accesses are ALL buried). So
+    `validate_plan` no longer flags the collision, the WIDEN BRANCH below
+    never fires against either fixture any more, and -- this is the material
+    consequence, not just a coverage gap -- the first candidate now commits
+    AS-IS. Verified live: SMOKE's and EXPOSURE_SMOKE's committed candidate
+    still carries `collides_with_protection: {"collides": True,
+    "oms_shared_with_protection": ["oms_jhansi_allahabad"]}` in the recorded
+    menu (this app's own OMS-sequence diagnostic, computed independently of
+    `validate_plan`'s basis) -- i.e. storm-svc-1's working and protection
+    legs now genuinely share a physical span after this "reroute", uncaught
+    by the server's own commit-time check. This is flagged prominently in
+    task-1-report.md as a concern for the basis/level derivation generally,
+    not something this test file can fix on its own (`try_commit`'s own
+    basis/level choice at the runner.py call site is out of this module's
+    hands) -- `test_the_widen_branch_still_adds_shared_assets_under_the_
+    derived_basis` below covers the branch's OWN logic directly instead,
+    since no live rollout in this file reaches it any more.
+
+    Kept in this file (rather than deleted) because `variant` still lets a
+    test about at_deadline timing get a real committed action to assert on,
+    and because a caller with a `last_rejection` that genuinely names a
+    `disjointness_collapse` (e.g. a different, narrower avoid than
+    ForecastBlindBaseline's own) still gets real widening -- the branch
+    itself is correct, only these two fixtures no longer reach it."""
 
     def __init__(self, variant: str = "immediate") -> None:
         self._inner = ForecastBlindBaseline(variant)
@@ -641,6 +706,51 @@ class _WidensOnDisjointnessRejection:
 
     async def objective(self, obs, menu):
         return await self._inner.objective(obs, menu)
+
+
+def test_the_widen_branch_still_adds_shared_assets_under_the_derived_basis():
+    """Direct coverage of `_WidensOnDisjointnessRejection.constraints()`'s
+    own logic, with no live server round-trip -- no live rollout in this file
+    reaches this branch any more (see the class's own docstring above), so
+    this is what stands in for it. Two things worth proving on their own,
+    since they are not obvious from reading the branch:
+
+    1. widening only ADDS to `avoid["assets"]`; it never touches
+       `avoid["risk_groups"]`, so a decider that widens after a real
+       rejection keeps naming the storm's own risk group throughout, exactly
+       as `ForecastBlindBaseline.constraints()` does.
+    2. because of (1), `ConstraintDecision`'s derived `basis`/`level` STAY
+       "risk_group" after widening too -- decisions.py's own
+       `ConstraintDecision` docstring documents this as the legal MIXED-avoid
+       case (both `assets` and `risk_groups` named; both halves bind on
+       `avoid`, only `risk_groups` drives the derived basis) -- so widening
+       narrows what `route_service` may propose without ever making
+       `try_commit`'s own disjointness check fall back to basis="physical"."""
+    widen = _WidensOnDisjointnessRejection()
+    obs = _observation_with_exposure({"storm-svc-1": {"t3": {
+        "hours_ahead": 1, "offset_km": 0.0, "width_km": 90.0,
+        "p_cut": 0.5, "demand_gbps": 300.0}}})
+
+    unwidened = asyncio.run(widen.constraints(obs))
+    assert unwidened.avoid == {"risk_groups": ["rg_t3"]}
+    assert (unwidened.basis, unwidened.level) == ("risk_group", "risk_group")
+
+    rejected = dataclasses.replace(obs, last_rejection={
+        "type": "validation_violations",
+        "violations": [{"type": "disjointness_collapse",
+                        "shared_assets": ["fiber_jhansi_allahabad_0"]}]})
+    widened = asyncio.run(widen.constraints(rejected))
+    assert widened.avoid == {"risk_groups": ["rg_t3"],
+                             "assets": ["fiber_jhansi_allahabad_0"]}
+    assert (widened.basis, widened.level) == ("risk_group", "risk_group")
+
+    # A rejection that ISN'T a disjointness_collapse (or names no
+    # shared_assets) must not widen at all -- the branch's own guard.
+    unrelated_rejection = dataclasses.replace(obs, last_rejection={
+        "type": "validation_violations",
+        "violations": [{"type": "insufficient_margin"}]})
+    assert asyncio.run(widen.constraints(unrelated_rejection)).avoid == {
+        "risk_groups": ["rg_t3"]}
 
 
 def test_exposure_follows_the_service_after_it_reroutes(
@@ -1656,3 +1766,6 @@ def test_post_cut_restoration_replay(
         f"expected the live escape-route menu to restore storm-svc-1, "
         f"report no workable candidate, or have its one pick rejected; "
         f"got {outcome!r} (record: {trace2.restorations[0]!r})")
+
+
+
