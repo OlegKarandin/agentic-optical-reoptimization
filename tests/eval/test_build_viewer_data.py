@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import time
 from pathlib import Path
 
 import pytest
@@ -237,6 +239,40 @@ def test_the_payload_survives_a_script_close_in_the_data(folded):
     html = bvd.render_html(folded)
     assert "</script><b>" not in html
     assert "<\\/script>" in html
+
+
+def test_a_stale_duplicate_run_key_is_dropped_for_the_newer_file(tmp_path):
+    # Real incident (eval/traces/T1a-agent_claude-sonnet-5-{0,rerun}.json,
+    # 2026-09-09): two trace files can independently claim the same
+    # (scenario_id, decider_name, run_index). populateRunDropdown labels a
+    # run only `${decider_name} #${run_index}` (the JS template above), so
+    # without dedup the run picker shows two entries captioned identically
+    # and there is no way to tell which one is current. Keep the file with
+    # the newer mtime; drop the other before load_run ever sees it.
+    traces = tmp_path / "traces"
+    traces.mkdir()
+    stale = dict(FIXTURE_TRACE, terminal_status="stale-marker")
+    fresh = dict(FIXTURE_TRACE, terminal_status="fresh-marker")
+    # Filenames sort the stale one first ("-0" < "-rerun"), so a dedup that
+    # accidentally keyed off file order instead of mtime would still pass a
+    # test that only ever wrote the fresh file second -- write stale second
+    # and rely solely on the explicit utime below to prove it's mtime-driven.
+    fresh_path = traces / "T3b-agent_claude-sonnet-5-rerun.json"
+    stale_path = traces / "T3b-agent_claude-sonnet-5-0.json"
+    fresh_path.write_text(json.dumps(fresh), encoding="utf-8")
+    stale_path.write_text(json.dumps(stale), encoding="utf-8")
+    old_time = time.time() - 3600
+    new_time = time.time()
+    os.utime(stale_path, (old_time, old_time))
+    os.utime(fresh_path, (new_time, new_time))
+    scenarios = (Path(__file__).parent.parent.parent / "src"
+                 / "storm_reoptimizer" / "eval" / "scenarios")
+    topology = (Path(__file__).parent.parent.parent / "src"
+                / "storm_reoptimizer" / "data" / "toy_india_topology.json")
+    payload = bvd.fold(traces, scenarios, topology)
+    runs = payload["episodes"]["T3b"]["runs"]
+    assert len(runs) == 1
+    assert runs[0]["terminal_status"] == "fresh-marker"
 
 
 def test_the_aerial_plant_is_distinguishable_in_the_payload(folded):

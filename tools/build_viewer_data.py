@@ -180,11 +180,10 @@ def _mark_committed(hour: dict) -> None:
                 and candidate.get("candidate_label") == chosen)
 
 
-def load_run(path: Path) -> dict:
+def load_run(trace: dict) -> dict:
     """One trace, enriched. Tolerates a pre-Phase-A trace: every key added by
     the recording change is optional and defaults to empty, so the 21 archived
     control rollouts load beside a fresh run (run-viewer design, §6.2)."""
-    trace = json.loads(path.read_text(encoding="utf-8"))
     hours = []
     for hour in trace.get("hours") or ():
         enriched = dict(hour)
@@ -216,19 +215,45 @@ def load_run(path: Path) -> dict:
             "hours": hours}
 
 
+def _dedup_traces(traces_dir: Path, episodes: dict) -> list[dict]:
+    """One trace per (scenario_id, decider_name, run_index): keep the file
+    with the newer mtime, drop the rest.
+
+    Two files can independently claim the same key -- confirmed live,
+    eval/traces/T1a-agent_claude-sonnet-5-{0,rerun}.json both parsed to
+    run_index=0 -- and populateRunDropdown (below) labels a run only
+    `${decider_name} #${run_index}`, so an undeduped viewer would show two
+    entries captioned identically with no way to tell which is current."""
+    by_key: dict[tuple, tuple[Path, dict]] = {}
+    for path in sorted(traces_dir.glob("*.json")):
+        trace = json.loads(path.read_text(encoding="utf-8"))
+        scenario_id = trace.get("scenario_id")
+        if scenario_id not in episodes:
+            print(f"build_viewer_data: WARNING skipping {path.name}: no "
+                  f"scenario {scenario_id!r}", flush=True)
+            continue
+        key = (scenario_id, trace.get("decider_name"), trace.get("run_index"))
+        prior = by_key.get(key)
+        if prior is None or path.stat().st_mtime > prior[0].stat().st_mtime:
+            if prior is not None:
+                print(f"build_viewer_data: WARNING {prior[0].name} and "
+                      f"{path.name} both claim {key[1]!r} #{key[2]} on "
+                      f"{key[0]!r}; keeping the newer file", flush=True)
+            by_key[key] = (path, trace)
+        else:
+            print(f"build_viewer_data: WARNING {path.name} and "
+                  f"{prior[0].name} both claim {key[1]!r} #{key[2]} on "
+                  f"{key[0]!r}; keeping the newer file", flush=True)
+    return [trace for _, trace in by_key.values()]
+
+
 def fold(traces_dir: Path, scenarios_dir: Path, topology_path: Path) -> dict:
     episodes = {}
     for path in sorted(scenarios_dir.glob("*.yaml")):
         episode = load_episode(path)
         episodes[episode["id"]] = episode
-    for path in sorted(traces_dir.glob("*.json")):
-        trace = json.loads(path.read_text(encoding="utf-8"))
-        episode = episodes.get(trace.get("scenario_id"))
-        if episode is None:
-            print(f"build_viewer_data: WARNING skipping {path.name}: no "
-                  f"scenario {trace.get('scenario_id')!r}", flush=True)
-            continue
-        episode["runs"].append(load_run(path))
+    for trace in _dedup_traces(traces_dir, episodes):
+        episodes[trace["scenario_id"]]["runs"].append(load_run(trace))
     for episode in episodes.values():
         episode["runs"].sort(
             key=lambda r: (r["decider_name"], r["run_index"]))
