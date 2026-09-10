@@ -47,6 +47,7 @@ from .derived import (
     derived_geometry,
 )
 from .observation import build_observation, latest_issuance
+from .risk_assets import fiber_span_index, risk_group_rows
 from .runner import (
     EVENT_TYPE, horizon_risk_group_asset_ids, menu_for_prompt,
     menu_with_path_facts, run_episode, service_geometry,
@@ -1257,6 +1258,45 @@ async def assert_risk_group_covers_measurable_exposure(
                 f"{P_CUT_ENUMERATION_THRESHOLD} -- worst is {worst[1]} at "
                 f"p_cut {worst[2]}. The agent is being handed a risk-group id "
                 f"that names nothing, so avoiding it prunes nothing.")
+
+
+async def assert_risk_group_assets_cover_realized(
+    client: Client, scenario: ScenarioFile, *, topology_path: str | Path,
+) -> None:
+    """Every asset this episode's `realized` block cuts at a horizon hour
+    appears in that horizon's own `risk_groups[...].assets` list.
+
+    The constraints observation cannot omit what the storm actually cuts. If
+    it did, an agent narrowing its avoid from the whole group to named spans
+    would be narrowing away from the fibre that is about to go -- and the
+    narrowing is the behaviour this field exists to make possible."""
+    geometry = await service_geometry(client, topology_path)
+    filter_fn = get_filter(EVENT_TYPE)
+    edges = load_edges(topology_path)
+    topo = await call_tool_json(client, "get_topology", {"layer": "optical"})
+    index = fiber_span_index(topo["oms"], geometry.coords)
+    for hour, cuts in scenario.realized.items():
+        if not cuts:
+            continue
+        issuance = latest_issuance(scenario, hour)
+        cone = issuance.horizons.get(hour)
+        if cone is None:
+            continue          # a cut at an hour this issuance does not forecast
+        named = {row["asset_id"] for row in risk_group_rows(
+            horizon_risk_group_asset_ids(
+                cone, scenario.damage_radius_km, edges=edges,
+                oms=topo["oms"], filter_fn=filter_fn),
+            index,
+            center_lat=cone.center["lat"], center_lon=cone.center["lon"],
+            width_km=cone.width_km,
+            damage_radius_km=scenario.damage_radius_km,
+            working_edges=set(), protection_edges=set())}
+        missing = [a for a in cuts if a not in named]
+        if missing:
+            raise PairInvalid(
+                f"{scenario.id}: realized cut(s) {missing} at {hour!r} are "
+                f"not in that horizon's risk-group asset list; the "
+                f"constraints observation cannot omit what the storm cuts")
 
 
 # Invariant 3.

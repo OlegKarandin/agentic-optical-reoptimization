@@ -116,6 +116,7 @@ def _depot_eligible(svc: str, obs: Observation) -> bool:
 def project_observation(
     obs: Observation, *,
     p_cut_threshold: float = P_CUT_ENUMERATION_THRESHOLD,
+    include_risk_group_assets: bool = False,
 ) -> dict:
     """`obs.to_dict()` reduced to decision-relevant content, plus an explicit
     account of what was dropped.
@@ -175,7 +176,14 @@ def project_observation(
     `count` is over the server's full roster (a service with no
     representative point has no exposure entry at all, and is counted here
     as `below_threshold` -- no exposure data means no basis to call it
-    ineligible either)."""
+    ineligible either).
+
+    `include_risk_group_assets` (spec 5.1) additionally surfaces
+    `obs.risk_group_assets` as `risk_groups` -- each horizon's group, named
+    down to the asset, with that span's own `p_cut` and whether it lies on
+    the actionable service's own working/protection corridor. It is what
+    makes `avoid.assets` nameable rather than all-or-nothing, and it is
+    large, so only the caller deciding constraints passes it."""
     payload = obs.to_dict()
     payload.pop("damage_radius_km")
     # `list(...)`, NOT `sorted(...)` -- horizon-hour labels ("t2", "t10", ...)
@@ -244,6 +252,13 @@ def project_observation(
         # rationale review found exactly that number being read as one.
         "ineligible_for_depot": {"count": len(ineligible_for_depot)},
     }
+    # The groups' CONTENTS, only where they are decidable (spec 5.1). The
+    # constraints decision is the one that names assets; the timing and
+    # objective steps have no use for a list that can run to dozens of
+    # fibres, and the payload is the scarce resource here.
+    payload.pop("risk_group_assets", None)
+    if include_risk_group_assets:
+        payload["risk_groups"] = list(obs.risk_group_assets)
     return payload
 
 
@@ -862,9 +877,11 @@ class ClaudeDecider:
         with self._audit_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, default=str) + "\n")
 
-    def _project(self, obs: Observation) -> dict:
+    def _project(self, obs: Observation, *,
+                 include_risk_group_assets: bool = False) -> dict:
         self.last_projection = project_observation(
-            obs, p_cut_threshold=self._p_cut_threshold)
+            obs, p_cut_threshold=self._p_cut_threshold,
+            include_risk_group_assets=include_risk_group_assets)
         return self.last_projection
 
     async def timing(self, obs: Observation) -> TimingDecision:
@@ -879,7 +896,7 @@ class ClaudeDecider:
         # Accepted and IGNORED. The model no longer sees this menu -- see
         # `_user_content` -- but the Decider protocol (decisions.py) and
         # runner.py still pass it positionally.
-        payload = self._project(obs)
+        payload = self._project(obs, include_risk_group_assets=True)
         return await self._decide(
             CONSTRAINT_TOOL, ConstraintDecision, obs, payload,
             self._user_content(payload, CONSTRAINT_INSTRUCTION))

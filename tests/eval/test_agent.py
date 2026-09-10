@@ -493,6 +493,12 @@ class FakeResponse:
         self.content = list(content)
 
 
+def _response(tool_name, payload, block_id="toolu_test"):
+    """`FakeResponse(FakeToolUse(tool_name, payload))`, spelled once -- the
+    shape every test above already builds by hand."""
+    return FakeResponse(FakeToolUse(tool_name, payload, block_id=block_id))
+
+
 class FakeMessages:
     def __init__(self, responses):
         self.queued = list(responses)
@@ -1353,3 +1359,31 @@ def test_the_projection_carries_the_revision_band_through():
 def test_a_row_without_a_band_projects_without_the_key():
     entry = {"hours_ahead": 2, "p_cut": 0.914, "demand_gbps": 300.0}
     assert "p_cut_if_track_revised" not in _project_exposure_entry(entry)
+
+
+def test_only_the_constraints_step_is_shown_the_groups_contents():
+    """The asset rows are what make `avoid.assets` nameable, and they are
+    large; the timing and objective steps have no use for them."""
+    obs = dataclasses.replace(_wide_observation(), risk_group_assets=(
+        {"horizon": "t3", "assets": [{"asset_id": "fiber_a_b_0",
+                                      "p_cut": 0.97, "on": "working"}]},))
+    assert "risk_groups" not in project_observation(obs)
+    at_constraints = project_observation(obs, include_risk_group_assets=True)
+    assert at_constraints["risk_groups"] == list(obs.risk_group_assets)
+
+
+def test_the_decider_shows_the_groups_contents_at_constraints_only():
+    decider, _ = _decider(
+        _response(TIMING_TOOL, {"reasoning": "r", "action": "act",
+                                "contested_claim": None,
+                                "claim_priority": ["storm-svc-1"]}),
+        _response(CONSTRAINT_TOOL, {"reasoning": "r", "avoid": {}}),
+        _response(OBJECTIVE_TOOL, {"reasoning": "r", "choice": "hold"}))
+    obs = dataclasses.replace(_wide_observation(), risk_group_assets=(
+        {"horizon": "t3", "assets": []},))
+    _run(decider.timing(obs))
+    assert "risk_groups" not in decider.last_projection
+    _run(decider.constraints(obs))
+    assert "risk_groups" in decider.last_projection
+    _run(decider.objective(obs, {"status": "ok", "candidates": []}))
+    assert "risk_groups" not in decider.last_projection

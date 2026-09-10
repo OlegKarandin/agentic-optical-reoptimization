@@ -269,6 +269,17 @@ class Observation:
     # ten identical avoid sets because nothing told it what it had already
     # tried.
     attempts_this_hour: tuple[dict, ...] = ()
+    # ONE entry per horizon of the current issuance, populated only on the
+    # ITERATION-loop `build_observation` call (spec 5.1): {"horizon": ...,
+    # "assets": [...]} -- each asset a {"asset_id", "p_cut", "on"} row
+    # (risk_assets.risk_group_rows). `risk_group_ids` told the agent a group
+    # EXISTS; this is what it is actually MADE OF, so `avoid.assets` can
+    # narrow to named spans instead of the whole group. Left at the default
+    # `()` on the hour-level Observation (the timing decision has no use for
+    # it), and even where populated it is large -- dozens of fibres per
+    # horizon -- so `agent.project_observation` shows it only at the
+    # constraints step, gated per DECISION, not by this field alone.
+    risk_group_assets: tuple[dict, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-serializable form, for the trace and for step 6's prompt."""
@@ -316,6 +327,9 @@ class Observation:
         if self.attempts_this_hour:
             payload["attempts_this_hour"] = [dict(a)
                                              for a in self.attempts_this_hour]
+        if self.risk_group_assets:
+            payload["risk_group_assets"] = [dict(h)
+                                            for h in self.risk_group_assets]
         return payload
 
 
@@ -335,6 +349,7 @@ def build_observation(
     standing_claim_priority: tuple[str, ...] = (),
     decided_this_hour: dict | None = None,
     attempts_this_hour: tuple[dict, ...] = (),
+    risk_group_assets: tuple[dict, ...] = (),
 ) -> Observation:
     """The observation for one hour. `service_spans` maps a service id to the
     spans of its working path that the event's own filter admits -- the
@@ -364,12 +379,13 @@ def build_observation(
     constructing exactly as before (`p_cut_service(spans, None, ...)` is
     `p_cut_region(spans, ...)`, unchanged).
 
-    `standing_claim_priority`, `decided_this_hour` and `attempts_this_hour`
-    are runner-supplied facts, not derived from the scenario -- `run_episode`
-    tracks the standing ranking and this hour's decision/iteration history
-    and passes them straight through so the constraints and objective steps
-    of one iteration can see what the timing step (and any earlier iteration
-    this hour) already decided."""
+    `standing_claim_priority`, `decided_this_hour`, `attempts_this_hour` and
+    `risk_group_assets` are runner-supplied facts, not derived from the
+    scenario -- `run_episode` tracks the standing ranking, this hour's
+    decision/iteration history, and (on the iteration-loop call only) each
+    horizon's risk-group contents, and passes them straight through so the
+    constraints and objective steps of one iteration can see what the timing
+    step (and any earlier iteration this hour) already decided."""
     issuance = latest_issuance(scenario, hour)
     hour_index = scenario.hours.index(hour)
 
@@ -491,4 +507,5 @@ def build_observation(
         standing_claim_priority=tuple(standing_claim_priority),
         decided_this_hour=decided_this_hour,
         attempts_this_hour=tuple(attempts_this_hour),
+        risk_group_assets=tuple(risk_group_assets),
     )

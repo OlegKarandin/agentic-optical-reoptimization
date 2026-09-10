@@ -16,7 +16,7 @@ from storm_reoptimizer.eval.assertions import (
     assert_issuance_prefix_shared,
     assert_menus_identical, assert_no_global_policy_solves_the_suite,
     assert_non_flip_decisions_non_binding, assert_revision_band_equal_at_t0,
-    assert_spend_is_real,
+    assert_risk_group_assets_cover_realized, assert_spend_is_real,
     assert_risk_group_covers_measurable_exposure, assert_shared_scalars_equal,
     assert_wait_gold_has_no_free_escape,
 )
@@ -27,9 +27,16 @@ from storm_reoptimizer.eval.decisions import (
 from storm_reoptimizer.eval.derived import (
     derived_scalars_for_suite, flip_scalars_for_suite,
 )
+from storm_reoptimizer.eval.risk_assets import fiber_span_index, risk_group_rows
+from storm_reoptimizer.eval.runner import (
+    EVENT_TYPE, horizon_risk_group_asset_ids, service_geometry,
+)
 from storm_reoptimizer.eval.scenario_file import (
     SCENARIOS_DIR as SCENARIOS, load_all_scenarios, load_scenario,
 )
+from storm_reoptimizer.events.filters import get_filter
+from storm_reoptimizer.geo_mapper import load_edges
+from storm_reoptimizer.mcp_client import call_tool_json
 
 TOPOLOGY_PATH = (
     Path(__file__).parent.parent.parent
@@ -675,3 +682,43 @@ def test_no_episode_defines_an_empty_risk_group_where_something_is_at_risk(
                 client, scenario, topology_path=TOPOLOGY_PATH, oms=oms)
 
     asyncio.run(_run())
+
+
+@pytest.mark.parametrize("scenario_id", sorted(load_all_scenarios()))
+def test_the_risk_group_assets_cover_every_realized_cut(scenario_id, connect_for):
+    """Spec 8.2."""
+    scenario = load_all_scenarios()[scenario_id]
+
+    async def _run():
+        async with connect_for(scenario.state_file)() as client:
+            await assert_risk_group_assets_cover_realized(
+                client, scenario, topology_path=TOPOLOGY_PATH)
+
+    asyncio.run(_run())
+
+
+def test_d1s_reference_avoid_is_nameable_from_the_constraints_observation(
+        connect_for):
+    """Spec 10.6's live test. D1's gold avoid is eight named fibres and the
+    named group disconnects satna; the whole point of showing the group's
+    contents is that this avoid set becomes expressible."""
+    d1 = load_all_scenarios()["D1"]
+
+    async def _rows():
+        async with connect_for(d1.state_file)() as client:
+            geometry = await service_geometry(client, TOPOLOGY_PATH)
+            topo = await call_tool_json(client, "get_topology",
+                                        {"layer": "optical"})
+            cone = d1.forecast["t0"].horizons["t1"]
+            return {r["asset_id"] for r in risk_group_rows(
+                horizon_risk_group_asset_ids(
+                    cone, d1.damage_radius_km,
+                    edges=load_edges(TOPOLOGY_PATH), oms=topo["oms"],
+                    filter_fn=get_filter(EVENT_TYPE)),
+                fiber_span_index(topo["oms"], geometry.coords),
+                center_lat=cone.center["lat"], center_lon=cone.center["lon"],
+                width_km=cone.width_km, damage_radius_km=d1.damage_radius_km,
+                working_edges=set(), protection_edges=set())}
+
+    named = asyncio.run(_rows())
+    assert set(d1.reference_avoid["assets"]) <= named

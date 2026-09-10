@@ -51,6 +51,7 @@ from .observation import build_observation, latest_issuance, lead_time_hours_for
 from .plans import PlanTranslationError, build_topology_index, plan_from_candidate
 from .probe import ProbeBinding, answer_probe
 from .replay import restore_after_cuts
+from .risk_assets import fiber_span_index, path_edges, risk_group_rows
 from .scenario_file import ConeAtHorizon, Issuance, ScenarioFile
 
 MAX_ITERATIONS = 5
@@ -539,6 +540,10 @@ class ServiceGeometry:
     # field existed.
     protection_cuttable_spans: dict[str, tuple[Segment, ...]] = field(
         default_factory=dict)
+    # node_id -> (lat, lon), the LOCAL topology's own coordinates -- already
+    # read here to place spans, and now also what `risk_assets
+    # .fiber_span_index` needs to give every fibre in a risk group a span.
+    coords: dict[str, tuple[float, float]] = field(default_factory=dict)
 
 
 async def service_geometry(client: Client, topology_path: str | Path, *,
@@ -684,7 +689,8 @@ async def service_geometry(client: Client, topology_path: str | Path, *,
                                          in oms_seq_by_lp.items()},
                            cuttable_span_by_oms=cuttable_span_by_oms,
                            path_oms=path_oms,
-                           protection_cuttable_spans=protection_cuttable)
+                           protection_cuttable_spans=protection_cuttable,
+                           coords=coords)
 
 
 async def service_points(client: Client, topology_path: str | Path, *,
@@ -751,30 +757,39 @@ def horizon_risk_group_asset_ids(cone: ConeAtHorizon, damage_radius_km: float,
 async def _define_horizon_risk_groups(
     counting: _CountingClient, scenario: ScenarioFile, issuance, *,
     edges: list[Edge], defined: set[str],
-) -> dict[str, str]:
-    """One risk group per horizon of the current issuance -- the asset lists
-    Decision 2 chooses among. Pure GIS on this side (map_geo_event_to_assets),
-    define_risk_group on the server's, exactly the seam CLAUDE.md draws.
+) -> tuple[dict[str, str], dict[str, list[str]], list[dict]]:
+    """(horizon -> rg_id, horizon -> fibre asset ids, the optical OMS
+    records).
+
+    The asset ids were computed and discarded here before -- and skipped
+    entirely for an already-defined group. They are now the input to the
+    constraints observation's `risk_groups` block, so they are computed on
+    every call regardless of whether the group needs defining. Pure GIS
+    against 180 local edges; no extra server call.
 
     define_risk_group rejects a duplicate rg_id, so ids are minted per
-    (scenario, issuance, horizon) and re-definition is skipped."""
+    (scenario, issuance, horizon) and re-definition is skipped -- the OMS
+    fetch above is NOT skipped, so the asset ids stay available even when
+    the group itself was defined by an earlier hour."""
     filter_fn = get_filter(EVENT_TYPE)
     topo = await counting.call("get_topology", {"layer": "optical"})
     rg_ids: dict[str, str] = {}
+    assets_by_horizon: dict[str, list[str]] = {}
     for horizon, cone in issuance.horizons.items():
         rg_id = f"rg_{scenario.id}_{issuance.issued_at}_{horizon}"
         rg_ids[horizon] = rg_id
-        if rg_id in defined:
-            continue
         fiber_ids = horizon_risk_group_asset_ids(
             cone, scenario.damage_radius_km, edges=edges, oms=topo["oms"],
             filter_fn=filter_fn)
+        assets_by_horizon[horizon] = fiber_ids
+        if rg_id in defined:
+            continue
         await counting.call("define_risk_group", {
             "rg_id": rg_id, "asset_ids": fiber_ids,
             "metadata": {"event_type": EVENT_TYPE, "scenario": scenario.id,
                          "issued_at": issuance.issued_at, "horizon": horizon}})
         defined.add(rg_id)
-    return rg_ids
+    return rg_ids, assets_by_horizon, topo["oms"]
 
 
 def _only_transient_findings_about(violations, service_id: str) -> bool:
@@ -956,8 +971,28 @@ async def run_episode(
                           standing_claim_priority=standing_claim_priority)
 
         issuance = latest_issuance(scenario, hour)
-        rg_ids = await _define_horizon_risk_groups(
+        rg_ids, rg_assets, optical_oms = await _define_horizon_risk_groups(
             counting, scenario, issuance, edges=edges, defined=defined_rgs)
+        # What each of those groups actually CONTAINS, per asset, with the
+        # single-span cut probability and whether the span is on the
+        # actionable service's own corridors. Shown at the constraints step
+        # only (agent.project_observation gates it) -- it is what makes
+        # `avoid.assets` nameable rather than all-or-nothing.
+        sut_paths = geometry.paths.get(scenario.service_under_test, {})
+        working_edges = path_edges(sut_paths.get("working"))
+        protection_edges = path_edges(sut_paths.get("protection"))
+        fiber_index = fiber_span_index(optical_oms, geometry.coords)
+        risk_group_assets = tuple(
+            {"horizon": horizon,
+             "assets": risk_group_rows(
+                 rg_assets[horizon], fiber_index,
+                 center_lat=issuance.horizons[horizon].center["lat"],
+                 center_lon=issuance.horizons[horizon].center["lon"],
+                 width_km=issuance.horizons[horizon].width_km,
+                 damage_radius_km=scenario.damage_radius_km,
+                 working_edges=working_edges,
+                 protection_edges=protection_edges)}
+            for horizon in rg_ids)
 
         obs = build_observation(scenario, hour, risk_group_ids=rg_ids,
                                 **obs_kwargs)
@@ -1043,7 +1078,8 @@ async def run_episode(
                        "attempts_this_hour": attempt_records(
                            record["iterations"]),
                        "actions_taken": action_payloads(
-                           actions, hours=scenario.hours)})
+                           actions, hours=scenario.hours),
+                       "risk_group_assets": risk_group_assets})
                 probe.begin("constraints")
                 constraints = await decider.constraints(obs, unconstrained)
                 menu = await counting.call(
