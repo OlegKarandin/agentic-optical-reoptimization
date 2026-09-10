@@ -28,6 +28,7 @@ REPLAY_SCENARIO_YAML = textwrap.dedent("""
     depot_site: tirupati
     spare_inventory: {tirupati: 1}
     damage_radius_km: 20
+    track_revision_km_per_hour_ahead: 30
     reference_avoid: {}
     forecast:
       t0:

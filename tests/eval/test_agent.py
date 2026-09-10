@@ -14,7 +14,7 @@ from storm_reoptimizer.eval import agent as agent_module
 from storm_reoptimizer.eval.agent import (
     CONSTRAINT_TOOL, DEFAULT_MODEL, MAX_ATTEMPTS, OBJECTIVE_TOOL,
     P_CUT_ENUMERATION_THRESHOLD, SYSTEM_PROMPT, TIMING_TOOL, ClaudeDecider,
-    project_observation, strict_tool_schema,
+    _project_exposure_entry, project_observation, strict_tool_schema,
 )
 from storm_reoptimizer.eval.baseline import ForecastBlindBaseline
 from storm_reoptimizer.eval.decisions import (
@@ -1339,3 +1339,17 @@ def test_an_empty_ranking_is_fine_once_one_is_standing():
         {"reasoning": "unchanged", "action": "wait", "contested_claim": None,
          "claim_priority": []})
     ClaudeDecider._check_named_services(decision, payload, TIMING_TOOL)
+
+
+def test_the_projection_carries_the_revision_band_through():
+    entry = {"hours_ahead": 2, "p_cut": 0.914, "demand_gbps": 300.0,
+             "p_cut_if_track_revised": {"revision_radius_km": 90.0,
+                                        "min": 0.09, "max": 0.59,
+                                        "mean": 0.283}}
+    projected = _project_exposure_entry(entry)
+    assert projected["p_cut_if_track_revised"] == entry["p_cut_if_track_revised"]
+
+
+def test_a_row_without_a_band_projects_without_the_key():
+    entry = {"hours_ahead": 2, "p_cut": 0.914, "demand_gbps": 300.0}
+    assert "p_cut_if_track_revised" not in _project_exposure_entry(entry)

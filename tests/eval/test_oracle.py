@@ -30,6 +30,7 @@ ORACLE_SCENARIO_YAML = textwrap.dedent("""
     depot_site: satna
     spare_inventory: {satna: 1}
     damage_radius_km: 74
+    track_revision_km_per_hour_ahead: 30
     reference_avoid: {}
     forecast:
       t0:

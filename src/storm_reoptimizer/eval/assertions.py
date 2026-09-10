@@ -36,7 +36,7 @@ from mcp.client import Client
 from ..events.filters import get_filter
 from ..geo_mapper import load_edges
 from ..mcp_client import call_tool_json
-from .agent import P_CUT_ENUMERATION_THRESHOLD
+from .agent import P_CUT_ENUMERATION_THRESHOLD, project_observation
 from .baseline import BASELINE_VARIANTS, ForecastBlindBaseline, ScriptedDecider
 from .cone import p_cut_region
 from .decisions import (
@@ -66,7 +66,19 @@ MAX_LIGHTPATH_CAPACITY_GBPS: float = 800.0
 # The scalars a one-line rule could key on. Held EQUAL across the halves, so
 # no surface correlation is left to key on.
 SHARED_SCALARS = ("cone_width_km", "cone_motion_kmh", "n_future_claimants",
-                  "exposure_horizon_hours", "spares_on_hand")
+                  "exposure_horizon_hours", "spares_on_hand",
+                  "track_revision_km_per_hour_ahead")
+
+
+def _shared_scalar(scenario: ScenarioFile, name: str):
+    """A SHARED_SCALARS entry, resolved against the ScenarioFile's own fields
+    first and its `metadata` second. Most of these are author-declared
+    metadata; `track_revision_km_per_hour_ahead` is a real top-level field
+    the harness reads, so it is checked where it actually lives rather than
+    duplicated into metadata where the two copies could drift."""
+    return getattr(scenario, name, None) if hasattr(scenario, name) \
+        else scenario.metadata.get(name)
+
 
 # Replayed for the two decisions a pair is NOT testing; the outcome must not
 # move. Keyed by decision name.
@@ -127,10 +139,11 @@ def assert_shared_scalars_equal(a: ScenarioFile, b: ScenarioFile) -> None:
     """Hold every scalar the one-variable check enumerates EQUAL across the
     twins, and let the flip live in the relation between them."""
     for name in SHARED_SCALARS:
-        if a.metadata.get(name) != b.metadata.get(name):
+        value_a, value_b = _shared_scalar(a, name), _shared_scalar(b, name)
+        if value_a != value_b:
             raise PairInvalid(
-                f"{a.id}/{b.id}: {name} differs ({a.metadata.get(name)!r} vs "
-                f"{b.metadata.get(name)!r}); a threshold on it would separate "
+                f"{a.id}/{b.id}: {name} differs ({value_a!r} vs "
+                f"{value_b!r}); a threshold on it would separate "
                 f"the halves, so the flip is a threshold, not a comparison")
 
 
@@ -424,6 +437,52 @@ def _derived_mismatches(a: ScenarioFile, derived_a: DerivedGeometry,
                 f"{p_cut_b!r} ({b.id}), offsets {offset_a:.3f}km/{offset_b:.3f}km, "
                 f"|delta| = {abs(p_cut_a - p_cut_b):.6g} > {DERIVED_TOLERANCE:g}")
     return problems
+
+
+async def assert_revision_band_equal_at_t0(
+    client_a: Client, client_b: Client, a: ScenarioFile, b: ScenarioFile, *,
+    topology_path: str | Path,
+) -> None:
+    """For every service shown at t0, `p_cut_if_track_revised` is identical
+    across the two halves.
+
+    The no-leakage guarantee for the one new derived quantity: the halves
+    must be the same situation on arrival at the decision hour, and a band
+    that differed at t0 would hand the agent the flip an hour before it is
+    supposed to be readable. Compared at `DERIVED_TOLERANCE`, the same bar
+    `assert_pair_derived_geometry_is_equal` uses -- and the band is already
+    rounded to 3 decimals, so a difference this tolerates is one the agent
+    cannot see either."""
+    bands = []
+    for client, scenario in ((client_a, a), (client_b, b)):
+        geometry = await service_geometry(client, topology_path)
+        services = tuple((await call_tool_json(client, "get_services"))["services"])
+        obs = build_observation(
+            scenario, scenario.hours[0],
+            service_spans=geometry.cuttable_spans, services=services,
+            spares_on_hand=scenario.spares_on_hand,
+            endpoint_sites=geometry.endpoint_sites,
+            depot_site=scenario.depot_site,
+            protection_spans=geometry.protection_cuttable_spans)
+        bands.append({
+            (svc, horizon): entry["p_cut_if_track_revised"]
+            for svc, per_horizon in project_observation(obs)["exposure"].items()
+            for horizon, entry in per_horizon.items()
+            if "p_cut_if_track_revised" in entry})
+    if set(bands[0]) != set(bands[1]):
+        raise PairInvalid(
+            f"{a.id}/{b.id}: different services carry a revision band at t0 "
+            f"({sorted(set(bands[0]) ^ set(bands[1]))}); the halves must show "
+            f"the same rows before the decision hour")
+    for key, band_a in bands[0].items():
+        band_b = bands[1][key]
+        for field in ("revision_radius_km", "min", "max", "mean"):
+            if abs(band_a[field] - band_b[field]) > DERIVED_TOLERANCE:
+                raise PairInvalid(
+                    f"{a.id}/{b.id}: p_cut_if_track_revised[{field!r}] "
+                    f"differs at t0 for {key} ({band_a[field]} vs "
+                    f"{band_b[field]}); the one new derived field leaks the "
+                    f"flip before the decision hour")
 
 
 # The common axis W1.2's ONE global orientation is scored against. Declared

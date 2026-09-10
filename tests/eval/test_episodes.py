@@ -15,7 +15,8 @@ from storm_reoptimizer.eval.assertions import (
     assert_gold_matches_outcomes, assert_gold_spare_action_is_grounded,
     assert_issuance_prefix_shared,
     assert_menus_identical, assert_no_global_policy_solves_the_suite,
-    assert_non_flip_decisions_non_binding, assert_spend_is_real,
+    assert_non_flip_decisions_non_binding, assert_revision_band_equal_at_t0,
+    assert_spend_is_real,
     assert_risk_group_covers_measurable_exposure, assert_shared_scalars_equal,
     assert_wait_gold_has_no_free_escape,
 )
@@ -112,6 +113,22 @@ def test_pair_derived_geometry_is_equal_across_the_halves(pair, connect_for):
     test_pair_menus_are_identical_under_reference_avoid already has."""
     episodes = load_all_scenarios()
     asyncio.run(_derived(episodes[f"{pair}a"], episodes[f"{pair}b"], connect_for))
+
+
+@pytest.mark.parametrize("pair", _pair_params())
+def test_the_revision_band_is_equal_across_the_halves_at_t0(pair, connect_for):
+    """Spec 8.2. The one new derived quantity, checked for leakage the same
+    way the geometry is."""
+    episodes = load_all_scenarios()
+    a, b = episodes[f"{pair}a"], episodes[f"{pair}b"]
+
+    async def _run():
+        async with connect_for(a.state_file)() as client_a, \
+                connect_for(b.state_file)() as client_b:
+            await assert_revision_band_equal_at_t0(
+                client_a, client_b, a, b, topology_path=TOPOLOGY_PATH)
+
+    asyncio.run(_run())
 
 
 @pytest.mark.parametrize("pair", _pair_params())

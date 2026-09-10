@@ -22,6 +22,13 @@ depot_site: satna            # the site whose depot is scarce in this episode
 # one transponder at EACH of its two endpoint sites.
 spare_inventory: {satna: 2}  # D1 declares {satna: 2}
 damage_radius_km: 74
+# How far the cone CENTRE moves between consecutive issuances, per hour of
+# lead. A forecast-product property, identical in every episode of this suite
+# and held equal by assertions.SHARED_SCALARS -- deliberately NOT tuned to
+# any pair. 30 gives 90 km at hours_ahead 3, which is T1's own t0->t1
+# displacement, and is deliberately WIDER than T2's (34 km) and T3's (48 km)
+# actual revisions: the agent is not supposed to know those.
+track_revision_km_per_hour_ahead: 30
 reference_avoid:             # NOT {} -- see "The real mechanics" below. This
                               # is also the ACTUAL avoid the gold act uses.
   assets: [fiber_satna_rewa_0, fiber_rewa_satna_0,

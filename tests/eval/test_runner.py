@@ -236,6 +236,7 @@ SMOKE = textwrap.dedent("""
     depot_site: satna
     spare_inventory: {satna: 2}
     damage_radius_km: 20
+    track_revision_km_per_hour_ahead: 30
     reference_avoid: {}
     forecast:
       t0:
@@ -334,6 +335,7 @@ EXPOSURE_SMOKE = textwrap.dedent("""
     depot_site: satna
     spare_inventory: {satna: 2}
     damage_radius_km: 25
+    track_revision_km_per_hour_ahead: 30
     reference_avoid: {}
     forecast:
       t0:
@@ -1675,6 +1677,7 @@ _REPLAY_SCENARIO_TEMPLATE = textwrap.dedent("""
     depot_site: satna
     spare_inventory: {{satna: 2}}
     damage_radius_km: 25
+    track_revision_km_per_hour_ahead: 30
     reference_avoid: {{}}
     forecast:
       t0:

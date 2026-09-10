@@ -403,3 +403,37 @@ def test_the_carried_decision_and_attempts_survive_to_dict(
     assert payload["decided_this_hour"] == decided
     assert payload["attempts_this_hour"] == list(attempts)
     assert payload["standing_claim_priority"] == ["c", "s"]
+
+
+def test_the_band_is_shown_only_while_a_revision_is_still_scheduled(
+        example_scenario_yaml, write_scenario):
+    """`p_cut` says how likely the cut is if this issuance is right; the band
+    says how much that can move when it is revised. At the last issuance
+    there is nothing left to revise, so the field is withheld rather than
+    shown as a zero-width band that would read as certainty."""
+    scenario = load_scenario(write_scenario(example_scenario_yaml))
+    spans = {"storm-svc-1": (((25.0, 81.0), (25.1, 81.2)),)}
+    services = ({"id": "storm-svc-1", "demand_gbps": 300.0},)
+    at_t0 = build_observation(scenario, "t0", service_spans=spans,
+                              services=services, spares_on_hand=1)
+    row = at_t0.exposure["storm-svc-1"]["t1"]
+    assert set(row["p_cut_if_track_revised"]) == {
+        "revision_radius_km", "min", "max", "mean"}
+    # 30 km per hour of lead x 1 hour ahead.
+    assert row["p_cut_if_track_revised"]["revision_radius_km"] == 30.0
+    at_t1 = build_observation(scenario, "t1", service_spans=spans,
+                              services=services, spares_on_hand=1)
+    assert "p_cut_if_track_revised" not in at_t1.exposure["storm-svc-1"]["t3"]
+
+
+def test_the_band_scales_with_how_far_ahead_the_horizon_is(
+        example_scenario_yaml, write_scenario):
+    scenario = load_scenario(write_scenario(example_scenario_yaml))
+    spans = {"storm-svc-1": (((25.0, 81.0), (25.1, 81.2)),)}
+    services = ({"id": "storm-svc-1", "demand_gbps": 300.0},)
+    obs = build_observation(scenario, "t0", service_spans=spans,
+                            services=services, spares_on_hand=1)
+    near = obs.exposure["storm-svc-1"]["t1"]["p_cut_if_track_revised"]
+    far = obs.exposure["storm-svc-1"]["t3"]["p_cut_if_track_revised"]
+    assert near["revision_radius_km"] == 30.0
+    assert far["revision_radius_km"] == 90.0

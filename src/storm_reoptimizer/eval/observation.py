@@ -26,6 +26,7 @@ from .cone import (
     Segment, expected_capacity_at_risk_gbps, nearest_span_offset_km,
     p_cut_service,
 )
+from .revision import revision_band
 from .scenario_file import Issuance, ScenarioFile
 
 # The rule, stated as data so the trace can carry it. `zero` -> 0 hours;
@@ -161,13 +162,16 @@ class Observation:
     issuance: Issuance
     # service_id -> horizon hour -> {"hours_ahead", "offset_km", "p_cut",
     #                               "width_km", "demand_gbps",
-    #                               "expected_capacity_at_risk_gbps"}
+    #                               "expected_capacity_at_risk_gbps",
+    #                               "p_cut_if_track_revised"?}
     # `offset_km` is the distance from the cone centre to the NEAREST point
     # of the service's storm-cuttable span union (0.0 if the centre lies on
     # one), and `p_cut` is the probability that union is cut -- not a
     # representative-midpoint reading of either. A service with no
     # storm-cuttable span on its working path has no key here at all: see
-    # `build_observation`.
+    # `build_observation`. `p_cut_if_track_revised` (revision.revision_band)
+    # is present only while another issuance is still scheduled -- see
+    # `build_observation`'s own comment at the point it is computed.
     exposure: dict[str, dict[str, dict[str, float]]]
     services: tuple[dict, ...]
     spares_on_hand: int              # transponder PAIRS
@@ -369,6 +373,18 @@ def build_observation(
     issuance = latest_issuance(scenario, hour)
     hour_index = scenario.hours.index(hour)
 
+    issuance_schedule = tuple(sorted(scenario.forecast, key=scenario.hours.index))
+    # LATER THAN THE ISSUANCE IN FORCE, not later than `hour`: an issuance
+    # published at this very hour is already read, and its own revision is
+    # what waiting buys. At the last issuance this is None and the revision
+    # band (revision.py) is withheld with it -- there is nothing left to
+    # revise. Computed here, ABOVE the exposure loop, because the band
+    # computed inside that loop needs to know whether one is still coming.
+    in_force = scenario.hours.index(issuance.issued_at)
+    upcoming = [h for h in issuance_schedule
+                if scenario.hours.index(h) > in_force]
+    next_issuance = {"hour": upcoming[0]} if upcoming else None
+
     exposure: dict[str, dict[str, dict[str, float]]] = {}
     for svc in services:
         spans = service_spans.get(svc["id"])
@@ -414,6 +430,23 @@ def build_observation(
                     expected_capacity_at_risk_gbps(
                         p_cut, svc["demand_gbps"]), 3),
             }
+            # Shown only while another issuance is still scheduled: at the
+            # last one there is nothing left to revise, and a band printed
+            # there would read as a claim about the storm rather than about
+            # the forecast. Computed for the ACTIONABLE service and every
+            # depot-eligible service with real exposure -- the same set the
+            # projection keeps -- so the payload never carries a band for a
+            # row it does not show, and the twelve extra p_cut evaluations
+            # are not paid for hundreds of background services.
+            if next_issuance is not None and p_cut > 0.0 and (
+                    svc["id"] == scenario.service_under_test
+                    or depot_site in (endpoint_sites or {}).get(svc["id"], ())):
+                entry["p_cut_if_track_revised"] = revision_band(
+                    spans, protection_leg, lat, lon,
+                    width_km=cone.width_km,
+                    damage_radius_km=scenario.damage_radius_km,
+                    radius_km=(scenario.track_revision_km_per_hour_ahead
+                               * entry["hours_ahead"]))
             per_horizon[horizon] = entry
         exposure[svc["id"]] = per_horizon
 
@@ -421,16 +454,6 @@ def build_observation(
         exposure, endpoint_sites or {}, depot_site=depot_site,
         service_under_test=scenario.service_under_test)
 
-    issuance_schedule = tuple(sorted(scenario.forecast, key=scenario.hours.index))
-    # LATER THAN THE ISSUANCE IN FORCE, not later than `hour`: an issuance
-    # published at this very hour is already read, and its own revision is
-    # what waiting buys. At the last issuance this is None and the revision
-    # band (revision.py) is withheld with it -- there is nothing left to
-    # revise.
-    in_force = scenario.hours.index(issuance.issued_at)
-    upcoming = [h for h in issuance_schedule
-                if scenario.hours.index(h) > in_force]
-    next_issuance = {"hour": upcoming[0]} if upcoming else None
     deadline_hour: dict[str, str | None] = {}
     if issuance.horizons:
         latest_horizon = max(issuance.horizons, key=scenario.hours.index)

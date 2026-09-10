@@ -20,6 +20,13 @@ depot_site: jalgaon
 spare_inventory:
   jalgaon: 1
 damage_radius_km: 74.0
+# How far the cone CENTRE moves between consecutive issuances, per hour of
+# lead. A forecast-product property, identical in every episode of this suite
+# and held equal by assertions.SHARED_SCALARS -- deliberately NOT tuned to
+# any pair. 30 gives 90 km at hours_ahead 3, which is T1's own t0->t1
+# displacement, and is deliberately WIDER than T2's (34 km) and T3's (48 km)
+# actual revisions: the agent is not supposed to know those.
+track_revision_km_per_hour_ahead: 30
 reference_avoid: {}
 forecast:
   t0:

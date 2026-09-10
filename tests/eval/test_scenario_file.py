@@ -229,3 +229,26 @@ def test_dump_scenario_omits_pair_for_a_singleton_episode(write_scenario,
     assert scenario.pair is None
     dumped = dump_scenario(scenario)
     assert "pair:" not in dumped
+
+
+def test_the_track_revision_scale_is_required_and_parsed(
+        example_scenario_yaml, write_scenario):
+    scenario = load_scenario(write_scenario(example_scenario_yaml))
+    assert scenario.track_revision_km_per_hour_ahead == 30.0
+
+
+def test_a_scenario_without_the_track_revision_scale_is_rejected(
+        example_scenario_yaml, write_scenario):
+    text = "\n".join(
+        line for line in example_scenario_yaml.splitlines()
+        if "track_revision_km_per_hour_ahead" not in line)
+    with pytest.raises(ScenarioFileError,
+                       match="track_revision_km_per_hour_ahead"):
+        load_scenario(write_scenario(text))
+
+
+def test_the_scenario_round_trips_through_dump(
+        example_scenario_yaml, write_scenario):
+    scenario = load_scenario(write_scenario(example_scenario_yaml))
+    again = load_scenario(write_scenario(dump_scenario(scenario), "RT.yaml"))
+    assert again == scenario

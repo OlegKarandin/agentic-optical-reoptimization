@@ -9,6 +9,24 @@ import math
 EARTH_RADIUS_KM = 6371.0
 
 
+def displace_km(lat: float, lon: float, radius_km: float,
+                bearing_deg: float) -> tuple[float, float]:
+    """(lat, lon) moved `radius_km` along `bearing_deg` (0 = north, 90 =
+    east), under the same equirectangular flat-earth approximation
+    `circle_polygon` draws with and `eval.cone.radial_offset_km` measures
+    against.
+
+    Extracted from `circle_polygon`'s own per-point formula -- which is
+    exactly this displacement swept over a full turn -- so a point the
+    revision band displaces to and a point the drawn cone would contain are
+    computed by one piece of arithmetic, not two that agree by inspection."""
+    theta = math.radians(bearing_deg)
+    lat_rad = math.radians(lat)
+    dlat = (radius_km / EARTH_RADIUS_KM) * math.cos(theta)
+    dlon = (radius_km / (EARTH_RADIUS_KM * math.cos(lat_rad))) * math.sin(theta)
+    return lat + math.degrees(dlat), lon + math.degrees(dlon)
+
+
 def circle_polygon(lat: float, lon: float, radius_km: float, n_points: int = 24) -> dict:
     """A GeoJSON Polygon approximating a circle of `radius_km` around
     (lat, lon), via an equirectangular flat-earth approximation local to the
@@ -16,16 +34,10 @@ def circle_polygon(lat: float, lon: float, radius_km: float, n_points: int = 24)
     hazard footprint -- not navigation-grade geometry."""
     if radius_km <= 0:
         raise ValueError("radius_km must be > 0")
-    lat_rad = math.radians(lat)
     coords = []
     for i in range(n_points + 1):  # +1 to close the ring
-        theta = 2 * math.pi * i / n_points
-        dlat = (radius_km / EARTH_RADIUS_KM) * math.cos(theta)
-        dlon = (radius_km / (EARTH_RADIUS_KM * math.cos(lat_rad))) * math.sin(theta)
-        coords.append([
-            round(lon + math.degrees(dlon), 5),
-            round(lat + math.degrees(dlat), 5),
-        ])
+        plat, plon = displace_km(lat, lon, radius_km, 360.0 * i / n_points)
+        coords.append([round(plon, 5), round(plat, 5)])
     return {"type": "Polygon", "coordinates": [coords]}
 
 

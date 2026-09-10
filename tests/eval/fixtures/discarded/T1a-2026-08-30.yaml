@@ -15,6 +15,7 @@ depot_site: satna            # the site whose depot is scarce in this episode
 # one transponder at EACH of its two endpoint sites.
 spare_inventory: {satna: 1}
 damage_radius_km: 74
+track_revision_km_per_hour_ahead: 30
 reference_avoid: {}          # neutral third value: current exposure only
 # GEOMETRY FROZEN 2026-08-30 (Task 14, exposure-and-depot plan), against the
 # REAL satna-homed claimant `claimant-satna-jabalpur-fwd`/`-rev`

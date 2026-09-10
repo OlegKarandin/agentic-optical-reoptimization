@@ -75,13 +75,21 @@ def _project_exposure_entry(entry: dict) -> dict:
     `p_cut`/`demand_gbps` the same way `observation.py` does."""
     p_cut = float(entry["p_cut"])
     demand_gbps = float(entry["demand_gbps"])
-    return {
+    projected = {
         "hours_ahead": entry["hours_ahead"],
         "p_cut": entry["p_cut"],
         "demand_gbps": entry["demand_gbps"],
         "expected_capacity_at_risk_gbps": round(
             expected_capacity_at_risk_gbps(p_cut, demand_gbps), 3),
     }
+    # Copied through rather than recomputed: `build_observation` owns the
+    # band (it has the scenario's revision scale and the spans), and a second
+    # computation here could silently disagree with the one the trace, the
+    # viewer and the t0-equality gate all read.
+    band = entry.get("p_cut_if_track_revised")
+    if band is not None:
+        projected["p_cut_if_track_revised"] = band
+    return projected
 
 
 def _depot_eligible(svc: str, obs: Observation) -> bool:

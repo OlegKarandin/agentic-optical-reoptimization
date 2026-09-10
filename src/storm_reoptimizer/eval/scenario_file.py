@@ -31,8 +31,8 @@ _TOP_LEVEL_KEYS = {
     "id", "pair", "seed", "state_file", "service_under_test", "track",
     "hours", "decision_hour", "lead_time_hours", "spares_on_hand",
     "depot_site", "spare_inventory",
-    "damage_radius_km", "reference_avoid", "forecast", "realized", "gold",
-    "flip_variable", "metadata",
+    "damage_radius_km", "track_revision_km_per_hour_ahead", "reference_avoid",
+    "forecast", "realized", "gold", "flip_variable", "metadata",
 }
 _OPTIONAL_TOP_LEVEL_KEYS = {"pair"}   # omitted for singleton episodes (D1)
 _GOLD_KEYS = {"survived", "max_spares_wasted", "decision_at_t0", "label",
@@ -108,6 +108,13 @@ class ScenarioFile:
     depot_site: str               # the site whose depot is scarce this episode
     spare_inventory: dict[str, int]  # per-site spare transponder counts
     damage_radius_km: float
+    # How far the cone CENTRE moves between consecutive issuances, per hour
+    # of lead -- a property of the forecast product, not of any pair. It is
+    # the radius `revision.revision_band` displaces the centre by, scaled by
+    # the horizon's own `hours_ahead`. Identical in every episode of the
+    # suite and enumerated in `assertions.SHARED_SCALARS`, so it can never
+    # become a scalar a one-line rule keys on.
+    track_revision_km_per_hour_ahead: float
     reference_avoid: dict
     forecast: dict[str, Issuance]        # issue hour -> Issuance
     realized: dict[str, tuple[str, ...]]  # hour -> asset ids cut
@@ -282,6 +289,8 @@ def load_scenario(path: str | Path) -> ScenarioFile:
         spares_on_hand=int(raw["spares_on_hand"]),
         depot_site=depot_site, spare_inventory=spare_inventory,
         damage_radius_km=float(raw["damage_radius_km"]),
+        track_revision_km_per_hour_ahead=float(
+            raw["track_revision_km_per_hour_ahead"]),
         reference_avoid=raw["reference_avoid"], forecast=forecast,
         realized=realized, gold=gold,
         flip_variable=tuple(raw["flip_variable"]), metadata=raw["metadata"])
