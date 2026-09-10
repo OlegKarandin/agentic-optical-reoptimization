@@ -223,13 +223,21 @@ def test_a_menu_with_no_solution_projects_to_an_empty_candidate_list():
 # at 76.1 km -- outside the 45 km half-width -- so the baseline waits at t1
 # and the episode commits exactly once. (Nothing can change that: t1 exposure
 # would need the disc to reach satna, which is the enclose-the-depot case.)
+#
+# TWO ISSUANCES, added 2026-09-10 (decidable-hours rule, spec 7.1). The
+# decider is now called only at an hour that has an issuance of its own, so a
+# single-issuance fixture would be decided at t0 and skipped ever after --
+# and the two tests below that read the SECOND hour's observation would have
+# no second observation to read. Every horizon carries the SAME cone as
+# before, so every measured offset, p_cut and risk group in the notes above
+# is unchanged; only the schedule is different.
 SMOKE = textwrap.dedent("""
     id: SMOKE
     seed: 17
     state_file: eval/states/loaded-s17.json
     service_under_test: storm-svc-1
     track: hudhud
-    hours: [t0, t1]
+    hours: [t0, t1, t2]
     decision_hour: t0
     lead_time_hours: 1
     spares_on_hand: 2
@@ -241,8 +249,12 @@ SMOKE = textwrap.dedent("""
     forecast:
       t0:
         t1: {cone: {type: Polygon, coordinates: [[[81.58, 24.90802], [81.69511, 24.89424], [81.80238, 24.85381], [81.89449, 24.78949], [81.96516, 24.70568], [82.0096, 24.60807], [82.02475, 24.50333], [82.0096, 24.39859], [81.96516, 24.30098], [81.89449, 24.21717], [81.80238, 24.15285], [81.69511, 24.11242], [81.58, 24.09864], [81.46489, 24.11242], [81.35762, 24.15285], [81.26551, 24.21717], [81.19484, 24.30098], [81.1504, 24.39859], [81.13525, 24.50333], [81.1504, 24.60807], [81.19484, 24.70568], [81.26551, 24.78949], [81.35762, 24.85381], [81.46489, 24.89424], [81.58, 24.90802]]]}, width_km: 90, center: {lat: 24.50333, lon: 81.58}}
+        t2: {cone: {type: Polygon, coordinates: [[[81.58, 24.90802], [81.69511, 24.89424], [81.80238, 24.85381], [81.89449, 24.78949], [81.96516, 24.70568], [82.0096, 24.60807], [82.02475, 24.50333], [82.0096, 24.39859], [81.96516, 24.30098], [81.89449, 24.21717], [81.80238, 24.15285], [81.69511, 24.11242], [81.58, 24.09864], [81.46489, 24.11242], [81.35762, 24.15285], [81.26551, 24.21717], [81.19484, 24.30098], [81.1504, 24.39859], [81.13525, 24.50333], [81.1504, 24.60807], [81.19484, 24.70568], [81.26551, 24.78949], [81.35762, 24.85381], [81.46489, 24.89424], [81.58, 24.90802]]]}, width_km: 90, center: {lat: 24.50333, lon: 81.58}}
+      t1:
+        t2: {cone: {type: Polygon, coordinates: [[[81.58, 24.90802], [81.69511, 24.89424], [81.80238, 24.85381], [81.89449, 24.78949], [81.96516, 24.70568], [82.0096, 24.60807], [82.02475, 24.50333], [82.0096, 24.39859], [81.96516, 24.30098], [81.89449, 24.21717], [81.80238, 24.15285], [81.69511, 24.11242], [81.58, 24.09864], [81.46489, 24.11242], [81.35762, 24.15285], [81.26551, 24.21717], [81.19484, 24.30098], [81.1504, 24.39859], [81.13525, 24.50333], [81.1504, 24.60807], [81.19484, 24.70568], [81.26551, 24.78949], [81.35762, 24.85381], [81.46489, 24.89424], [81.58, 24.90802]]]}, width_km: 90, center: {lat: 24.50333, lon: 81.58}}
     realized:
       t1: []
+      t2: []
     gold:
       survived: [storm-svc-1]
       max_spares_wasted: 2
@@ -322,13 +334,21 @@ SMOKE = textwrap.dedent("""
 # pairing it with `_WidensOnDisjointnessRejection` for the timing/objective
 # behaviour that wrapper provides; its widen branch just never fires here
 # any more.
+#
+# TWO ISSUANCES, added 2026-09-10 (decidable-hours rule, spec 7.1). The
+# decider is now called only at an hour that has an issuance of its own, so a
+# single-issuance fixture would be decided at t0 and skipped ever after --
+# and the two tests below that read the SECOND hour's observation would have
+# no second observation to read. Every horizon carries the SAME cone as
+# before, so every measured offset, p_cut and risk group in the notes above
+# is unchanged; only the schedule is different.
 EXPOSURE_SMOKE = textwrap.dedent("""
     id: EXPOSURE_SMOKE
     seed: 17
     state_file: eval/states/loaded-s17.json
     service_under_test: storm-svc-1
     track: hudhud
-    hours: [t0, t1]
+    hours: [t0, t1, t2]
     decision_hour: t0
     lead_time_hours: 1
     spares_on_hand: 2
@@ -340,8 +360,12 @@ EXPOSURE_SMOKE = textwrap.dedent("""
     forecast:
       t0:
         t1: {cone: {type: Polygon, coordinates: [[[81.76667, 25.02292], [81.92013, 25.00454], [82.06312, 24.95063], [82.18592, 24.86488], [82.28014, 24.75313], [82.33937, 24.62299], [82.35958, 24.48333], [82.33937, 24.34367], [82.28014, 24.21353], [82.18592, 24.10178], [82.06312, 24.01603], [81.92013, 23.96212], [81.76667, 23.94374], [81.61321, 23.96212], [81.47022, 24.01603], [81.34742, 24.10178], [81.2532, 24.21353], [81.19397, 24.34367], [81.17376, 24.48333], [81.19397, 24.62299], [81.2532, 24.75313], [81.34742, 24.86488], [81.47022, 24.95063], [81.61321, 25.00454], [81.76667, 25.02292]]]}, width_km: 120, center: {lat: 24.48333, lon: 81.76667}}
+        t2: {cone: {type: Polygon, coordinates: [[[81.76667, 25.02292], [81.92013, 25.00454], [82.06312, 24.95063], [82.18592, 24.86488], [82.28014, 24.75313], [82.33937, 24.62299], [82.35958, 24.48333], [82.33937, 24.34367], [82.28014, 24.21353], [82.18592, 24.10178], [82.06312, 24.01603], [81.92013, 23.96212], [81.76667, 23.94374], [81.61321, 23.96212], [81.47022, 24.01603], [81.34742, 24.10178], [81.2532, 24.21353], [81.19397, 24.34367], [81.17376, 24.48333], [81.19397, 24.62299], [81.2532, 24.75313], [81.34742, 24.86488], [81.47022, 24.95063], [81.61321, 25.00454], [81.76667, 25.02292]]]}, width_km: 120, center: {lat: 24.48333, lon: 81.76667}}
+      t1:
+        t2: {cone: {type: Polygon, coordinates: [[[81.76667, 25.02292], [81.92013, 25.00454], [82.06312, 24.95063], [82.18592, 24.86488], [82.28014, 24.75313], [82.33937, 24.62299], [82.35958, 24.48333], [82.33937, 24.34367], [82.28014, 24.21353], [82.18592, 24.10178], [82.06312, 24.01603], [81.92013, 23.96212], [81.76667, 23.94374], [81.61321, 23.96212], [81.47022, 24.01603], [81.34742, 24.10178], [81.2532, 24.21353], [81.19397, 24.34367], [81.17376, 24.48333], [81.19397, 24.62299], [81.2532, 24.75313], [81.34742, 24.86488], [81.47022, 24.95063], [81.61321, 25.00454], [81.76667, 25.02292]]]}, width_km: 120, center: {lat: 24.48333, lon: 81.76667}}
     realized:
       t1: []
+      t2: []
     gold:
       survived: [storm-svc-1]
       max_spares_wasted: 2
@@ -759,9 +783,12 @@ def test_exposure_follows_the_service_after_it_reroutes(
     tmp_path, loaded_state_path, local_server_command, local_server_env,
 ):
     # F4's stale-geometry half (remediation spec lines 116-121).
-    # EXPOSURE_SMOKE publishes ONE issuance at t0, so both hours read the
-    # same cone at the same horizon -- offset_km is then a function of the
-    # service's representative point ALONE, and can only move if the
+    # EXPOSURE_SMOKE's t0 issuance publishes BOTH t1 and t2 at the identical
+    # cone, and its t1 issuance re-publishes t2 at that same cone again (the
+    # 2026-09-10 decidable-hours fixture change), so the two DECIDED hours
+    # (t0 and t1 -- t2 itself is skipped, having no issuance of its own)
+    # both read horizon t2 at the same cone -- offset_km is then a function
+    # of the service's representative point ALONE, and can only move if the
     # harness re-read the working path after the t0 commit. storm-svc-1 has
     # no valid alternate route that both escapes a real exposure and stays
     # clear of its own protection leg without a widen-and-retry
@@ -780,8 +807,8 @@ def test_exposure_follows_the_service_after_it_reroutes(
     assert trace.actions and trace.actions[0].hour == "t0", (
         "this test needs the t0 commit to have happened")
     assert len(decider.observations) == 2
-    before = decider.observations[0].exposure["storm-svc-1"]["t1"]
-    after = decider.observations[1].exposure["storm-svc-1"]["t1"]
+    before = decider.observations[0].exposure["storm-svc-1"]["t2"]
+    after = decider.observations[1].exposure["storm-svc-1"]["t2"]
     assert after["offset_km"] != before["offset_km"], (
         "the service moved but the harness re-used the pre-commit point")
     # The baseline avoids the exposed risk group, so the committed path's
@@ -826,7 +853,7 @@ def test_a_baseline_rollout_completes_and_records_every_hour(
     trace = asyncio.run(_run(
         _scenario(tmp_path), _WidensOnDisjointnessRejection(),
         loaded_state_path, local_server_command, local_server_env))
-    assert [h["hour"] for h in trace.hours] == ["t0", "t1"]
+    assert [h["hour"] for h in trace.hours] == ["t0", "t1", "t2"]
     assert trace.terminal_status in {"converged", "declared_infeasible"}
     assert trace.tool_calls > 0
     assert all("timing" in h for h in trace.hours)
@@ -882,7 +909,7 @@ def test_the_next_hour_is_told_what_was_committed_in_the_previous_one(
     # non-positional case (T2a-style [t0, t1, t2, t6]) is covered directly
     # in tests/eval/test_observation.py, since that's a property of
     # action_payloads' own resolution, not of the rollout.
-    scenario_hours = ["t0", "t1"]
+    scenario_hours = ["t0", "t1", "t2"]
     assert remembered["effective_at_hour"] == (
         scenario_hours[committed.effective_at_index]
         if committed.effective_at_index < len(scenario_hours) else None)
@@ -892,6 +919,57 @@ def test_the_next_hour_is_told_what_was_committed_in_the_previous_one(
     # spares_spent is scoped to the depot site alone (ledger.py's own
     # contract) -- satna, since that's every real reroute's own home site.
     assert at_t1.spares_spent == committed.spares.get("satna", 0)
+
+
+def test_an_hour_with_no_issuance_of_its_own_is_not_decided(
+    tmp_path, loaded_state_path, local_server_command, local_server_env,
+):
+    """Spec 7.1. SMOKE publishes at t0 and t1 over three hours, so t2 has a
+    spare on hand and real exposure but nothing new to read -- and 'wait' at
+    an hour where nothing can change is not a decision anyone should be
+    charged a model call for."""
+    decider = _RecordingDecider(_WidensOnDisjointnessRejection())
+    trace = asyncio.run(_run(
+        _scenario(tmp_path), decider,
+        loaded_state_path, local_server_command, local_server_env))
+    assert [o.hour for o in decider.observations] == ["t0", "t1"]
+    skipped = next(h for h in trace.hours if h["hour"] == "t2")
+    assert skipped["timing"] == {
+        "action": "wait", "reasoning": "skipped: nothing decidable",
+        "contested_claim": None, "claim_priority": [], "skipped": True}
+    assert skipped["projected"] is None
+    assert skipped["iterations"] == []
+    assert skipped["timing_effective"] == "wait"
+
+
+def test_a_skipped_hour_still_injects_its_cuts_and_runs_the_replay(
+    tmp_path, loaded_state_path, local_server_command, local_server_env,
+):
+    """Skipping the DECIDER is not skipping the HOUR. The cut is ground
+    truth and the post-cut restoration replay is harness logic; both run."""
+    # Build a SMOKE variant whose t2 (the un-issued hour) carries a real cut.
+    text = SMOKE.replace("t2: []", "t2: [fiber_satna_rewa_0]")
+    path = tmp_path / "SKIPCUT.yaml"
+    path.write_text(text, encoding="utf-8")
+    trace = asyncio.run(_run(
+        load_scenario(path), _WidensOnDisjointnessRejection(),
+        loaded_state_path, local_server_command, local_server_env))
+    at_t2 = next(h for h in trace.hours if h["hour"] == "t2")
+    assert at_t2["timing"]["skipped"] is True
+    assert "dropped_after_cut" in at_t2
+    assert "restorations" in at_t2
+
+
+def test_the_rule_applies_to_every_decider_so_call_counts_stay_comparable(
+    tmp_path, loaded_state_path, local_server_command, local_server_env,
+):
+    """The rule lives in the runner, not in a decider, so a baseline arm and
+    an agent arm are charged for exactly the same hours."""
+    for variant in ("immediate", "at_deadline"):
+        decider = _RecordingDecider(ForecastBlindBaseline(variant))
+        asyncio.run(_run(_scenario(tmp_path), decider, loaded_state_path,
+                         local_server_command, local_server_env))
+        assert [o.hour for o in decider.observations] == ["t0", "t1"]
 
 
 def test_a_committed_action_debits_the_ledger_and_records_its_lead_time(
@@ -913,9 +991,19 @@ def test_a_committed_action_debits_the_ledger_and_records_its_lead_time(
         a.spares.get("satna", 0) for a in trace.actions)
 
 
-def test_an_unaffordable_choice_is_rejected_and_the_loop_retries(
+def test_an_empty_ledger_forecloses_every_decision_before_it_is_ever_consulted(
     tmp_path, loaded_state_path, local_server_command, local_server_env,
 ):
+    # Pre-2026-09-10 (decider-allocation-redesign, decidable-hours rule) this
+    # asserted the OPPOSITE: that an empty ledger still let the decider
+    # choose an optical candidate, which the ledger's own `insufficient_
+    # spares` check then refused. `is_decidable`'s own first clause
+    # forecloses that path one level higher now -- "spares_on_hand <= 0"
+    # makes an hour undecidable before the decider is ever asked, so
+    # `insufficient_spares` (reachable only from a CHOSEN, unaffordable
+    # candidate) can no longer fire from an empty ledger at all; every hour
+    # is skipped instead.
+    #
     # run_episode builds the SpareLedger from `scenario.spare_inventory`
     # (Task 9), not `spares_on_hand` -- both must be zeroed for the ledger
     # to actually be empty. `depot_site` is left alone: it already comes
@@ -927,17 +1015,12 @@ def test_an_unaffordable_choice_is_rejected_and_the_loop_retries(
         broke, ForecastBlindBaseline("immediate"),
         loaded_state_path, local_server_command, local_server_env))
     rejections_by_hour = [h.get("rejections", []) for h in trace.hours]
-    # With no spares, any optical candidate must be refused by the ledger --
-    # assert this actually happened rather than silently no-op'ing if it
-    # didn't (found live: a stale `spares_on_hand=0`-only replace() left
-    # `spare_inventory` at SMOKE's real {"satna": 2}, so the ledger was never
-    # actually broke and this whole test passed for the wrong reason).
-    insufficient = [r for hour_rejections in rejections_by_hour
-                    for r in hour_rejections
-                    if r["type"] == "insufficient_spares"]
-    assert insufficient, (
-        f"expected at least one insufficient_spares rejection with an "
-        f"empty ledger; rejections_by_hour={rejections_by_hour}")
+    assert all(not r for r in rejections_by_hour), (
+        f"an empty ledger should foreclose every decision before the "
+        f"ledger is ever consulted, not surface as an insufficient_spares "
+        f"rejection; rejections_by_hour={rejections_by_hour}")
+    assert trace.hours, "nothing to check the skip against"
+    assert all(h["timing"].get("skipped") for h in trace.hours)
     # The retry cap is per ACTING HOUR (a global constraint), not per
     # episode -- both t0 and t1 are exposed here, so each independently
     # exhausts its own cap; the total across the episode can exceed
@@ -1431,20 +1514,35 @@ def test_menu_with_path_facts_does_not_mutate_the_input_menu():
 # group (only the exposed working span, satna<->rewa, is), so under
 # basis="risk_group" the first candidate's protection-corridor overlap is no
 # longer flagged, and t0 commits on iteration 0 directly -- one fewer
-# route_service+validate_plan round trip than before. Written out so it is
-# derivable rather than magic --
+# route_service+validate_plan round trip than before.
+#
+# Re-measured again 2026-09-10 for Task 7 (26): SMOKE grew a third hour and
+# a second issuance (the decidable-hours fixture change above), which the
+# geometry/services/risk-group calls below are NOT gated behind
+# `is_decidable` -- the hour still runs even when the decider is skipped, so
+# t2's base six calls are unavoidable. Written out so it is derivable rather
+# than magic --
 #
 #   every hour:  4 (service_geometry's get_topology x2 / get_lightpaths /
 #                   get_services) + 1 (the hour's own get_services)
 #                + 1 (get_topology for the risk groups)          = 6
-#   t0:          + 1 define_risk_group (one issuance, one horizon)
+#   t0:          + 2 define_risk_group (t0's ONE issuance now names TWO
+#                   horizons, t1 and t2, each its own rg_id)
 #                + 1 unconstrained probe route_service
 #                + 3 iteration 0 (route_service, validate_plan, commit_plan)
-#                                                                 = 11
-#   t1:          waits -- the t0 reroute put storm-svc-1 outside the cone   6
+#                                                                 = 12
+#   t1:          decidable (its own issuance, spare on hand, p_cut > 0 at
+#                the reach threshold even though the baseline's own,
+#                narrower offset-vs-half-width check still waits) --
+#                + 1 define_risk_group (t1's issuance names one new horizon,
+#                   t2, under a NEW rg_id -- issuance-scoped, not reused
+#                   from t0's)                                       7
+#   t2:          undecidable (no issuance of its own) -- base six calls
+#                only; t2's own rg_id was already defined at t1, so no
+#                define_risk_group call here                          6
 #   episode end: + 1 simulate_ip_routing                                    1
-#                                                                    total 18
-EXPECTED_TOOL_CALLS_SMOKE_ROLLOUT = 18
+#                                                                    total 26
+EXPECTED_TOOL_CALLS_SMOKE_ROLLOUT = 26
 
 
 def _observation_with_exposure(exposure: dict, *, sut: str = "storm-svc-1",

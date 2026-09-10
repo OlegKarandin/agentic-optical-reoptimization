@@ -45,7 +45,7 @@ from ..geo_mapper import Edge, load_edges, map_geo_event_to_assets
 from ..mcp_client import call_tool_json
 from .cone import Segment, expected_capacity_at_risk_gbps, p_cut_region
 from .decisions import (ConstraintDecision, Decider, HOLD_CHOICE,
-                        candidate_index)
+                        TimingDecision, candidate_index)
 from .ledger import SpareLedger, spares_needed
 from .observation import build_observation, latest_issuance, lead_time_hours_for
 from .plans import PlanTranslationError, build_topology_index, plan_from_candidate
@@ -364,6 +364,42 @@ def ranking_conflict(candidate: dict, *, standing: tuple[str, ...],
     if actionable in funded:
         return None
     return {"type": "ranking_conflict", "funded_prefix": funded}
+
+
+SKIPPED_TIMING = {"action": "wait", "reasoning": "skipped: nothing decidable",
+                  "contested_claim": None, "claim_priority": [],
+                  "skipped": True}
+
+
+def is_decidable(obs, *, spares_on_hand: int,
+                 issuance_schedule: tuple[str, ...]) -> bool:
+    """Whether this hour holds a decision at all.
+
+    Three conditions, ALL of which must hold. There has to be something to
+    ALLOCATE (a spare still in the depot -- once it is gone the timing
+    decision has no content, since `act` and `wait` differ only in whether
+    the spare leaves). There has to be something AT RISK (the actionable
+    service carries a nonzero cut probability at some horizon -- with none,
+    a reroute is spending against nothing). And there has to be something
+    NEW to read: an issuance of this hour's own. An hour that merely carries
+    the previous issuance forward offers nothing a decider did not already
+    see and answer, and the 2026-09-09 traces show what it costs to ask
+    anyway -- three separate timing calls reasoning "no further issuance is
+    coming, waiting buys nothing" and then acting on that.
+
+    On the shipped suite this is exactly the issuance hours: the T episodes
+    drop from 8 timing calls to 2, D1 from 2 to 1. Nothing actionable is
+    foreclosed, because every episode's optical `deadline_hour` is itself an
+    issuance hour -- verified per episode by
+    `tests/eval/test_episodes.py`. It lives HERE, in the runner, and not in
+    any decider, so every arm is charged for the same hours and
+    `EpisodeTrace.tool_calls` stays comparable across them."""
+    if spares_on_hand <= 0:
+        return False
+    if obs.hour not in issuance_schedule:
+        return False
+    per_horizon = obs.exposure.get(obs.service_under_test, {})
+    return any(float(e["p_cut"]) > 0.0 for e in per_horizon.values())
 
 
 def _visible_services(obs) -> list[str]:
@@ -1030,19 +1066,29 @@ async def run_episode(
         if hasattr(decider, "bind_probe"):
             decider.bind_probe(probe)
         record.update(observation_record(obs, geometry))
-        probe.begin("timing")
-        timing = await decider.timing(obs)
-        record["timing"] = timing.to_dict()
+        decidable = is_decidable(
+            obs, spares_on_hand=ledger.on_hand,
+            issuance_schedule=obs.issuance_schedule)
+        if not decidable:
+            # No projection and no decider call. The HOUR still runs: its
+            # cuts are ground truth and the post-cut replay is harness logic
+            # (both below), and the trace still carries the hour's own
+            # observation record so the viewer's scrubber does not develop a
+            # hole.
+            record["timing"] = dict(SKIPPED_TIMING)
+            record["projected"] = None
+            timing = TimingDecision(
+                "wait", SKIPPED_TIMING["reasoning"])
+        else:
+            probe.begin("timing")
+            timing = await decider.timing(obs)
+            record["timing"] = timing.to_dict()
+            record["projected"] = getattr(decider, "last_projection", None)
         # An empty ranking KEEPS the standing one (spec 6.3): "no change of
         # opinion", not "no opinion". Only a non-empty statement replaces it.
         if timing.claim_priority:
             standing_claim_priority = tuple(timing.claim_priority)
         record["standing_claim_priority"] = list(standing_claim_priority)
-        # What the DECIDER was shown, as against the ground truth above. Read
-        # off the decider rather than recomputed: the projection is
-        # decider-owned and a recomputation would silently diverge the day it
-        # changes. Baselines have none and honestly record null.
-        record["projected"] = getattr(decider, "last_projection", None)
 
         if timing.action == "act":
             index = await build_topology_index(client)

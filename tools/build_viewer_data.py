@@ -392,6 +392,8 @@ pre.reasoning { white-space: pre-wrap; background: #f7f7f5; padding: 6px;
 .sut-row { font-weight: bold; }
 .sut-badge { background: #1f8a4c; color: #fff; font-size: 9px;
              padding: 0 4px; border-radius: 3px; vertical-align: middle; }
+.skipped { background: #f0f0ee; border: 1px dashed #bbb; padding: 6px;
+           margin: 4px 0; color: #666; font-style: italic; }
 .step-label { margin: 10px 0 2px; font-weight: bold; }
 details.raw-json { margin: 4px 0 10px; }
 details.raw-json summary { cursor: pointer; font-size: 11px; color: #555; }
@@ -1020,7 +1022,7 @@ function renderSaw(hour) {
     const rows = (hour.exposure_rows || []).filter(r => r.shown);
     const table = document.createElement('table');
     table.innerHTML = '<tr><th>service</th><th>horizon</th><th>offset_km</th>' +
-        '<th>p_cut</th><th>demand_gbps</th><th>ECAR</th></tr>';
+        '<th>p_cut</th><th>if revised</th><th>demand_gbps</th><th>ECAR</th></tr>';
     for (const r of rows) {
         const isSut = r.service_id === hour.actionable_service;
         const tr = document.createElement('tr');
@@ -1031,6 +1033,9 @@ function renderSaw(hour) {
             `<td>${esc(r.service_id)}${isSut ? ' <span class="sut-badge">SUT</span>' : ''}</td>` +
             `<td>${esc(r.horizon)}</td>` +
             `<td>${esc(r.offset_km)}</td><td>${esc(r.p_cut)}</td>` +
+            `<td>${esc(r.p_cut_if_track_revised
+                ? `${r.p_cut_if_track_revised.min}-${r.p_cut_if_track_revised.max}`
+                : '-')}</td>` +
             `<td>${esc(r.demand_gbps)}</td>` +
             `<td>${esc(r.expected_capacity_at_risk_gbps)}</td>`;
         tr.addEventListener('click', () => {
@@ -1045,6 +1050,9 @@ function renderSaw(hour) {
 
     const obs = hour.observation || {};
     const totals = obs.horizon_totals || {};
+    el.appendChild(stepLabel(
+        'horizon_totals -- ground truth, NOT shown to the model since ' +
+        '2026-09-10 (every figure is re-derivable from a row above)'));
     const totalsPre = document.createElement('pre');
     totalsPre.className = 'reasoning';
     totalsPre.textContent = 'horizon_totals: ' + JSON.stringify(totals, null, 1);
@@ -1153,6 +1161,15 @@ function renderSaid(hour) {
         el.appendChild(document.createTextNode('(no reasoning recorded)'));
         return;
     }
+    if (hour.timing.skipped) {
+        const note = document.createElement('div');
+        note.className = 'skipped';
+        note.textContent = 'no decision this hour: ' +
+            'nothing was decidable (no spare left, no exposure, or no new ' +
+            'issuance). The harness recorded a wait; the model was not called.';
+        el.appendChild(note);
+        return;
+    }
     const probeCursor = {i: 0};
     const allProbes = hour.probes || [];
 
@@ -1196,6 +1213,23 @@ function renderSaid(hour) {
             `menu ${esc(it.menu_status)} (${esc(it.menu_size)}) -- ` +
             `outcome ${esc(it.outcome)}`;
         el.appendChild(h);
+
+        const carried = (it.projected || {}).decided_this_hour;
+        if (carried) {
+            const c = document.createElement('pre');
+            c.className = 'reasoning';
+            c.textContent = 'decided_this_hour: ' +
+                JSON.stringify(carried, null, 1);
+            el.appendChild(c);
+        }
+        const attempts = (it.projected || {}).attempts_this_hour;
+        if (attempts && attempts.length) {
+            const at = document.createElement('pre');
+            at.className = 'reasoning';
+            at.textContent = 'attempts_this_hour: ' +
+                JSON.stringify(attempts, null, 1);
+            el.appendChild(at);
+        }
 
         if (idx === 0 && hour.unconstrained_menu) {
             el.appendChild(stepLabel(
@@ -1291,8 +1325,9 @@ function renderScrubber(episode, run) {
         // identical way (`a.origin == "decider"`) for the equivalent
         // judgment -- same convention, same field (Task 16 fix-report).
         const decided = acted.filter(a => a.origin === 'decider');
-        let cls = 'unknown';
-        if (gold.gold_spare_action && decided.length) {
+        const skipped = !!(h.timing && h.timing.skipped);
+        let cls = skipped ? 'unknown' : 'unknown';
+        if (!skipped && gold.gold_spare_action && decided.length) {
             // Any site charged (a non-empty, non-zero `spares` dict) spends
             // a physical spare (optical_reroute); an empty dict does not
             // (ip_reroute / rate-reduce) -- that split is what

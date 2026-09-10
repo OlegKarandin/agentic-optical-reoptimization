@@ -66,7 +66,15 @@ FIXTURE_TRACE = {
                                        "offset_km": 12.0, "hours_ahead": 2,
                                        "width_km": 320,
                                        "expected_capacity_at_risk_gbps":
-                                           156.0}},
+                                           156.0,
+                                       # revision.py's forecast-revision band
+                                       # (2026-09-10, spec 5.1) -- carried
+                                       # through load_run untouched, same as
+                                       # every other exposure-row field.
+                                       "p_cut_if_track_revised": {
+                                           "revision_radius_km": 30.0,
+                                           "min": 0.41, "max": 0.63,
+                                           "mean": 0.52}}},
                 "d0462": {"t2": {"p_cut": 0.88, "demand_gbps": 100.0,
                                  "offset_km": 3.0, "hours_ahead": 1,
                                  "width_km": 90,
@@ -122,7 +130,20 @@ FIXTURE_TRACE = {
                  "new_lightpaths": [{"oms_sequence": ["oms_sj"]}],
                  "restored_gbps": 300.0, "shortfall_gbps": 0.0,
                  "cost_vector": {"transponders": 420.0}}]},
-            "outcome": "committed", "lever": "optical_reroute"}]}]}
+            "outcome": "committed", "lever": "optical_reroute"}]},
+        # Decidable-hours rule (2026-09-10, spec 7.1): a skipped hour still
+        # carries a full hour record, just with no projection and no
+        # iterations. `load_run` copies hour records straight through, so
+        # this is a regression guard against a future trim swallowing the
+        # `timing.skipped` flag.
+        {"hour": "t2", "services": ["storm-svc-1", "d0462"],
+         "rejections": [], "committed": False,
+         "timing": {"action": "wait",
+                    "reasoning": "skipped: nothing decidable",
+                    "contested_claim": None, "claim_priority": [],
+                    "skipped": True},
+         "projected": None, "iterations": [], "observation": {},
+         "unmapped_nodes": {}}]}
 
 
 @pytest.fixture
@@ -163,6 +184,28 @@ def test_every_exposure_row_is_marked_shown_or_omitted(folded):
     by_id = {r["service_id"]: r for r in rows}
     assert by_id["storm-svc-1"]["shown"] is True
     assert by_id["d0462"]["shown"] is False       # truth had it, wire did not
+
+
+def test_a_skipped_hour_survives_load_run_untouched(folded):
+    # Decidable-hours rule (2026-09-10, spec 7.1). `load_run` copies hour
+    # records straight through -- this is a regression guard against a
+    # future trim silently swallowing the `timing.skipped` flag the viewer
+    # keys its skip rendering off of.
+    hour = folded["episodes"]["T3b"]["runs"][0]["hours"][1]
+    assert hour["hour"] == "t2"
+    assert hour["timing"]["skipped"] is True
+    assert hour["projected"] is None
+    assert hour["iterations"] == []
+
+
+def test_a_forecast_revision_band_survives_load_run_untouched(folded):
+    # revision.py's `p_cut_if_track_revised` (2026-09-10, spec 5.1) is on the
+    # observation entry `_exposure_rows` spreads via `**entry` -- assert it
+    # is not dropped on the way into the folded payload's exposure_rows.
+    rows = folded["episodes"]["T3b"]["runs"][0]["hours"][0]["exposure_rows"]
+    by_id = {r["service_id"]: r for r in rows}
+    assert by_id["storm-svc-1"]["p_cut_if_track_revised"] == {
+        "revision_radius_km": 30.0, "min": 0.41, "max": 0.63, "mean": 0.52}
 
 
 def test_the_committed_candidate_is_marked(folded):
