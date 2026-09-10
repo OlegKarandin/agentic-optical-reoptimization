@@ -2,6 +2,7 @@
 a fake Anthropic client, no network, no cost, and no `anthropic` install."""
 import ast
 import asyncio
+import dataclasses
 import json
 import tomllib
 from pathlib import Path
@@ -122,7 +123,14 @@ def _wide_observation():
                 center={"lat": 24.855553, "lon": 81.327777})}),
         exposure=exposure, services=tuple(services), spares_on_hand=1,
         lead_time_hours=1, risk_group_ids={HORIZON: "rg_T3a_t1_t3"},
-        restorable_groups={HORIZON: tuple(groups)})
+        restorable_groups={HORIZON: tuple(groups)},
+        # sut_ecar_gbps = 0.3410*300; largest_restorable_group_ecar_gbps is
+        # the max over svc-b/svc-c/svc-e's own groups (svc-b's 30.0);
+        # non_sut_ineligible_ecar_gbps is svc-d's, the only ineligible one.
+        horizon_totals={HORIZON: {
+            "sut_ecar_gbps": 102.3,
+            "largest_restorable_group_ecar_gbps": 30.0,
+            "non_sut_ineligible_ecar_gbps": 90.0}})
 
 
 def _settled_observation():
@@ -167,14 +175,12 @@ def test_a_claimant_above_the_threshold_survives_projection():
     payload = project_observation(_obs(others=CLAIMANTS + BELOW_THRESHOLD))
     assert set(payload["exposure"]) == {"storm-svc-1", "d0363", "d0462",
                                         "d0212"}
-    assert [s["id"] for s in payload["services"]] == [
-        "storm-svc-1", "d0363", "d0462", "d0212"]
+    assert "services" not in payload
 
 
 def test_the_service_under_test_survives_even_when_its_own_p_cut_is_zero():
     payload = project_observation(_obs(sut_p_cut=0.0, others=CLAIMANTS))
     assert "storm-svc-1" in payload["exposure"]
-    assert "storm-svc-1" in {s["id"] for s in payload["services"]}
 
 
 def test_projection_keys_on_cut_probability_not_cone_containment():
@@ -208,9 +214,7 @@ def test_the_omission_summary_accounts_for_every_service_it_dropped():
     # 0.004*100 + 0.002*300 = 0.4 + 0.6
     assert omitted["below_threshold"][
         "summed_expected_capacity_at_risk_gbps"] == pytest.approx(1.0)
-    assert omitted["ineligible_for_depot"] == {
-        "count": 0, "max_p_cut": 0.0,
-        "summed_expected_capacity_at_risk_gbps": 0.0}
+    assert omitted["ineligible_for_depot"] == {"count": 0}
     assert payload["n_services_total"] == 6
 
 
@@ -220,8 +224,7 @@ def test_nothing_is_omitted_when_every_service_clears_the_threshold():
         "p_cut_threshold": 0.005,
         "below_threshold": {"count": 0, "max_p_cut": 0.0,
                             "summed_expected_capacity_at_risk_gbps": 0.0},
-        "ineligible_for_depot": {"count": 0, "max_p_cut": 0.0,
-                                 "summed_expected_capacity_at_risk_gbps": 0.0},
+        "ineligible_for_depot": {"count": 0},
     }
 
 
@@ -234,7 +237,7 @@ def test_projection_preserves_every_field_the_decision_points_read():
     for key in ("scenario_id", "actionable_service", "hour",
                 "hours_remaining", "issued_at", "spares_on_hand",
                 "lead_time_hours", "risk_group_ids", "iteration",
-                "last_rejection"):
+                "last_rejection", "next_issuance"):
         assert payload[key] == raw[key]
     assert payload["horizons"] == [HORIZON]
     assert "cones" not in payload
@@ -274,14 +277,20 @@ def test_projection_bounds_the_prompt_against_a_full_573_service_roster():
     assert payload["n_services_total"] == 572
     assert payload["omitted_services"]["below_threshold"]["count"] == 571
     assert payload["omitted_services"]["ineligible_for_depot"]["count"] == 0
-    assert len(json.dumps(payload)) < 5_000
+    # Was < 5_000 before `services`/`horizon_totals` left the wire; the
+    # roster was the payload's largest block, so the bound shrinks with it
+    # (measured 798 chars).
+    assert len(json.dumps(payload)) < 1_500
 
 
-def test_the_projection_always_shows_the_rival_totals():
-    # The per-horizon SUT-vs-summed-rivals figures are the currency the
-    # shared-depot premise is denominated in; there is no arm that hides them.
+def test_the_projection_shows_the_restorable_groups_not_the_totals():
+    # `horizon_totals`' three figures are all re-derivable from rows the
+    # payload still shows (spec 5.3); `restorable_groups` is the one that
+    # survives onto the wire.
     obs = _obs(others=CLAIMANTS)
-    assert project_observation(obs)["horizon_totals"] == obs.horizon_totals
+    payload = project_observation(obs)
+    assert payload["restorable_groups"] == obs.restorable_groups
+    assert "horizon_totals" not in payload
 
 
 def test_the_projection_does_not_mutate_the_observation():
@@ -303,12 +312,46 @@ def test_the_omission_account_separates_quiet_from_ineligible():
     omitted = payload["omitted_services"]
     assert set(omitted["below_threshold"]) == {
         "count", "max_p_cut", "summed_expected_capacity_at_risk_gbps"}
-    assert set(omitted["ineligible_for_depot"]) == {
-        "count", "max_p_cut", "summed_expected_capacity_at_risk_gbps"}
+    # ineligible_for_depot is reduced to a bare count (spec 5.3) --
+    # test_the_ineligible_bucket_is_reduced_to_a_count below covers why.
+    assert set(omitted["ineligible_for_depot"]) == {"count"}
     # svc-d is heavily exposed but terminates kolkata <-> mumbai.
     assert omitted["ineligible_for_depot"]["count"] == 1
-    assert omitted["ineligible_for_depot"]["max_p_cut"] > 0.5
     assert omitted["below_threshold"]["max_p_cut"] < 0.005
+
+
+def test_the_projection_drops_the_service_roster():
+    """`exposure` already carries every service's demand and
+    `restorable_groups` carries the endpoints; the roster was redundant and
+    was the single largest block in the payload (spec 5.3)."""
+    payload = project_observation(_wide_observation())
+    assert "services" not in payload
+    # _wide_observation's own roster: storm-svc-1 + svc-b/c/d/e.
+    assert payload["n_services_total"] == 5
+
+
+def test_the_projection_drops_the_horizon_totals():
+    """Every figure in it is re-derivable from a row the payload still shows,
+    and `non_sut_ineligible_ecar_gbps` was described by the prompt itself as
+    something to ignore (spec 5.3)."""
+    obs = _wide_observation()
+    assert obs.horizon_totals, "the Observation must still carry them"
+    assert "horizon_totals" not in project_observation(obs)
+
+
+def test_the_ineligible_bucket_is_reduced_to_a_count():
+    payload = project_observation(_wide_observation())
+    assert set(payload["omitted_services"]["ineligible_for_depot"]) == {"count"}
+    # The quiet bucket keeps its full account: a large number there IS
+    # something the decider can act on, unlike an ineligible service's.
+    assert set(payload["omitted_services"]["below_threshold"]) == {
+        "count", "max_p_cut", "summed_expected_capacity_at_risk_gbps"}
+
+
+def test_the_projection_carries_next_issuance_through():
+    obs = dataclasses.replace(_wide_observation(),
+                              next_issuance={"hour": "t1"})
+    assert project_observation(obs)["next_issuance"] == {"hour": "t1"}
 
 
 def test_the_projection_keeps_only_depot_eligible_claimants():

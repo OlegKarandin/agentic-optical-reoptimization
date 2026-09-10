@@ -115,9 +115,12 @@ def project_observation(
     Kept: the service under test always, and every service that is BOTH
     depot-eligible (`_depot_eligible`: terminates at this episode's depot
     site, so it can actually draw on the inventory `spares_on_hand` counts)
-    AND whose peak p_cut reaches `p_cut_threshold`. `services` is trimmed to
-    the same set -- `exposure` already carries each service's `demand_gbps`,
-    so the roster is nearly redundant with it for decision purposes.
+    AND whose peak p_cut reaches `p_cut_threshold`. `services` is dropped
+    from the payload outright, for every service, not just the trimmed set
+    (spec 5.3) -- `exposure` already carries each kept service's
+    `demand_gbps` and `restorable_groups` carries its endpoints, so the
+    roster was wholly redundant for decision purposes, and it was the single
+    largest block in the payload.
 
     Each kept exposure entry is itself trimmed to `hours_ahead`, `p_cut`,
     `demand_gbps`, `expected_capacity_at_risk_gbps` (`_project_exposure_
@@ -154,12 +157,17 @@ def project_observation(
     together would hand the decider a large `max_p_cut` it cannot interpret
     -- an ineligible service's own exposure is not a competing claim, no
     matter how high -- which is exactly the overstatement D2 found in the
-    gold rationales. Each bucket's `count` is over the server's full roster
-    (a service with no representative point has no exposure entry at all,
-    and is counted here as `below_threshold` -- no exposure data means no
-    basis to call it ineligible either); the two risk figures are over the
-    dropped services that do have exposure, and contribute 0.0 for the
-    rest."""
+    gold rationales. `ineligible_for_depot` is reduced to `count` alone
+    (spec 5.3): a service that cannot draw on this depot is not a competing
+    claim however exposed it is, so its summed risk is a number with no
+    decision attached, and the 2026-08-29 gold-rationale review found
+    exactly that number being read as one anyway. `below_threshold` keeps
+    its full account -- a large number THERE is something the decider can
+    act on (wait for it to clear the threshold, or not). Each bucket's
+    `count` is over the server's full roster (a service with no
+    representative point has no exposure entry at all, and is counted here
+    as `below_threshold` -- no exposure data means no basis to call it
+    ineligible either)."""
     payload = obs.to_dict()
     payload.pop("damage_radius_km")
     # `list(...)`, NOT `sorted(...)` -- horizon-hour labels ("t2", "t10", ...)
@@ -196,7 +204,17 @@ def project_observation(
         svc: {horizon: _project_exposure_entry(entry)
              for horizon, entry in per_horizon.items()}
         for svc, per_horizon in exposure.items() if svc in keep}
-    payload["services"] = [s for s in all_services if s["id"] in keep]
+    # The roster and the per-horizon totals leave the WIRE, not the
+    # Observation (spec 5.3). `exposure` already carries each kept service's
+    # demand and `restorable_groups` carries its endpoints, so the roster was
+    # the payload's largest redundant block; and every figure in
+    # `horizon_totals` is re-derivable from a row still shown --
+    # `sut_ecar_gbps` IS the actionable service's own row,
+    # `largest_restorable_group_ecar_gbps` IS the first group, and the prompt
+    # itself told the model to ignore `non_sut_ineligible_ecar_gbps`.
+    # `observation_record` (runner.py) still writes both to the trace.
+    payload.pop("services")
+    payload.pop("horizon_totals")
     payload["restorable_groups"] = {
         horizon: tuple(g for g in groups
                       if any(m in keep for m in g["members"]))
@@ -206,13 +224,17 @@ def project_observation(
     # see build_observation) are neither in `exposure` nor `dropped` above;
     # fold them into `below_threshold`, since zero exposure is quiet by
     # definition and there is no evidence to call them ineligible.
-    no_exposure_data = (len(all_services) - len(payload["services"])
+    no_exposure_data = (len(all_services) - len(payload["exposure"])
                         - len(dropped))
     payload["omitted_services"] = {
         "p_cut_threshold": p_cut_threshold,
         "below_threshold": _bucket(below_threshold,
                                    extra_count=no_exposure_data),
-        "ineligible_for_depot": _bucket(ineligible_for_depot),
+        # COUNT ONLY (spec 5.3). A service that cannot draw on this depot is
+        # not a competing claim however exposed it is, so its summed risk is
+        # a number with no decision attached -- and the 2026-08-29 gold-
+        # rationale review found exactly that number being read as one.
+        "ineligible_for_depot": {"count": len(ineligible_for_depot)},
     }
     return payload
 

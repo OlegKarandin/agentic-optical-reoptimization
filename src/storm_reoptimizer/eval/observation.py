@@ -233,6 +233,16 @@ class Observation:
     # eats into the runway) has already run out of road. Defaulted for the
     # same hand-built-Observation reason as `horizon_totals` above.
     deadline_hour: dict[str, str | None] = field(default_factory=dict)
+    # {"hour": "t1"} while an issuance LATER than the one currently in force
+    # is still scheduled, else None. `issuance_schedule` already lists every
+    # issue hour, but reading "is one still coming" off it requires knowing
+    # which one is in force AND the hour ordering -- and the 2026-09-09 run
+    # shows that inference failing in the direction that matters: three
+    # separate timing calls opened with "no further issuance is coming,
+    # waiting buys nothing" at an hour where one WAS scheduled. This states
+    # it. Defaulted to None for the hand-built Observations in
+    # tests/eval/test_agent.py and test_baseline.py.
+    next_issuance: dict | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-serializable form, for the trace and for step 6's prompt."""
@@ -269,6 +279,7 @@ class Observation:
             "restorable_groups": self.restorable_groups,
             "issuance_schedule": list(self.issuance_schedule),
             "deadline_hour": self.deadline_hour,
+            "next_issuance": self.next_issuance,
         }
 
 
@@ -369,6 +380,15 @@ def build_observation(
         service_under_test=scenario.service_under_test)
 
     issuance_schedule = tuple(sorted(scenario.forecast, key=scenario.hours.index))
+    # LATER THAN THE ISSUANCE IN FORCE, not later than `hour`: an issuance
+    # published at this very hour is already read, and its own revision is
+    # what waiting buys. At the last issuance this is None and the revision
+    # band (revision.py) is withheld with it -- there is nothing left to
+    # revise.
+    in_force = scenario.hours.index(issuance.issued_at)
+    upcoming = [h for h in issuance_schedule
+                if scenario.hours.index(h) > in_force]
+    next_issuance = {"hour": upcoming[0]} if upcoming else None
     deadline_hour: dict[str, str | None] = {}
     if issuance.horizons:
         latest_horizon = max(issuance.horizons, key=scenario.hours.index)
@@ -402,4 +422,5 @@ def build_observation(
         restorable_groups=groups,
         issuance_schedule=issuance_schedule,
         deadline_hour=deadline_hour,
+        next_issuance=next_issuance,
     )

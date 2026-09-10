@@ -353,3 +353,18 @@ def test_issuance_schedule_and_deadline(scenario, services):
 def test_deadline_is_none_once_passed(scenario, services):
     obs = build_observation(scenario, "t3", service_spans={}, services=services, spares_on_hand=1)
     assert obs.deadline_hour["optical_reroute"] is None
+
+
+def test_next_issuance_names_the_hour_a_revision_is_still_coming(
+        example_scenario_yaml, write_scenario):
+    """EXAMPLE_A publishes at t0 and t1 over hours [t0..t3]. At t0 a revision
+    is still scheduled; at t1 the issuance in force IS the last one."""
+    scenario = load_scenario(write_scenario(example_scenario_yaml))
+    at_t0 = build_observation(scenario, "t0", service_spans={}, services=(),
+                              spares_on_hand=1)
+    assert at_t0.next_issuance == {"hour": "t1"}
+    assert at_t0.to_dict()["next_issuance"] == {"hour": "t1"}
+    for hour in ("t1", "t2", "t3"):
+        later = build_observation(scenario, hour, service_spans={},
+                                  services=(), spares_on_hand=1)
+        assert later.next_issuance is None, hour
