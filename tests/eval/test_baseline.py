@@ -85,12 +85,14 @@ def test_both_variants_are_deterministic():
             _run(b.timing(obs)).to_dict()] * 5
 
 
-def test_constraints_avoid_only_the_nearest_exposed_horizon_and_pin_posture():
+def test_constraints_avoid_only_the_nearest_exposed_horizon_and_derives_posture():
     d = _run(ForecastBlindBaseline("immediate").constraints(
         _obs(offset_km=10.0, width_km=90.0, hours_ahead=3)))
     assert d.avoid == {"risk_groups": ["rg_X_t1_t3"]}
+    # The posture is no longer stated -- a named risk group derives
+    # risk_group/risk_group (spec 6.4).
     assert (d.protected, d.best_effort, d.basis, d.level) == (
-        False, False, "physical", "link")
+        False, False, "risk_group", "risk_group")
 
 
 def test_objective_is_a_fixed_service_class_priority_table():

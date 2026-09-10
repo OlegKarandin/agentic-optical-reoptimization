@@ -637,11 +637,7 @@ class _WidensOnDisjointnessRejection:
             return base
         avoid = dict(base.avoid)
         avoid["assets"] = sorted(set(avoid.get("assets", [])) | extra)
-        return ConstraintDecision(
-            avoid=avoid,
-            reasoning=base.reasoning + "; widened after disjointness rejection",
-            protected=base.protected, best_effort=base.best_effort,
-            basis=base.basis, level=base.level)
+        return ConstraintDecision(avoid=avoid, reasoning=base.reasoning)
 
     async def objective(self, obs, menu):
         return await self._inner.objective(obs, menu)
@@ -1310,23 +1306,33 @@ def test_menu_with_path_facts_does_not_mutate_the_input_menu():
 #
 # Originally 22, measured against SMOKE + ForecastBlindBaseline("immediate")
 # BEFORE task A4's recording changes landed (task-A4-brief.md, Step 1).
-# Re-measured 2026-09-01 for the hazard-footprint seam fix, which changed
-# both SMOKE's geometry and the decider this test can use: the property under
-# test is untouched, only the rollout it is measured over moved. Written out
-# so it is derivable rather than magic --
+# Re-measured 2026-09-01 for the hazard-footprint seam fix (20), then again
+# 2026-09-10 for the decider-allocation-redesign Task 1 (18): baseline.py's
+# `constraints()` used to pin `basis="physical"`/`level="link"` BY HAND on
+# every call, regardless of what `avoid` named -- SMOKE's own note above
+# documents the real, first-try `disjointness_collapse` on
+# `oms_jhansi_allahabad` that produced UNDER THAT BASIS, which is what used
+# to force the widening decider's extra iteration. ConstraintDecision now
+# DERIVES the posture from `avoid` instead (spec 6.4): SMOKE's avoid always
+# names the exposed risk group, so the derived basis is "risk_group", not
+# "physical". `oms_jhansi_allahabad` is not itself a member of that risk
+# group (only the exposed working span, satna<->rewa, is), so under
+# basis="risk_group" the first candidate's protection-corridor overlap is no
+# longer flagged, and t0 commits on iteration 0 directly -- one fewer
+# route_service+validate_plan round trip than before. Written out so it is
+# derivable rather than magic --
 #
 #   every hour:  4 (service_geometry's get_topology x2 / get_lightpaths /
 #                   get_services) + 1 (the hour's own get_services)
 #                + 1 (get_topology for the risk groups)          = 6
 #   t0:          + 1 define_risk_group (one issuance, one horizon)
 #                + 1 unconstrained probe route_service
-#                + 2 iteration 0 (route_service, validate_plan -> rejected)
-#                + 3 iteration 1 (route_service, validate_plan, commit_plan)
-#                                                                 = 13
+#                + 3 iteration 0 (route_service, validate_plan, commit_plan)
+#                                                                 = 11
 #   t1:          waits -- the t0 reroute put storm-svc-1 outside the cone   6
 #   episode end: + 1 simulate_ip_routing                                    1
-#                                                                    total 20
-EXPECTED_TOOL_CALLS_SMOKE_ROLLOUT = 20
+#                                                                    total 18
+EXPECTED_TOOL_CALLS_SMOKE_ROLLOUT = 18
 
 
 def _observation_with_exposure(exposure: dict, *, sut: str = "storm-svc-1",

@@ -17,7 +17,7 @@ from storm_reoptimizer.eval.agent import (
 )
 from storm_reoptimizer.eval.baseline import ForecastBlindBaseline
 from storm_reoptimizer.eval.decisions import (
-    CONSTRAINT_JSON_SCHEMA, COST_TERMS, DecisionError, OBJECTIVE_JSON_SCHEMA,
+    CONSTRAINT_JSON_SCHEMA, DecisionError, OBJECTIVE_JSON_SCHEMA,
     TIMING_JSON_SCHEMA, TimingDecision,
 )
 from storm_reoptimizer.eval.observation import Observation
@@ -460,11 +460,8 @@ class FakeAnthropic:
 
 TIMING_OK = {"action": "wait", "reasoning": "the far cone is 2h out"}
 CONSTRAINT_OK = {"avoid": {"risk_groups": ["rg_T3a_t1_t3"]},
-                 "reasoning": "route around the t3 cone",
-                 "protected": False, "best_effort": False,
-                 "basis": "physical", "level": "link"}
+                 "reasoning": "route around the t3 cone"}
 OBJECTIVE_OK = {"choice": "candidate_1",
-                "priority": ["transponders", "dropped_traffic"],
                 "reasoning": "the ip_reroute costs no spare pairs"}
 
 
@@ -506,10 +503,9 @@ def test_strict_tool_schemas_drop_the_keywords_the_api_rejects():
     # very first real call.
     assert strict_tool_schema(TIMING_JSON_SCHEMA) == {
         "type": "object", "additionalProperties": False,
-        "required": ["action", "reasoning", "contested_claim",
-                     "claim_priority"],
+        "required": ["reasoning", "contested_claim", "claim_priority",
+                     "action"],
         "properties": {
-            "action": {"type": "string", "enum": ["act", "wait"]},
             "reasoning": {"type": "string"},
             "contested_claim": {"anyOf": [
                 {"type": "object", "additionalProperties": False,
@@ -523,18 +519,20 @@ def test_strict_tool_schemas_drop_the_keywords_the_api_rejects():
             ]},
             "claim_priority": {"type": "array",
                                "items": {"type": "string"}},
+            "action": {"type": "string", "enum": ["act", "wait"]},
         },
     }
-    priority = strict_tool_schema(
-        OBJECTIVE_JSON_SCHEMA)["properties"]["priority"]
-    assert priority == {"anyOf": [
-        {"type": "array",
-         "items": {"type": "string", "enum": list(COST_TERMS)}},
-        {"type": "null"},
-    ]}
+    assert strict_tool_schema(OBJECTIVE_JSON_SCHEMA) == {
+        "type": "object", "additionalProperties": False,
+        "required": ["reasoning", "choice"],
+        "properties": {
+            "reasoning": {"type": "string"},
+            "choice": {"type": "string"},
+        },
+    }
     avoid = strict_tool_schema(CONSTRAINT_JSON_SCHEMA)["properties"]["avoid"]
     assert avoid["additionalProperties"] is False
-    assert sorted(avoid["properties"]) == ["assets", "risk_groups", "srlgs"]
+    assert sorted(avoid["properties"]) == ["assets", "risk_groups"]
 
 
 def test_the_canonical_schemas_are_not_mutated_by_adaptation():
@@ -557,8 +555,10 @@ def test_constraints_forces_its_own_tool_and_parses_the_posture():
         FakeResponse(FakeToolUse(CONSTRAINT_TOOL, CONSTRAINT_OK)))
     decision = _run(decider.constraints(_obs(others=CLAIMANTS)))
     assert decision.avoid == {"risk_groups": ["rg_T3a_t1_t3"]}
+    # The posture is DERIVED from the avoid-only payload, not stated: a
+    # named risk group derives risk_group/risk_group (spec 6.4).
     assert (decision.protected, decision.best_effort, decision.basis,
-            decision.level) == (False, False, "physical", "link")
+            decision.level) == (False, False, "risk_group", "risk_group")
 
 
 def test_objective_forces_its_own_tool_and_parses_the_choice():
@@ -566,7 +566,8 @@ def test_objective_forces_its_own_tool_and_parses_the_choice():
         FakeResponse(FakeToolUse(OBJECTIVE_TOOL, OBJECTIVE_OK)))
     decision = _run(decider.objective(_obs(others=CLAIMANTS), MENU))
     assert decision.choice == "candidate_1"
-    assert decision.priority == ("transponders", "dropped_traffic")
+    # `priority` is no longer read from a payload (spec 6.5).
+    assert decision.priority is None
 
 
 def test_every_request_declares_all_three_tools_so_one_cache_prefix_serves():

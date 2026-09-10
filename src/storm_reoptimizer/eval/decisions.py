@@ -28,7 +28,7 @@ COST_TERMS = ("spectrum_used", "transponders", "max_util", "dropped_traffic",
               "added_latency", "total_margin", "services_at_risk")
 BENEFIT_TERMS = frozenset({"total_margin"})
 
-_AVOID_KEYS = {"assets", "srlgs", "risk_groups"}
+_AVOID_KEYS = {"assets", "risk_groups"}
 _ACTIONS = {"act", "wait"}
 # The objective step's third exit: "I looked at this hour's menu and I'd
 # rather not spend anything after all" -- distinct from `infeasible`, which
@@ -36,25 +36,30 @@ _ACTIONS = {"act", "wait"}
 # retry." `hold` ends the hour outright; see candidate_index and runner.py's
 # iteration loop.
 HOLD_CHOICE = "hold"
-_BASES = {"physical", "srlg", "risk_group"}
-# `risk_group` is load-bearing, not decorative: T2a/T3a/T3b's gold
-# constraint decision only validates under basis="risk_group"/
-# level="risk_group" (the buried-shared-leg mechanic their rehearsal docs
-# derive), so leaving it out made 3 of 7 episodes' gold answers
-# unrepresentable by anything that goes through from_dict/the JSON schema
-# -- i.e. by step 6's LLM decider. Added 2026-08-23 (whole-branch review
-# finding C3).
-_LEVELS = {"link", "srlg", "node", "risk_group"}
 
 
 class DecisionError(ValueError):
     """A decision payload that does not satisfy its schema."""
 
 
+# Tool-call markup a model sometimes leaks into a string argument. Seen
+# twice in the 2026-09-09 run (T1a t4, T2b t3): a literal
+# `</reasoning><parameter name="contested_claim">` fragment INSIDE the
+# reasoning text, with the real argument then null, accepted by the
+# validator. Rejecting it rides the existing MAX_ATTEMPTS retry loop in
+# agent._decide, which is the only place that can ask for a clean one.
+_MARKUP_MARKERS = ("</", "<parameter")
+
+
 def _reasoning(payload: dict, where: str) -> str:
     text = payload.get("reasoning")
     if not isinstance(text, str) or not text.strip():
         raise DecisionError(f"{where}: `reasoning` is mandatory and non-empty")
+    leaked = [m for m in _MARKUP_MARKERS if m in text]
+    if leaked:
+        raise DecisionError(
+            f"{where}: `reasoning` contains tool-call markup {leaked} -- it "
+            f"must be prose only. Put each argument in its own field.")
     return text
 
 
@@ -152,36 +157,41 @@ class TimingDecision:
 
 @dataclass(frozen=True)
 class ConstraintDecision:
-    """The avoid set's HORIZON is the real choice here. Avoiding the full t+6
-    cone frequently leaves no feasible path; avoiding only current exposure
-    leaves the reroute re-exposed three hours later. Protection posture ships
-    alongside it because route_service already takes protected/best_effort/
-    basis/level -- deciding when to accept degraded protection is the same
-    class of event-state judgement as the horizon choice, and free to expose.
-    The baseline pins all four, so the fields cost the comparison nothing."""
+    """What the reroute must route around. The avoid set is the whole
+    decision now: it is what `build_layered_graph` forbids, so it changes
+    which candidates EXIST.
+
+    The protection posture is DERIVED, not stated. Every real call site on
+    this branch already passed the same one (`protected=False`,
+    `best_effort=False`, physical/link unless a risk group was named), the
+    toy topology carries no static SRLGs, and `protected=True` populates
+    route_service's `pairs` menu that `plan_from_candidate` cannot
+    translate -- so four fields on the wire bought the model four ways to
+    break its own reroute and no way to improve it (spec 6.4).
+
+    A MIXED avoid (named assets AND a named group) is legal and both halves
+    bind: `multilayer_optical_network.model.placement_common
+    ._forbidden_assets` unions `avoid["assets"]` with the named groups'
+    members before `build_layered_graph` ever sees them, and `basis`/`level`
+    reach only the disjointness comparison in `exposure.path_basis_keys`."""
     avoid: dict
     reasoning: str
-    # The defaults are the POSTURE THIS PROJECT ACTUALLY USES, not the
-    # server signature's own. Every real call site on this branch --
-    # baseline.ForecastBlindBaseline.constraints, assertions.
-    # PLAUSIBLE_ALTERNATIVES, assertions.menu_at_decision_hour, tools/
-    # probe_episode.py, tools/build_eval_state.py, and every gold decision in
-    # tests/eval/test_episodes.py -- passes protected=False/basis="physical"/
-    # level="link" explicitly, and ZERO of them wanted protected=True/srlg.
-    # The toy topology carries no static SRLGs (basis="srlg" is a no-op on
-    # it) and protected=True populates route_service's `pairs` menu, which
-    # plan_from_candidate cannot translate. Defaulting to the unused posture
-    # was a pure trap for anything that constructs a ConstraintDecision
-    # without naming every field. Flipped 2026-08-23 (whole-branch review
-    # finding I5).
-    protected: bool = False
-    best_effort: bool = False
-    basis: str = "physical"
-    level: str = "link"
-    # The rival claim on the shared depot this decision weighed. Last field so
-    # every positional construction in baseline.py, assertions.py, tools/ and
-    # tests/eval/test_episodes.py keeps working untouched.
-    contested_claim: dict | None = None
+
+    @property
+    def protected(self) -> bool:
+        return False
+
+    @property
+    def best_effort(self) -> bool:
+        return False
+
+    @property
+    def basis(self) -> str:
+        return "risk_group" if self.avoid.get("risk_groups") else "physical"
+
+    @property
+    def level(self) -> str:
+        return "risk_group" if self.avoid.get("risk_groups") else "link"
 
     @classmethod
     def from_dict(cls, payload: dict) -> "ConstraintDecision":
@@ -194,23 +204,12 @@ class ConstraintDecision:
             raise DecisionError(
                 f"constraints: `avoid` has unknown key(s) {sorted(unknown)}; "
                 f"allowed: {sorted(_AVOID_KEYS)}")
-        basis = payload.get("basis", "physical")
-        level = payload.get("level", "link")
-        if basis not in _BASES:
-            raise DecisionError(f"constraints: unknown basis {basis!r}")
-        if level not in _LEVELS:
-            raise DecisionError(f"constraints: unknown level {level!r}")
-        return cls(avoid=avoid, reasoning=reasoning,
-                   protected=bool(payload.get("protected", False)),
-                   best_effort=bool(payload.get("best_effort", False)),
-                   basis=basis, level=level,
-                   contested_claim=_contested_claim(payload, "constraints"))
+        return cls(avoid=avoid, reasoning=reasoning)
 
     def to_dict(self) -> dict[str, Any]:
         return {"avoid": self.avoid, "protected": self.protected,
                 "best_effort": self.best_effort, "basis": self.basis,
-                "level": self.level, "reasoning": self.reasoning,
-                "contested_claim": self.contested_claim}
+                "level": self.level, "reasoning": self.reasoning}
 
     def route_service_args(self, service_id: str) -> dict[str, Any]:
         return {"service_id": service_id, "protected": self.protected,
@@ -223,10 +222,6 @@ class ObjectiveDecision:
     choice: str                          # "candidate_<i>" | "infeasible" | "hold"
     priority: tuple[str, ...] | None     # interpretability artifact, optional
     reasoning: str
-    # The rival claim on the shared depot this decision weighed. Last field so
-    # every positional construction in baseline.py, assertions.py, tools/ and
-    # tests/eval/test_episodes.py keeps working untouched.
-    contested_claim: dict | None = None
 
     @classmethod
     def from_dict(cls, payload: dict) -> "ObjectiveDecision":
@@ -235,22 +230,18 @@ class ObjectiveDecision:
         if not isinstance(choice, str):
             raise DecisionError("objective: `choice` must be a string")
         candidate_index(choice)          # validates the label shape
-        priority = payload.get("priority")
-        if priority is not None:
-            unknown = [t for t in priority if t not in COST_TERMS]
-            if unknown:
-                raise DecisionError(
-                    f"objective: `priority` names non-cost-terms {unknown}; "
-                    f"allowed: {list(COST_TERMS)}")
-            priority = tuple(priority)
-        return cls(choice=choice, priority=priority, reasoning=reasoning,
-                   contested_claim=_contested_claim(payload, "objective"))
+        # `priority` is no longer on the wire (spec 6.5): every menu in the
+        # 2026-09-09 run was eight near-identical candidates and the ordering
+        # never separated them. The DATACLASS field stays -- baseline.py's
+        # fixed (service_class -> ordering) policy still sets it positionally
+        # and rank_by_priority still consumes it -- so a model payload simply
+        # always yields None.
+        return cls(choice=choice, priority=None, reasoning=reasoning)
 
     def to_dict(self) -> dict[str, Any]:
         return {"choice": self.choice,
                 "priority": list(self.priority) if self.priority else None,
-                "reasoning": self.reasoning,
-                "contested_claim": self.contested_claim}
+                "reasoning": self.reasoning}
 
 
 def candidate_index(choice: str) -> int | None:
@@ -290,42 +281,37 @@ CONTESTED_CLAIM_SCHEMA = {
 
 TIMING_JSON_SCHEMA = {
     "type": "object", "additionalProperties": False,
-    "required": ["action", "reasoning", "contested_claim", "claim_priority"],
+    "required": ["reasoning", "contested_claim", "claim_priority", "action"],
+    # Property ORDER is load-bearing: strict tool use emits arguments in
+    # schema order, so `action` last means the enum is produced AFTER the
+    # reasoning that justifies it (spec 6.1).
     "properties": {
-        "action": {"type": "string", "enum": sorted(_ACTIONS)},
         "reasoning": {"type": "string", "minLength": 1},
         "contested_claim": CONTESTED_CLAIM_SCHEMA,
         "claim_priority": {"type": "array", "items": {"type": "string"}},
+        "action": {"type": "string", "enum": sorted(_ACTIONS)},
     },
 }
 
 CONSTRAINT_JSON_SCHEMA = {
     "type": "object", "additionalProperties": False,
-    "required": ["avoid", "reasoning", "contested_claim"],
+    "required": ["reasoning", "avoid"],
     "properties": {
+        "reasoning": {"type": "string", "minLength": 1},
         "avoid": {
             "type": "object", "additionalProperties": False,
             "properties": {k: {"type": "array", "items": {"type": "string"}}
                            for k in sorted(_AVOID_KEYS)},
         },
-        "protected": {"type": "boolean"},
-        "best_effort": {"type": "boolean"},
-        "basis": {"type": "string", "enum": sorted(_BASES)},
-        "level": {"type": "string", "enum": sorted(_LEVELS)},
-        "reasoning": {"type": "string", "minLength": 1},
-        "contested_claim": CONTESTED_CLAIM_SCHEMA,
     },
 }
 
 OBJECTIVE_JSON_SCHEMA = {
     "type": "object", "additionalProperties": False,
-    "required": ["choice", "priority", "reasoning", "contested_claim"],
+    "required": ["reasoning", "choice"],
     "properties": {
-        "choice": {"type": "string"},
-        "priority": {"type": ["array", "null"],
-                     "items": {"type": "string", "enum": list(COST_TERMS)}},
         "reasoning": {"type": "string", "minLength": 1},
-        "contested_claim": CONTESTED_CLAIM_SCHEMA,
+        "choice": {"type": "string"},
     },
 }
 

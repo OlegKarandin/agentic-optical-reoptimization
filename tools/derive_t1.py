@@ -706,19 +706,15 @@ async def derive(args: argparse.Namespace) -> dict:
                 "rg_id": rg_id, "asset_ids": fiber_ids,
                 "metadata": {"tool": "derive_t1", "pair": args.pair,
                             "half": label}})
-            # basis="risk_group"/level="risk_group", NOT the physical/link
-            # default: `decisions.py`'s own `_BASES` comment states this is
-            # "load-bearing, not decorative" for exactly this avoid
-            # mechanic (T2a/T3a/T3b's gold constraint decision only
-            # validates under this basis/level pair), and T2a.yaml's own
-            # widest_avoid_feasible narration ("route_service(avoid=
-            # {risk_groups:[...]}) returns ZERO candidates under EITHER
-            # basis" -- i.e. it checked both, and risk_group is the one
-            # this field is named for) confirms this is the established
-            # convention for this exact scalar, not a free choice.
+            # basis="risk_group"/level="risk_group" is now DERIVED from a
+            # risk_groups avoid, not a free choice: T2a/T3a/T3b's gold
+            # constraint decision only validates under this basis/level pair
+            # (T2a.yaml's own widest_avoid_feasible narration -- "route_
+            # service(avoid={risk_groups:[...]}) returns ZERO candidates
+            # under EITHER basis" -- checked both), and ConstraintDecision
+            # derives exactly this pair whenever `risk_groups` is named.
             constraints = ConstraintDecision(
-                avoid={"risk_groups": [rg_id]}, basis="risk_group",
-                level="risk_group",
+                avoid={"risk_groups": [rg_id]},
                 reasoning="derive_t1 widest-avoid probe")
             menu = await call_tool_json(
                 client, "route_service", constraints.route_service_args(args.sut))

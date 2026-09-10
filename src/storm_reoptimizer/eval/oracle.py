@@ -172,9 +172,7 @@ def spend_decider(scenario: ScenarioFile) -> ScriptedDecider:
             avoid={"risk_groups": [rg_id]},
             reasoning=f"oracle:spend: avoid {rg_id!r}, the decision-hour "
                      f"issuance's own latest horizon ({horizon!r}), so the "
-                     f"escape is not re-exposed as the storm advances",
-            protected=False, best_effort=False, basis="risk_group",
-            level="risk_group")},
+                     f"escape is not re-exposed as the storm advances")},
         default_timing=TimingDecision(
             "wait", "oracle:spend: no action outside the decision hour",
             claim_priority=claim_priority),

@@ -27,19 +27,20 @@ def test_reasoning_is_mandatory_on_all_three_decisions():
         ObjectiveDecision.from_dict({"choice": "candidate_0", "priority": None})
 
 
-def test_constraint_decision_defaults_the_protection_posture():
-    """The default is the posture this project actually uses, NOT the
-    server signature's own. It used to be protected=True/srlg/srlg, and the
-    whole-branch review (2026-08-23, finding I5) confirmed that ZERO of the
-    7+ real call sites on this branch wanted that -- every one of them
-    passed protected=False/basis="physical"/level="link" explicitly, so the
-    old default was a pure trap for anything constructing a
-    ConstraintDecision without naming every field."""
+def test_constraint_decision_derives_the_protection_posture():
+    """The posture is DERIVED from `avoid`, not stated (spec 6.4): it used
+    to be four fields a caller could pass however it liked -- protected=True/
+    srlg/srlg by the server signature's own default -- and the whole-branch
+    review (2026-08-23, finding I5) confirmed that ZERO of the 7+ real call
+    sites on this branch wanted that; every one of them passed
+    protected=False/basis="physical"/level="link" explicitly. Stating four
+    fields a model could only get wrong bought nothing, so they left the
+    dataclass entirely."""
     d = ConstraintDecision.from_dict(
         {"avoid": {"risk_groups": ["rg_t3"]}, "reasoning": "clear of t+3"})
     assert d.avoid == {"risk_groups": ["rg_t3"]}
     assert (d.protected, d.best_effort, d.basis, d.level) == (
-        False, False, "physical", "link")
+        False, False, "risk_group", "risk_group")
     # The bare constructor and from_dict must agree -- they are two of the
     # three paths into this object (ScriptedDecider's own fallback is the
     # third) and a divergence between them would be invisible.
@@ -50,28 +51,13 @@ def test_constraint_decision_defaults_the_protection_posture():
 
 def test_risk_group_is_a_legal_constraint_level():
     """T2a/T3a/T3b's gold decisions only validate under basis="risk_group"/
-    level="risk_group". _LEVELS omitted it until 2026-08-23 (whole-branch
-    review finding C3), which made those three gold answers unrepresentable
-    by anything that goes through from_dict or the JSON schema -- i.e. by
-    step 6's schema-constrained LLM decider. The tests that construct them
-    directly never noticed, because the constructor does no validation."""
+    level="risk_group". The payload no longer carries `basis`/`level` at
+    all -- from_dict derives them from `avoid` alone."""
     payload = {"avoid": {"risk_groups": ["rg_T2a_t1_t6"]},
-               "reasoning": "avoid the full t+6 cone",
-               "protected": False, "best_effort": False,
-               "basis": "risk_group", "level": "risk_group",
-               "contested_claim": None}
+               "reasoning": "avoid the full t+6 cone"}
     d = ConstraintDecision.from_dict(payload)
     assert (d.basis, d.level) == ("risk_group", "risk_group")
-    assert d.to_dict() == payload
     assert ConstraintDecision.from_dict(d.to_dict()) == d
-    assert "risk_group" in CONSTRAINT_JSON_SCHEMA["properties"]["level"]["enum"]
-    assert "risk_group" in CONSTRAINT_JSON_SCHEMA["properties"]["basis"]["enum"]
-
-
-def test_constraint_decision_rejects_an_unknown_level():
-    with pytest.raises(DecisionError, match="level"):
-        ConstraintDecision.from_dict(
-            {"avoid": {}, "reasoning": "x", "level": "continent"})
 
 
 def test_constraint_decision_rejects_an_unknown_avoid_key():
@@ -81,13 +67,14 @@ def test_constraint_decision_rejects_an_unknown_avoid_key():
 
 
 def test_objective_priority_must_name_only_real_cost_terms():
-    ok = ObjectiveDecision.from_dict(
-        {"choice": "candidate_1", "priority": ["transponders", "dropped_traffic"],
-         "reasoning": "keep the spare"})
-    assert ok.priority == ("transponders", "dropped_traffic")
-    with pytest.raises(DecisionError, match="priority"):
-        ObjectiveDecision.from_dict(
-            {"choice": "candidate_1", "priority": ["vibes"], "reasoning": "x"})
+    """`priority` is no longer read from a payload (spec 6.5) -- what
+    remains is rank_by_priority itself, which the baseline still calls
+    directly with a real ordering over COST_TERMS."""
+    order = rank_by_priority(
+        [{"cost_vector": {"transponders": 4.0, "dropped_traffic": 1.0}},
+         {"cost_vector": {"transponders": 2.0, "dropped_traffic": 5.0}}],
+        ("transponders", "dropped_traffic"))
+    assert order == [1, 0]
 
 
 def test_declining_to_state_a_priority_is_legitimate():
@@ -153,12 +140,12 @@ def test_claim_priority_round_trips_and_validates():
 
 def test_an_absent_contested_claim_is_the_same_as_null():
     # baseline.py and every gold decision construct these positionally with no
-    # claim; they must keep working untouched.
+    # claim; they must keep working untouched. `contested_claim` stays on
+    # TimingDecision only -- it left ObjectiveDecision and ConstraintDecision
+    # entirely (spec 6.4/6.5).
     assert TimingDecision.from_dict(
         {"action": "act", "reasoning": "x"}).contested_claim is None
     assert TimingDecision("act", "x").contested_claim is None
-    assert ObjectiveDecision("candidate_0", None, "x").contested_claim is None
-    assert ConstraintDecision(avoid={}, reasoning="x").contested_claim is None
 
 
 @pytest.mark.parametrize("bad, match", [
@@ -176,8 +163,87 @@ def test_a_malformed_contested_claim_is_rejected(bad, match):
             {"action": "act", "reasoning": "x", "contested_claim": bad})
 
 
-def test_all_three_decisions_require_the_field():
+def test_timing_decision_requires_the_field():
+    # `contested_claim` stays on TimingDecision only -- it left the
+    # constraint and objective wire schemas entirely (spec 6.4/6.5).
+    assert "contested_claim" in TIMING_JSON_SCHEMA["required"]
+    assert "contested_claim" in TIMING_JSON_SCHEMA["properties"]
+
+
+def test_reasoning_is_the_first_property_in_every_tool_schema():
+    """Strict tool use emits properties in schema order. Two failures in the
+    2026-09-09 run (T3b t0, T2b t1) emitted the enum BEFORE the reasoning
+    that was supposed to justify it, and the text then contradicted it."""
     for schema in (TIMING_JSON_SCHEMA, CONSTRAINT_JSON_SCHEMA,
                    OBJECTIVE_JSON_SCHEMA):
-        assert "contested_claim" in schema["required"]
-        assert "contested_claim" in schema["properties"]
+        assert list(schema["properties"])[0] == "reasoning"
+
+
+@pytest.mark.parametrize("bad", [
+    "I chose to wait</reasoning><parameter name=\"contested_claim\">",
+    "the claimant is bigger<parameter name=\"action\">",
+])
+def test_tool_call_markup_inside_reasoning_is_rejected(bad):
+    """T1a t4 and T2b t3 both emitted a literal tool-call fragment inside the
+    reasoning string and the validator accepted it."""
+    with pytest.raises(DecisionError, match="tool-call markup"):
+        TimingDecision.from_dict({"reasoning": bad, "action": "wait"})
+
+
+def test_reasoning_still_accepts_ordinary_angle_brackets():
+    d = TimingDecision.from_dict(
+        {"reasoning": "claimant 149.0 > SUT 35.1", "action": "wait"})
+    assert d.action == "wait"
+
+
+def test_the_constraint_posture_is_derived_from_the_avoid_set():
+    physical = ConstraintDecision(avoid={"assets": ["fiber_a_b_0"]},
+                                  reasoning="named spans only")
+    assert (physical.basis, physical.level) == ("physical", "link")
+    grouped = ConstraintDecision(avoid={"risk_groups": ["rg_x"]},
+                                 reasoning="the whole group")
+    assert (grouped.basis, grouped.level) == ("risk_group", "risk_group")
+    mixed = ConstraintDecision(
+        avoid={"assets": ["fiber_a_b_0"], "risk_groups": ["rg_x"]},
+        reasoning="both granularities")
+    # A mixed avoid is LEGAL: the server's own _forbidden_assets unions
+    # avoid["assets"] with the named groups' members and never looks at
+    # basis/level, so the risk_group basis cannot suppress a named asset.
+    assert (mixed.basis, mixed.level) == ("risk_group", "risk_group")
+    assert mixed.route_service_args("svc")["avoid"] == mixed.avoid
+    empty = ConstraintDecision(avoid={}, reasoning="unconstrained")
+    assert (empty.basis, empty.level) == ("physical", "link")
+    assert empty.protected is False and empty.best_effort is False
+
+
+def test_an_empty_risk_group_list_still_derives_the_physical_basis():
+    """`{"risk_groups": []}` names no group, so it must not flip the basis --
+    assertions.PLAUSIBLE_ALTERNATIVES replays exactly this avoid set."""
+    d = ConstraintDecision(avoid={"risk_groups": []}, reasoning="empty list")
+    assert (d.basis, d.level) == ("physical", "link")
+
+
+def test_the_constraint_schema_carries_only_reasoning_and_avoid():
+    assert set(CONSTRAINT_JSON_SCHEMA["properties"]) == {"reasoning", "avoid"}
+    assert set(CONSTRAINT_JSON_SCHEMA["required"]) == {"reasoning", "avoid"}
+    assert "srlgs" not in CONSTRAINT_JSON_SCHEMA["properties"]["avoid"]["properties"]
+
+
+def test_the_objective_schema_carries_only_reasoning_and_choice():
+    assert set(OBJECTIVE_JSON_SCHEMA["properties"]) == {"reasoning", "choice"}
+    assert set(OBJECTIVE_JSON_SCHEMA["required"]) == {"reasoning", "choice"}
+
+
+def test_an_objective_payload_never_carries_a_priority_any_more():
+    d = ObjectiveDecision.from_dict(
+        {"reasoning": "cheapest real escape", "choice": "candidate_1"})
+    assert d.priority is None
+    assert d.to_dict() == {"choice": "candidate_1", "priority": None,
+                           "reasoning": "cheapest real escape"}
+
+
+def test_the_baseline_still_states_a_priority_positionally():
+    """rank_by_priority and COST_TERMS stay for the baseline (spec 6.5); only
+    the WIRE schema drops the field."""
+    d = ObjectiveDecision("candidate_0", COST_TERMS[:2], "fixed ordering")
+    assert d.priority == COST_TERMS[:2]

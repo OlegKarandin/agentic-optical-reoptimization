@@ -74,11 +74,9 @@ PLAUSIBLE_ALTERNATIVES = {
     "timing": [TimingDecision("act", "alternative: act at once"),
                TimingDecision("wait", "alternative: hold")],
     "constraints": [
-        ConstraintDecision(avoid={}, reasoning="alternative: unconstrained",
-                           protected=False, basis="physical", level="link"),
+        ConstraintDecision(avoid={}, reasoning="alternative: unconstrained"),
         ConstraintDecision(avoid={"risk_groups": []},
-                           reasoning="alternative: empty risk-group avoid",
-                           protected=False, basis="physical", level="link")],
+                           reasoning="alternative: empty risk-group avoid")],
     "objective": [
         ObjectiveDecision("candidate_0", None, "alternative: first candidate"),
         ObjectiveDecision("candidate_1", None, "alternative: second candidate")],

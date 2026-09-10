@@ -190,9 +190,7 @@ def _spend_or_hold_gold_replay(scenario):
              "constraints": ConstraintDecision(
                  avoid={"risk_groups": [rg_id]},
                  reasoning=f"gold: oracle.spend_decider's own avoid of "
-                          f"{rg_id!r} ({horizon!r})",
-                 protected=False, best_effort=False, basis="risk_group",
-                 level="risk_group")},
+                          f"{rg_id!r} ({horizon!r})")},
             {"timing": {d: TimingDecision(
                 "act", "gold: spend the depot's spare at the decision hour",
                 claim_priority=priority)}},
@@ -205,8 +203,7 @@ def _spend_or_hold_gold_replay(scenario):
          # Never consulted -- `run_episode` only reaches the constraints
          # decision after a timing decision of "act", and hold never acts.
          "constraints": ConstraintDecision(
-             avoid={}, reasoning="gold: hold never acts", protected=False,
-             basis="physical", level="link")},
+             avoid={}, reasoning="gold: hold never acts")},
         None, None)
 
 
