@@ -38,7 +38,8 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-def _obs(*, others=(), sut_p_cut=0.3410, iteration=0, last_rejection=None):
+def _obs(*, others=(), sut_p_cut=0.3410, iteration=0, last_rejection=None,
+        standing_claim_priority=("storm-svc-1",)):
     """T3a's shape at t1: the service under test centred in the far cone,
     plus whichever other claimants the test wants to place. `others` is a
     sequence of (service_id, p_cut, demand_gbps).
@@ -48,7 +49,16 @@ def _obs(*, others=(), sut_p_cut=0.3410, iteration=0, last_rejection=None):
     which makes it depot-eligible by construction -- these are the pre-Task-11
     enumeration-threshold tests, not the eligibility-filter ones
     (`_wide_observation` below is that one), so the claimants here should
-    survive projection exactly as they did before the eligibility split."""
+    survive projection exactly as they did before the eligibility split.
+
+    `standing_claim_priority` defaults to a non-empty ranking -- this
+    helper builds the shape of an hour ALREADY mid-episode, which is what
+    every pre-existing mechanics test here means to exercise (tool schema,
+    retries, the audit sidecar, probe wiring), none of which are about the
+    Task 4 first-call ranking rule. A test of that rule (test_agent.py's
+    `test_the_first_timing_call_of_an_episode_must_state_a_ranking` and its
+    sibling) builds its payload directly and overrides the field itself, so
+    this default never masks either branch."""
     exposure = {"storm-svc-1": {HORIZON: {
         "hours_ahead": 2, "offset_km": 0.0, "width_km": 320.0,
         "p_cut": sut_p_cut, "demand_gbps": 300.0}}}
@@ -77,7 +87,8 @@ def _obs(*, others=(), sut_p_cut=0.3410, iteration=0, last_rejection=None):
         exposure=exposure, services=tuple(services), spares_on_hand=1,
         lead_time_hours=1, risk_group_ids={HORIZON: "rg_T3a_t1_t3"},
         iteration=iteration, last_rejection=last_rejection,
-        restorable_groups={HORIZON: tuple(groups)} if groups else {})
+        restorable_groups={HORIZON: tuple(groups)} if groups else {},
+        standing_claim_priority=standing_claim_priority)
 
 
 def _wide_observation():
@@ -1305,3 +1316,26 @@ def test_the_probe_section_precedes_the_three_decisions():
     p = SYSTEM_PROMPT
     assert p.index("## One question you may ask") < p.index("## The three decisions")
     assert "at any of the three decisions" in p
+
+
+def test_the_first_timing_call_of_an_episode_must_state_a_ranking():
+    """An empty ranking means 'keep the standing one'. On the first call
+    there is none to keep, so an empty one is a refusal to answer."""
+    obs = _obs()
+    payload = project_observation(obs)
+    payload["standing_claim_priority"] = []
+    decision = TimingDecision.from_dict(
+        {"reasoning": "hold", "action": "wait", "contested_claim": None,
+         "claim_priority": []})
+    with pytest.raises(DecisionError, match="claim_priority"):
+        ClaudeDecider._check_named_services(decision, payload, TIMING_TOOL)
+
+
+def test_an_empty_ranking_is_fine_once_one_is_standing():
+    obs = _obs()
+    payload = project_observation(obs)
+    payload["standing_claim_priority"] = ["storm-svc-1"]
+    decision = TimingDecision.from_dict(
+        {"reasoning": "unchanged", "action": "wait", "contested_claim": None,
+         "claim_priority": []})
+    ClaudeDecider._check_named_services(decision, payload, TIMING_TOOL)

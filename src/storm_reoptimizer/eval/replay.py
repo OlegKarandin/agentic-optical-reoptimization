@@ -74,6 +74,13 @@ async def restore_after_cuts(
     (`affected`, the runner's `dropped_after_cut` for this hour), spending
     `ledger`'s remaining spares in `priority` order.
 
+    `priority` is the STANDING claim-priority ranking (spec 7.4) minus the
+    actionable service -- run_episode's own last-stated `claim_priority`
+    across hours, not necessarily this cut hour's own decision, since a cut
+    hour may have no decision of its own under the decidable-hours rule.
+    `_ordered_scope` below still ignores any id outside `scope` and still
+    dedupes.
+
     Only a service actually IN `affected` is attempted -- one whose scope
     membership is real but which the cut left untouched (protection absorbed
     it, or it simply wasn't on the cut asset) gets no record at all, the same

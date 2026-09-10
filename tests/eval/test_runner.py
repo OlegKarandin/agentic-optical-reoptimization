@@ -1865,4 +1865,62 @@ def test_the_standing_ranking_carries_across_hours(
     assert decider.timing_obs[1].standing_claim_priority == ("storm-svc-1",)
 
 
+class _Ledger:
+    """The two things ranking_conflict reads off a SpareLedger."""
+
+    def __init__(self, oms_nodes, depot_site):
+        self.oms_nodes = oms_nodes
+        self.depot_site = depot_site
+
+
+_DEPOT_CANDIDATE = {"new_lightpaths": [{"oms_sequence": ["oms_sr"]}]}
+_FREE_CANDIDATE = {"lever": "ip_reroute", "reused_lightpaths": ["lp_sr"]}
+_LEDGER = _Ledger({"oms_sr": ["satna", "rewa"]}, "satna")
+
+
+def test_a_spare_charging_commit_outside_the_funded_prefix_is_refused():
+    """T3a t1 ranked the SUT FOURTH and then spent the depot's last spare on
+    it. The ranking allocates nothing by itself -- `act` plus a spare-
+    charging candidate removes the spare before the ranking is ever read --
+    so the two statements have to be made consistent at the commit."""
+    rejection = runner.ranking_conflict(
+        _DEPOT_CANDIDATE, standing=("claimant-a", "storm-svc-1"),
+        actionable="storm-svc-1", spares_on_hand=1, ledger=_LEDGER)
+    assert rejection == {"type": "ranking_conflict",
+                         "funded_prefix": ["claimant-a"]}
+
+
+def test_the_funded_prefix_is_as_long_as_the_depot_has_spares():
+    assert runner.ranking_conflict(
+        _DEPOT_CANDIDATE, standing=("claimant-a", "storm-svc-1"),
+        actionable="storm-svc-1", spares_on_hand=2, ledger=_LEDGER) is None
+
+
+def test_a_candidate_that_charges_the_depot_nothing_never_conflicts():
+    """An ip_reroute grooms onto an existing lightpath: the ranking is about
+    who gets a SPARE, and this candidate takes none."""
+    assert runner.ranking_conflict(
+        _FREE_CANDIDATE, standing=("claimant-a", "storm-svc-1"),
+        actionable="storm-svc-1", spares_on_hand=1, ledger=_LEDGER) is None
+
+
+def test_an_empty_standing_ranking_disables_the_rule():
+    """Both baselines state no ranking at all; the rule must never bind
+    them, or the exactly-50%% arithmetic moves for a reason unrelated to
+    the pair."""
+    assert runner.ranking_conflict(
+        _DEPOT_CANDIDATE, standing=(), actionable="storm-svc-1",
+        spares_on_hand=1, ledger=_LEDGER) is None
+
+
+def test_a_candidate_charging_only_a_non_depot_site_never_conflicts():
+    """Only the DEPOT's inventory is scarce (ledger.py). A lightpath whose
+    two endpoints are both away from the depot spends nothing the ranking
+    is about."""
+    ledger = _Ledger({"oms_far": ["rewa", "allahabad"]}, "satna")
+    candidate = {"new_lightpaths": [{"oms_sequence": ["oms_far"]}]}
+    assert runner.ranking_conflict(
+        candidate, standing=("claimant-a", "storm-svc-1"),
+        actionable="storm-svc-1", spares_on_hand=1, ledger=ledger) is None
+
 

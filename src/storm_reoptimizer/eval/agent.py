@@ -708,6 +708,14 @@ class ClaudeDecider:
                     f"{tool_name}: `claim_priority` names {svc!r}, which is "
                     f"not in this observation's `exposure`. Name only "
                     f"services you were shown.")
+        if (tool_name == TIMING_TOOL
+                and not getattr(decision, "claim_priority", ())
+                and not payload.get("standing_claim_priority")):
+            raise DecisionError(
+                f"{tool_name}: `claim_priority` is empty and no ranking is "
+                f"standing yet, so there is none to keep. State an ordering "
+                f"of the services shown -- most deserving of this depot's "
+                f"spares first, INCLUDING the actionable service.")
 
     async def _decide(self, tool_name, decision_cls, obs, payload, user_content):
         """One decision, with up to MAX_ATTEMPTS self-correction rounds and

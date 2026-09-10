@@ -331,6 +331,40 @@ def menu_with_path_facts(menu: dict, geometry: ServiceGeometry,
     return annotated
 
 
+def ranking_conflict(candidate: dict, *, standing: tuple[str, ...],
+                     actionable: str, spares_on_hand: int, ledger
+                     ) -> dict | None:
+    """The typed rejection for "you ranked someone else ahead of the service
+    you are about to spend the depot's last spare on", or None.
+
+    `claim_priority` and `action` were inverted in the 2026-09-09 run: T3a
+    at t1 ranked the actionable service FOURTH and then spent the spare on
+    it, on a model in which the ranking allocates and `act` merely
+    schedules. In fact `act` plus a spare-charging candidate removes the
+    spare from the depot before the ranking is ever read (the replay reads
+    it only after a realized cut, with whatever REMAINS). This is the one
+    place the two statements can be made consistent, and the consistent
+    answers -- `hold` at the objective step, or a ranking that funds the
+    actionable service -- both remain available.
+
+    The FUNDED PREFIX is the first `spares_on_hand` entries of the standing
+    ranking: exactly the services the depot could still pay for if a cut
+    dropped all of them. A candidate charging the depot nothing (an
+    ip_reroute, or a lightpath whose endpoints are both away from the depot)
+    takes nothing the ranking is about and never conflicts. An EMPTY
+    standing ranking disables the rule outright -- both baselines state
+    none, and binding them would move the exactly-50%% arithmetic for a
+    reason unrelated to the pair."""
+    if not standing:
+        return None
+    if not spares_needed(candidate, ledger.oms_nodes).get(ledger.depot_site):
+        return None
+    funded = list(standing[:spares_on_hand])
+    if actionable in funded:
+        return None
+    return {"type": "ranking_conflict", "funded_prefix": funded}
+
+
 def _visible_services(obs) -> list[str]:
     """Services with a nonzero cut probability at any horizon of this hour's
     issuance, plus the actionable service unconditionally.
@@ -1082,6 +1116,16 @@ async def run_episode(
                     step["outcome"] = "insufficient_spares"
                     continue
 
+                conflict = ranking_conflict(
+                    candidate, standing=standing_claim_priority,
+                    actionable=scenario.service_under_test,
+                    spares_on_hand=ledger.on_hand, ledger=ledger)
+                if conflict is not None:
+                    last_rejection = conflict
+                    record["rejections"].append(last_rejection)
+                    step["outcome"] = "ranking_conflict"
+                    continue
+
                 commit, rejection = await try_commit(
                     counting, index, candidate, scenario.service_under_test,
                     prefix=f"eval-{hour}-{iteration}",
@@ -1164,11 +1208,19 @@ async def run_episode(
             record["dropped_after_cut"] = sorted(
                 d["service_id"] for d in routing["dropped"]["services"])
             # The deterministic post-cut restoration replay (T1 spend-or-
-            # hold redesign spec, 5.1): spend whatever spares remain on the
-            # services this cut actually dropped, in the DECIDER's own
-            # `claim_priority` order (last-stated `timing` this hour --
-            # `record["timing"]` is always set above, act or wait).
-            priority = tuple(record["timing"].get("claim_priority", ()))
+            # hold redesign spec, 5.1) spends whatever spares REMAIN on the
+            # services this cut actually dropped, in the decider's own
+            # ranking order. That is the STANDING ranking (spec 7.4), not
+            # this hour's own `record["timing"]`: under the decidable-hours
+            # rule a cut hour may have no decision of its own at all, and an
+            # empty `claim_priority` means "keep the standing one" rather
+            # than "no opinion" even when it does. The actionable service is
+            # removed here because the replay's `scope` handles it
+            # separately -- the ranking now INCLUDES it (spec 6.3), which it
+            # did not when this call site was written.
+            priority = tuple(
+                svc for svc in standing_claim_priority
+                if svc != scenario.service_under_test)
             restore_actions, restore_records = await restore_after_cuts(
                 counting, scenario=scenario, hour=hour, hour_index=hour_index,
                 affected=record["dropped_after_cut"], priority=priority,
