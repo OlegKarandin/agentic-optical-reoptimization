@@ -318,9 +318,9 @@ CONSTRAINT_TOOL = "submit_constraint_decision"
 OBJECTIVE_TOOL = "submit_objective_decision"
 
 # The prompt is assembled from three literals -- not re-flowed into one --
-# because `_RIVAL_TOTALS_BULLET` has to slot into the "What you can see"
-# list below as its own bullet, right after `omitted_services` and before
-# the "## The three decisions" section starts.
+# because `_RESTORABLE_GROUPS_BULLET` has to slot into the "What you can
+# see" list below as its own bullet, right after `omitted_services` and
+# before the "## The three decisions" section starts.
 _SYSTEM_PROMPT_HEAD = """\
 You are the restoration decision-maker for a multi-layer IP-over-optical \
 network during a tropical storm.
@@ -362,8 +362,12 @@ the product `p_cut * demand_gbps`, already computed for you. It is the \
 quantity that makes two competing claims on one resource comparable, and it \
 is in Gbps. For a protected service `p_cut` is the probability BOTH its \
 working and protection paths are cut -- the probability it actually goes \
-down.
-- `services` -- the roster for the services shown.
+down. While another issuance is still scheduled, each row also carries \
+`p_cut_if_track_revised`: the smallest, largest and mean `p_cut` this \
+service would show if the next issuance moved the cone centre by \
+`revision_radius_km` in any direction. `p_cut` says how likely the cut is \
+if this issuance is right; the band says how much that number can change \
+when the issuance is revised.
 - `spares_on_hand` -- spare transponders held at `depot_site`, the one site \
 whose inventory (the scenario's own `spare_inventory`, held per site) is \
 scarce in this episode. Lighting a new lightpath consumes one transponder at \
@@ -373,7 +377,7 @@ inventory is invisible to the routing tools: they will happily propose a \
 candidate the depot cannot fulfil, and the harness will reject that choice.
 \n\
   That depot is SHARED -- with the other services that terminate at the same \
-site. A transponder you spend there is not available to them. Order matters: \
+site. A transponder used there is not available to them. Order matters: \
 a service cut in an EARLIER hour reaches the depot before one cut later, and \
 among services cut in the same hour the larger demand has the stronger \
 claim. You are not asked to restore them and their restoration is not \
@@ -383,15 +387,17 @@ simulated, but their claim on this site's inventory is real.
 `omitted_services.ineligible_for_depot`. They may be badly exposed; they are \
 not competing for this inventory, because restoring them draws on their own \
 sites' depots.
-- `claim_priority` (yours to state on the timing decision) -- an ordering of \
-the services shown, most deserving first. When a cut drops services, the \
-harness restores the dropped ones in this order, using only the spares that \
-REMAIN in the depot at that moment, each effective after its lever's lead \
-time. Such a restoration may cost zero spares when an existing lightpath \
-with headroom can carry the service, and one spare pair otherwise. Services \
-you leave out are restored after the ones you list, larger demand first. \
-The ordering cannot create inventory: if the depot's last spare has already \
-been spent, it restores nothing that needs one, whoever is first in it.
+- `claim_priority` -- an ordering of the services shown, most deserving of \
+this depot's spares first, INCLUDING the actionable service. A cut, if the \
+storm makes one, happens at a horizon hour. At that hour you give a timing \
+decision first; the cut is injected after it; the harness then restores \
+the services the cut dropped, in the ranking in force at that moment, with \
+whatever spares REMAIN, each restoration effective after its lever's lead \
+time. The ranking in force is the last one you stated: \
+`standing_claim_priority` shows it, and an empty `claim_priority` keeps \
+it. Ranking another service above the actionable one and then committing \
+the depot's last spare to the actionable one is a contradiction, and the \
+harness rejects that commit.
 - `actions_taken` and `spares_spent` -- what YOU have already committed \
 earlier in this episode: per action its hour, its lever, the spare pairs it \
 cost, the `avoid` set it was routed under, and `effective_at_hour` -- the \
@@ -406,14 +412,23 @@ being effective, per lever. An `ip_reroute` is a config change and lands \
 immediately. Lighting a new optical path is provisioning and takes the \
 scenario's lead time. Acting later than (exposure hour - lead time) means \
 the action lands after the cut.
-- `deadline_hour` -- per lever, the last hour at which an action can be \
-issued and still be effective at or before the latest published horizon, or \
-`null` if that hour has passed. Acting before the deadline forgoes \
-information; acting after it lands after the cut.
+- `deadline_hour` -- per lever, the LAST hour at which an action on that \
+lever still lands at or before the latest published horizon. Acting AT \
+that hour is on time. Acting earlier buys nothing unless no issuance is \
+scheduled in between; `next_issuance.hour` tells you whether one is.
 - `risk_group_ids` -- horizon hour -> the id of the risk group defined for \
 that cone. These ids are what you name when you constrain routing.
 - `iteration`, `last_rejection` -- within one hour you may get up to five \
 attempts. `last_rejection` tells you why the previous attempt failed.
+- `decided_this_hour` -- on the constraints and menu requests only: the \
+timing decision you already made this hour, with its reasoning, \
+`contested_claim`, `claim_priority`, and the probe answers you obtained. \
+The constraints and the menu choice EXECUTE that decision. If the menu \
+holds nothing consistent with it, answer `hold`.
+- `attempts_this_hour` -- on the constraints and menu requests: every \
+avoid set already tried this hour, the menu status and size it produced, \
+and what you answered. Repeating an avoid set that produced no menu \
+cannot produce one.
 - `n_services_total` and `omitted_services` -- the observation shows you the \
 actionable service plus every other service that is BOTH known to terminate \
 at `depot_site` AND whose cut probability is high enough to be shown \
@@ -437,23 +452,14 @@ other service listed is a real competing claim on the same depot.
 # which set, and in what unit. It states no threshold, names no episode, and
 # says nothing about which way the comparison should come out -- the
 # comparison is the judgement being measured.
-_RIVAL_TOTALS_BULLET = """\
-- `horizon_totals` -- per horizon, three already-summed figures: \
-`sut_ecar_gbps`, the actionable service's own expected capacity at risk; \
-`largest_restorable_group_ecar_gbps`, the LARGEST expected capacity at risk \
-among the co-terminating groups sharing this depot; and \
-`non_sut_ineligible_ecar_gbps`, the summed expected capacity at risk of \
-every service that cannot draw on this depot at all. One spare buys one \
-lightpath: services that co-terminate (share both endpoints) are jointly \
-restored by it and their figures add within a group, but across groups only \
-the MAXIMUM is an honest competing claim, never a sum. \
-`non_sut_ineligible_ecar_gbps` is kept for scale, not as a claim: it is over \
-the whole network, not only the services listed above, and none of it can \
-be restored from this depot regardless of how large it reads.
-- `restorable_groups` -- per horizon, the co-terminating groups themselves \
-that `largest_restorable_group_ecar_gbps` maxes over: each with `endpoints`, \
-`members`, and `ecar_gbps`, so you can see WHICH services would share one \
-restoring lightpath, not just the total.
+_RESTORABLE_GROUPS_BULLET = """\
+- `restorable_groups` -- per horizon, the co-terminating groups that would \
+share one restoring lightpath: each with `endpoints`, `members`, and \
+`ecar_gbps`, so you can see WHICH services would share it, not just a \
+summed figure. One spare buys one lightpath: services that co-terminate \
+(share both endpoints) are jointly restored by it and their figures add \
+within a group, but across groups only the MAXIMUM is an honest competing \
+claim, never a sum.
 """
 
 _SYSTEM_PROMPT_TAIL = """\
@@ -471,27 +477,45 @@ none) and `levers`. It computes and changes nothing. You may call it up to \
 decision tool; the answer comes back as a tool result. You may call it at \
 any of the three decisions, ahead of that decision's tool call.
 
+What the answer means for the spare: a service with no full-restore \
+candidate under the group that cuts it cannot use the spare after its \
+cut, however exposed it is. A service whose cheapest candidate charges \
+nothing at `depot_site` does not need it either.
+"""
+# The third sentence is a documented NUDGE, kept as an experiment for the
+# first measured run and reported as such (spec 2, and README's "What to
+# read afterwards"). Every probe in the 2026-09-09 run named the SUT; the
+# two sentences before it say what an answer MEANS, and this one says who
+# to ask about. If the run shows the nudge is what produced a claimant
+# probe rather than the semantics, say so and drop it.
+_SYSTEM_PROMPT_TAIL += "The answer is as relevant to the\n" \
+    "services you would keep the spare for as to the one you can act on."
+_SYSTEM_PROMPT_TAIL += """
+
 ## The three decisions
 
-1. **Timing** (`""" + TIMING_TOOL + """`). Act now, or wait for the next \
-issuance? Waiting buys a sharper forecast and costs lead time, and possibly \
-the spare inventory if another service claims it first. Acting now on a \
-wide, uncertain cone can spend a scarce spare on a service that was never \
-going to be cut. No tool computes this: the network model has no concept of \
-time at all.
+1. **Timing** (`""" + TIMING_TOOL + """`). This decision is what allocates \
+the depot's last spare. `act` means: route the actionable service this \
+hour, and if the candidate you then choose needs a spare, that spare leaves
+the depot now, before any cut, ahead of every other service. `wait` means: \
+the spare stays in the depot this hour. It is still there for the \
+actionable service next hour, and it is there for whichever service a cut \
+actually drops if you never commit it. No other service can draw on the \
+depot before it is cut, so waiting cannot lose the spare to a competitor. \
+What waiting costs is lead time. What it buys is the next issuance, if \
+`next_issuance` says one is still scheduled before `deadline_hour`.
 
 2. **Constraints** (`""" + CONSTRAINT_TOOL + """`). What must the reroute \
-route around? `avoid` takes lists of asset ids, SRLG ids, or risk-group ids. \
-The real choice is the HORIZON: avoiding the full far-horizon cone often \
-leaves no feasible path at all, while avoiding only the current exposure \
-leaves the reroute re-exposed a few hours later. `protected`, `best_effort`, \
-`basis` and `level` set the protection posture. On this network \
-`basis="srlg"` is a no-op (it carries no static SRLGs), and \
-`protected=True` produces a paired menu the harness cannot translate into a \
-plan -- so `protected=False`, `basis="physical"`, `level="link"` is the \
-working posture, with `basis="risk_group"`/`level="risk_group"` available \
-when the constraint you mean is a forecast risk group rather than a physical \
-link. This decision changes which candidates EXIST.
+route around? `avoid` takes risk-group ids from `risk_group_ids` and \
+asset ids from `risk_groups[<id>].assets`. A risk group contains every \
+span the cone touches, including spans that are not on the actionable \
+service's path, and a group naming all of a site's spans leaves that \
+site unroutable. Avoiding the whole group is the safest reroute and \
+sometimes has no path; avoiding only the spans that matter keeps a path \
+open at some residual exposure, which the menu then reports per \
+candidate. If `probe_restorability` reports no solution under a group, \
+that avoid set has no path and repeating it cannot produce one. This \
+decision changes which candidates EXIST.
 
 3. **Objective** (`""" + OBJECTIVE_TOOL + """`). Which candidate from the \
 routing menu? Answer with the `candidate_label` of the entry you want, \
@@ -503,27 +527,11 @@ again and can loosen them. `hold` says you decline to commit anything this \
 hour after seeing the menu: the hour ends exactly as if you had waited, \
 nothing is spent, and the spare stays in the depot.
 
-This only reorders a menu that already exists; it does not create options. \
-`priority`, when you state one, is an ordering over these seven cost terms:
-
-- `spectrum_used` -- slots consumed. Cost.
-- `transponders` -- **network-wide**: 2.0 x the count of every lightpath in \
-the whole model after the candidate is materialized on a clone. It is NOT \
-this candidate's own transponder cost, and comparing candidates on it is \
-close to meaningless. Each candidate carries a precomputed `spares_needed` \
-field, which IS its own cost in spare transponders -- now a PER-SITE dict, \
-one entry per site where this candidate's own new lightpaths charge a \
-transponder (empty for an `ip_reroute`). Reason about spares from \
-`spares_needed` and `spares_on_hand`, never from `transponders`.
-- `max_util` -- worst link utilization, 0-1. Cost.
-- `dropped_traffic` -- Gbps that stays unrestored. Cost.
-- `added_latency` -- milliseconds added. Cost.
-- `total_margin` -- summed optical margin in dB. This one is a BENEFIT: more \
-is better, and it is subtracted where the others are added.
-- `services_at_risk` -- count of services left exposed. Cost.
-
-The terms are in incommensurate units, which is why you order them rather \
-than weight them.
+Each candidate carries `spares_needed` (its own cost in spare \
+transponders, per site), `residual_exposure` (its own `p_cut`/`ecar_gbps` \
+per horizon, computed as `exposure` is), `path_delta` and \
+`collides_with_protection`, and a `cost_vector` for the record. Reason \
+about spares from `spares_needed` and `spares_on_hand`.
 
 Each candidate also carries three facts about what committing it would \
 actually do to the actionable service's OWN path, computed against the \
@@ -568,7 +576,7 @@ that state the comparison you actually made.
 """
 
 SYSTEM_PROMPT = (
-    _SYSTEM_PROMPT_HEAD + _RIVAL_TOTALS_BULLET + _SYSTEM_PROMPT_TAIL)
+    _SYSTEM_PROMPT_HEAD + _RESTORABLE_GROUPS_BULLET + _SYSTEM_PROMPT_TAIL)
 
 
 def _tool(name: str, description: str, schema: dict) -> dict:
@@ -587,9 +595,8 @@ TOOLS = [
           TIMING_JSON_SCHEMA),
     _tool(CONSTRAINT_TOOL,
           "Submit the routing constraints for this attempt: what the reroute "
-          "must avoid, and the protection posture to route under. Call this "
-          "exactly once, after choosing which horizon's exposure the reroute "
-          "has to survive.",
+          "must avoid. Call this exactly once, after choosing which "
+          "horizon's exposure the reroute has to survive.",
           CONSTRAINT_JSON_SCHEMA),
     _tool(OBJECTIVE_TOOL,
           "Submit which candidate from the routing menu to commit, or "
@@ -615,11 +622,12 @@ TIMING_INSTRUCTION = (
     f"Decide whether to act this hour or wait for the next issuance, then "
     f"call `{TIMING_TOOL}`.")
 CONSTRAINT_INSTRUCTION = (
-    f"Decide what this reroute must route around and under what protection "
-    f"posture, then call `{CONSTRAINT_TOOL}`.")
+    f"Decide what this reroute must route around, then call "
+    f"`{CONSTRAINT_TOOL}`.")
 OBJECTIVE_INSTRUCTION = (
-    f"Choose one candidate from the menu above by its `candidate_label`, or "
-    f"`infeasible`, then call `{OBJECTIVE_TOOL}`.")
+    f"Choose one candidate from the menu above by its `candidate_label`, "
+    f"`infeasible` if none is acceptable under these constraints, or "
+    f"`hold` to commit nothing this hour, then call `{OBJECTIVE_TOOL}`.")
 
 
 class ClaudeDecider:

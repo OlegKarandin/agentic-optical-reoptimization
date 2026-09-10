@@ -12,9 +12,10 @@ import pytest
 
 from storm_reoptimizer.eval import agent as agent_module
 from storm_reoptimizer.eval.agent import (
-    CONSTRAINT_TOOL, DEFAULT_MODEL, MAX_ATTEMPTS, OBJECTIVE_TOOL,
-    P_CUT_ENUMERATION_THRESHOLD, SYSTEM_PROMPT, TIMING_TOOL, ClaudeDecider,
-    _project_exposure_entry, project_observation, strict_tool_schema,
+    CONSTRAINT_TOOL, DEFAULT_MODEL, MAX_ATTEMPTS, OBJECTIVE_INSTRUCTION,
+    OBJECTIVE_TOOL, P_CUT_ENUMERATION_THRESHOLD, SYSTEM_PROMPT, TIMING_TOOL,
+    ClaudeDecider, _project_exposure_entry, project_observation,
+    strict_tool_schema,
 )
 from storm_reoptimizer.eval.baseline import ForecastBlindBaseline
 from storm_reoptimizer.eval.decisions import (
@@ -776,10 +777,19 @@ def test_the_system_prompt_warns_that_transponders_is_a_network_wide_count():
 def test_the_system_prompt_never_leaks_scoring_internals():
     # Coaching the model toward cites_flip_variable would pass a
     # NECESSARY-NOT-SUFFICIENT check while destroying its only purpose.
+    # Merged with the mechanics-not-answers leaks (spec 3, Task 8 brief):
+    # the prompt must never state the comparison or its answer.
     lowered = SYSTEM_PROMPT.lower()
     for leak in ("flip_variable", "flip variable", "pair_solved", "gold",
-                 "cites_", "label_correct", "scoring"):
-        assert leak not in lowered
+                 "cites_", "label_correct", "scoring", "spend",
+                 "hold the spare for", "claimant"):
+        assert leak not in lowered, leak
+    # Episode names are checked case-sensitively: the prompt legitimately
+    # uses lowercase hour labels like "t1"/"t2"/"t3" (e.g. the
+    # `[t0, t1, t2, t6]` example in the action-history bullet), which a
+    # lowered check would false-positive on.
+    for leak in ("T1", "T2", "T3"):
+        assert leak not in SYSTEM_PROMPT, leak
 
 
 def test_the_system_prompt_describes_the_agents_own_action_history():
@@ -1067,12 +1077,13 @@ def test_the_arm_is_named_so_one_results_table_can_hold_both():
     assert decider.name == "agent:claude-sonnet-5"
 
 
-def test_there_is_one_prompt_and_it_names_the_summed_rival_figure():
-    # Rewritten for Task 10's co-terminating-group statistic: the old
-    # network-wide `non_sut_total_ecar_gbps` sum is gone.
-    assert "sut_ecar_gbps" in SYSTEM_PROMPT
-    assert "largest_restorable_group_ecar_gbps" in SYSTEM_PROMPT
-    assert "non_sut_ineligible_ecar_gbps" in SYSTEM_PROMPT
+def test_there_is_one_prompt_and_it_names_the_restorable_groups():
+    # Rewritten for Task 8 (spec 4.9): `horizon_totals` -- and the
+    # `sut_ecar_gbps`/`largest_restorable_group_ecar_gbps`/
+    # `non_sut_ineligible_ecar_gbps` figures it carried -- left the wire in
+    # an earlier task; the bullet describing them is now gone from the
+    # prompt too. `restorable_groups` is the one that survives: it is the
+    # only view of who shares a restoring lightpath.
     assert "restorable_groups" in SYSTEM_PROMPT
     assert not hasattr(agent_module, "SYSTEM_PROMPT_WITH_RIVAL_TOTALS")
 
@@ -1290,7 +1301,11 @@ def test_the_prompt_describes_the_probe_without_saying_when_to_use_it():
 
 
 def test_the_prompt_states_that_a_restoration_may_cost_zero_spares():
-    assert "may cost zero spares" in SYSTEM_PROMPT
+    # The zero-spares-on-restore sentence lived in the claim_priority
+    # bullet, which Task 8 (spec 4.3) replaced wholesale; the underlying
+    # fact -- an `ip_reroute` restoration charges no transponder -- is still
+    # stated, now under `spares_on_hand` where the lever costs are defined.
+    assert "an `ip_reroute` consumes none" in SYSTEM_PROMPT
 
 
 def test_the_prompt_keeps_the_joint_p_cut_sentence_and_drops_legs():
@@ -1307,8 +1322,13 @@ def test_the_prompt_no_longer_teaches_geometry():
 
 
 def test_the_prompt_says_claim_priority_cannot_create_inventory():
+    # Task 8 (spec 4.3) replaced the claim_priority bullet's own
+    # "cannot create inventory" sentence with the rejection rule instead
+    # (a contradictory spend is refused outright, rather than silently
+    # restoring nothing); the same "you can't restore more than remains"
+    # fact is still stated, in the restoration-order sentence itself.
     p = SYSTEM_PROMPT
-    assert "cannot create inventory" in p
+    assert "whatever spares REMAIN" in p
     assert "one way you act on behalf" not in p
 
 
@@ -1387,3 +1407,106 @@ def test_the_decider_shows_the_groups_contents_at_constraints_only():
     assert "risk_groups" in decider.last_projection
     _run(decider.objective(obs, {"status": "ok", "candidates": []}))
     assert "risk_groups" not in decider.last_projection
+
+
+# Task 8 (spec 4, decider-allocation-redesign): the prompt rewrite. Every
+# test below names the real trace fault that made the rewrite necessary.
+
+
+def test_the_timing_decision_is_described_as_the_spare_allocation():
+    """Fault 1: the question was posed as information and graded as
+    allocation, so at the last issuance 'wait' read as pointless."""
+    assert "This decision is what allocates" in SYSTEM_PROMPT
+    assert "that spare leaves\nthe depot now, before any cut, ahead of " \
+           "every other service" in SYSTEM_PROMPT.replace("\\\n", "")
+    assert "No other service can draw on the depot before it is cut" \
+        in SYSTEM_PROMPT
+
+
+def test_the_prompt_denies_the_mechanism_the_agent_invented():
+    """T1a/T1b t0: 'delaying risks losing the spare to an earlier-resolving
+    claim'. No such mechanism exists."""
+    assert "waiting cannot lose the spare to a competitor" in SYSTEM_PROMPT
+
+
+def test_the_deadline_is_described_as_a_date_not_a_cliff():
+    """Fault 2: 'the t1 issuance arrives too late for the optical lever',
+    where the optical deadline IS t1."""
+    assert "Acting AT that hour is on time" in SYSTEM_PROMPT
+    assert "Acting earlier buys nothing unless no issuance is scheduled in " \
+           "between" in SYSTEM_PROMPT
+
+
+def test_the_prompt_says_when_the_ranking_is_read_and_that_it_binds():
+    """Fault 4: T3a ranked the SUT fourth and then spent the spare on it."""
+    assert "INCLUDING the actionable service" in SYSTEM_PROMPT
+    assert "the harness rejects that commit" in SYSTEM_PROMPT
+    assert "standing_claim_priority" in SYSTEM_PROMPT
+    assert "an empty `claim_priority` keeps it" in SYSTEM_PROMPT
+
+
+def test_the_prompt_says_what_a_probe_answer_means_for_the_spare():
+    """Fault 5: 8 of 8 probes named the SUT. The prompt described what the
+    tool returns and never what the answer implies."""
+    assert "cannot use the spare after its cut, however exposed it is" \
+        in SYSTEM_PROMPT
+    assert "does not need it either" in SYSTEM_PROMPT
+    assert "as relevant to the\nservices you would keep the spare for" \
+        in SYSTEM_PROMPT.replace("\\\n", "")
+
+
+def test_the_prompt_explains_the_revision_band():
+    assert "p_cut_if_track_revised" in SYSTEM_PROMPT
+    assert "how much that number can change" in SYSTEM_PROMPT
+
+
+def test_the_prompt_says_the_later_steps_execute_the_timing_decision():
+    assert "decided_this_hour" in SYSTEM_PROMPT
+    assert "EXECUTE that decision" in SYSTEM_PROMPT
+    assert "answer `hold`" in SYSTEM_PROMPT
+    assert "attempts_this_hour" in SYSTEM_PROMPT
+    assert "Repeating an avoid set that produced no menu cannot produce one" \
+        in SYSTEM_PROMPT
+
+
+def test_the_constraints_block_says_a_group_can_disconnect_a_site():
+    assert "a group naming all of a site's spans leaves that site unroutable" \
+        in SYSTEM_PROMPT
+    assert "risk_groups[<id>].assets" in SYSTEM_PROMPT
+
+
+def test_the_seven_cost_terms_are_gone():
+    """Every menu in the 2026-09-09 run was eight near-identical candidates;
+    the ordering never separated them (spec 2)."""
+    for term in ("spectrum_used", "max_util", "added_latency", "total_margin",
+                 "services_at_risk", "dropped_traffic"):
+        assert term not in SYSTEM_PROMPT, term
+    assert "incommensurate units" not in SYSTEM_PROMPT
+    assert "spares_needed" in SYSTEM_PROMPT
+    assert "cost_vector" in SYSTEM_PROMPT
+
+
+def test_the_objective_instruction_offers_hold():
+    """T2a t1's objective call, seeing eight spare-charging candidates and an
+    instruction offering only a candidate or `infeasible`, wrote 'I'm
+    choosing the candidate that gets the most value for that single spare'
+    -- after its own timing step had planned a zero-spare reroute."""
+    assert "`hold` to commit nothing this hour" in OBJECTIVE_INSTRUCTION
+
+
+def test_the_removed_bullets_are_actually_removed():
+    assert "horizon_totals" not in SYSTEM_PROMPT
+    assert "non_sut_ineligible_ecar_gbps" not in SYSTEM_PROMPT
+    assert "`services` -- the roster" not in SYSTEM_PROMPT
+    assert "protection posture" not in SYSTEM_PROMPT
+    assert "basis=" not in SYSTEM_PROMPT
+    # restorable_groups SURVIVES -- it is the only view of who shares a
+    # restoring lightpath.
+    assert "restorable_groups" in SYSTEM_PROMPT
+
+
+# test_the_prompt_still_never_states_the_comparison_or_its_answer (brief
+# Step 1) is deliberately not shipped as a separate test: its forbidden-word
+# list ("spend", "hold the spare for", "gold", "T1"/"T2"/"T3", "claimant")
+# is merged into test_the_system_prompt_never_leaks_scoring_internals above,
+# per the brief's own instruction not to ship two overlapping lists.

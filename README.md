@@ -416,12 +416,13 @@ record, not a current-format spec. See "Current wire format" below for a
 same-length, live example against today's trimmed shape.
 
 `horizon_totals` (`eval/agent.py`'s `P_CUT_ENUMERATION_THRESHOLD` neighbor,
-`_horizon_totals` in `observation.py`) is always present now, summed over
-every service with a representative point regardless of what
-`project_observation` trims for display — the two operands (`sut_ecar_gbps`
-against `non_sut_total_ecar_gbps`) every gold rationale in the suite
-compares. Every decision the model submits (timing, constraints, objective)
-also carries a `contested_claim` field: `{"service_id": ..., "expected_
+`_horizon_totals` in `observation.py`) is now historical, as of the
+2026-09-10 decider-allocation-redesign plan: the `Observation` dataclass
+still computes and records it (every trace keeps it), but
+`project_observation` no longer sends it to the model — `restorable_groups`
+is what the prompt describes instead, and it is the field a live capture
+below actually carries. The `contested_claim` field is now on the TIMING
+decision only, not on all three: `{"service_id": ..., "expected_
 capacity_at_risk_gbps": ...}` naming the strongest rival claim it weighed,
 or `null` for "there is none". It is elicited, not scored — see "What to
 read afterwards" in `docs/superpowers/2026-08-29-shared-depot-arm-
@@ -501,45 +502,61 @@ claude-sonnet-5-{0,1,2}.json`; the audit sidecar recording exactly what was
 shown on every one of the 18 calls that produced them is
 `eval/traces/agent-calls.jsonl`.
 
-### Current wire format (2026-09-09, fair-scoring plan)
+### Current wire format (2026-09-10, decider-allocation-redesign plan)
 
 The `D1` trace above is frozen and, per the note under its JSON, now shows a
 stale field set. For a live comparison, this is `tools/probe_episode.py
---dump-prompt t1` run today against `T2a`'s own state
+--dump-prompt t0` run today against `T2a`'s own state
 (`eval/states/t2-jalgaon-s17.json`) — the same `project_observation` payload
-a real `ClaudeDecider` would receive at `t1`, trimmed here to the SUT plus
-its two largest claimants (`d0422`, tied with `d0346` at the same
-`expected_capacity_at_risk_gbps`, is elided; the full payload lists both):
+a real `ClaudeDecider` would receive at `t0`, this episode's first hour
+(chosen over `t1` because `next_issuance` is still populated here — `t1`
+itself is `T2a`'s last issuance, so it comes back `null`), trimmed to the
+SUT plus its two largest claimants (`t1-svc-jalgaon-indore` at 208.5 Gbps
+expected capacity at risk and `t2-claimant-jalgaon-khandwa` at 191.8; the
+full payload also lists the tied `d0346`/`d0422` pair and the tied
+`t1-claimant-jalgaon-dhulia-{fwd,rev}` pair, each member at 60.0, elided
+here):
 
 ```json
 {
   "scenario_id": "T2a", "actionable_service": "t2-svc-jalgaon-nagpur",
-  "hour": "t1", "hours_remaining": 6, "issued_at": "t1",
+  "hour": "t0", "hours_remaining": 7, "issued_at": "t0",
   "exposure": {
-    "t2-svc-jalgaon-nagpur": {"t3": {"hours_ahead": 2, "p_cut": 0.145,
-                              "demand_gbps": 300.0,
-                              "expected_capacity_at_risk_gbps": 43.5}},
-    "t2-claimant-jalgaon-khandwa": {"t3": {"hours_ahead": 2, "p_cut": 0.574,
-                              "demand_gbps": 200.0,
-                              "expected_capacity_at_risk_gbps": 114.8}},
-    "d0346": {"t3": {"hours_ahead": 2, "p_cut": 0.145, "demand_gbps": 100.0,
-                     "expected_capacity_at_risk_gbps": 14.5}}
-  },
-  "horizon_totals": {
-    "t3": {"sut_ecar_gbps": 43.5, "non_sut_ineligible_ecar_gbps": 3731.0,
-           "largest_restorable_group_ecar_gbps": 114.8}
+    "t2-svc-jalgaon-nagpur": {"t3": {"hours_ahead": 3, "p_cut": 0.6,
+      "demand_gbps": 300.0, "expected_capacity_at_risk_gbps": 180.0,
+      "p_cut_if_track_revised": {"revision_radius_km": 90.0, "min": 0.0,
+                                 "max": 0.42, "mean": 0.093}}},
+    "t1-svc-jalgaon-indore": {"t3": {"hours_ahead": 3, "p_cut": 0.695,
+      "demand_gbps": 300.0, "expected_capacity_at_risk_gbps": 208.5,
+      "p_cut_if_track_revised": {"revision_radius_km": 90.0, "min": 0.0,
+                                 "max": 0.414, "mean": 0.091}}},
+    "t2-claimant-jalgaon-khandwa": {"t3": {"hours_ahead": 3, "p_cut": 0.959,
+      "demand_gbps": 200.0, "expected_capacity_at_risk_gbps": 191.8,
+      "p_cut_if_track_revised": {"revision_radius_km": 90.0, "min": 0.005,
+                                 "max": 0.954, "mean": 0.289}}}
   },
   "spares_on_hand": 1,
   "lead_time_hours": {"ip_reroute": 0, "hybrid": 2, "optical_reroute": 2},
-  "risk_group_ids": {"t3": "rg_T2a_t1_t3"},
+  "risk_group_ids": {"t3": "rg_T2a_t0_t3"},
+  "iteration": 0, "last_rejection": null,
+  "actions_taken": [], "spares_spent": 0,
+  "restorable_groups": {"t3": [
+    {"endpoints": ["indore", "jalgaon"], "members": ["t1-svc-jalgaon-indore"],
+     "ecar_gbps": 208.5},
+    {"endpoints": ["jalgaon", "khandwa"],
+     "members": ["t2-claimant-jalgaon-khandwa"], "ecar_gbps": 191.8}
+  ]},
+  "issuance_schedule": ["t0", "t1"],
+  "deadline_hour": {"ip_reroute": "t3", "hybrid": "t1", "optical_reroute": "t1"},
+  "next_issuance": {"hour": "t1"},
+  "standing_claim_priority": [],
   "horizons": ["t3"],
-  "n_services_total": 577,
+  "n_services_total": 580,
   "omitted_services": {
     "p_cut_threshold": 0.005,
     "below_threshold": {"count": 296, "max_p_cut": 0.0,
                         "summed_expected_capacity_at_risk_gbps": 0},
-    "ineligible_for_depot": {"count": 277, "max_p_cut": 0.574,
-                        "summed_expected_capacity_at_risk_gbps": 3731.0}
+    "ineligible_for_depot": {"count": 277}
   }
 }
 ```
@@ -549,14 +566,53 @@ Note what is gone relative to the `D1` example above: no `cones` key, and no
 is the only distance-derived number the model sees now. `horizons` replaces
 `cones` as a plain list of horizon-hour strings. `omitted_services` also now
 splits `below_threshold` (quiet services) from `ineligible_for_depot`
-(exposed but not depot-eligible) rather than D1's single flat bucket — a
-change from an earlier refinement, unrelated to this plan's field trim, kept
-here only because this is a live, trimmed but otherwise unedited capture. The full untrimmed
-payload additionally carries `services` (path-level detail per kept
-service), `restorable_groups`, `issuance_schedule`, `deadline_hour`,
-`iteration`, `last_rejection`, `actions_taken`, and `spares_spent`, all
-omitted above for length the same way the `D1` example omits some of them —
-neither JSON block claims to be the full payload.
+(exposed but not depot-eligible) rather than D1's single flat bucket, and
+`ineligible_for_depot` is reduced further still, to a bare `count` — it no
+longer carries `max_p_cut`/`summed_expected_capacity_at_risk_gbps` the way
+`below_threshold` still does, because nothing in the suite ever keyed a
+decision off those two figures for a bucket of services that cannot draw on
+this depot at all. Relative to the previous (2026-09-09) capture this one
+replaces: no `services` key (the roster left the wire in an earlier task)
+and no `horizon_totals` key (see the note above); every `exposure` row now
+carries a `p_cut_if_track_revised` band while another issuance is still
+scheduled; `next_issuance` and `standing_claim_priority` are new top-level
+fields; and `restorable_groups` is on the wire in place of `horizon_totals`.
+
+Two more keys exist on the wire but not in the JSON above, because they
+appear only on the constraints and objective requests, never on timing:
+`decided_this_hour` (the timing decision already made this hour — its
+`action`, `reasoning`, `contested_claim`, `claim_priority`, and any probe
+answers obtained — so the later steps EXECUTE that decision rather than
+re-deciding it) and `attempts_this_hour` (every avoid set already tried
+this hour, the menu status and size it produced, and what was answered,
+so a repeated attempt with no new information is visible as such). A
+third, `risk_groups` (the named groups' own asset-level contents, needed to
+name `risk_groups[<id>].assets` in `avoid`), appears on the constraints
+request only — the timing and objective steps have no use for it and it is
+large. Neither JSON block on this page claims to be the full payload.
+
+**The decidable-hours rule.** The decider is not called at every hour in an
+episode's `hours`, only at one where a decision could have content: a spare
+is still on hand at `depot_site`, the actionable service carries nonzero
+`p_cut` at some horizon, and this hour carries an issuance of its own in
+`issuance_schedule` (`runner.is_decidable`'s own docstring gives the full
+reasoning). On the shipped suite this is exactly the issuance hours, and it
+applies identically to every arm — agent and baseline alike — so
+`EpisodeTrace.tool_calls` stays comparable across them: the T episodes drop
+from 8 timing calls to 2, D1 from 2 to 1. A skipped hour still appears in
+the trace — the harness records a `wait` with `"skipped": true` and never
+projects an observation or calls the decider at all — and the viewer marks
+it accordingly (see "Viewing a run" below).
+
+**The probe-nudge note.** The probe's "what the answer means for the
+spare" text (`_SYSTEM_PROMPT_TAIL` in `agent.py`) carries three sentences.
+The first two state semantics: what a `full_restore_candidates`/
+`min_spares_needed_by_site` answer implies for whether a service can use
+the spare at all. The third — "The answer is as relevant to the services
+you would keep the spare for as to the one you can act on." — is a
+deliberate nudge, kept as an experiment for the first measured run made
+after this change and reported as such either way; see spec 2 of
+`docs/superpowers/specs/2026-09-10-decider-allocation-redesign-design.md`.
 
 ## Viewing a run
 
@@ -568,7 +624,11 @@ episode: the exposure map, the candidate menu, and "What it said" (each
 decision's reasoning, alongside its `contested_claim` when the model
 recorded one). The per-hour gold-vs-agent strip reads each hour's
 `gold_spare_action` (`spend` or `conserve`) against whether the committed
-action actually spent a physical spare pair.
+action actually spent a physical spare pair. An hour the decidable-hours
+rule skipped (see "Current wire format" above) renders with its own
+`skipped` marker in "What it said" instead of a reasoning block — the
+harness recorded a `wait` there without ever calling the decider, so there
+is no reasoning to show.
 
 ## Repository layout
 
