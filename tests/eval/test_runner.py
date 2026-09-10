@@ -1768,4 +1768,101 @@ def test_post_cut_restoration_replay(
         f"got {outcome!r} (record: {trace2.restorations[0]!r})")
 
 
+class _CarriedStateDecider:
+    """Acts once at t0 and records the observation each of the three
+    decisions was handed, so a test can assert the constraints and objective
+    steps were told what the timing step decided.
+
+    Runs exactly TWO iterations of the t0 hour: the first declares
+    `infeasible` (which loops back for new constraints -- the one objective
+    answer that does), the second holds (which ends the hour). That is what
+    puts a COMPLETED attempt record in front of the second iteration."""
+
+    name = "carried-state"
+
+    def __init__(self):
+        self.timing_obs = []
+        self.constraint_obs = []
+        self.objective_obs = []
+
+    async def timing(self, obs):
+        self.timing_obs.append(obs)
+        return TimingDecision(
+            "act" if obs.hour == "t0" else "wait",
+            "carried-state: act once at t0",
+            claim_priority=("storm-svc-1",))
+
+    async def constraints(self, obs, unconstrained_menu=None):
+        self.constraint_obs.append(obs)
+        if obs.iteration == 0:
+            return ConstraintDecision(
+                avoid={"risk_groups": sorted(obs.risk_group_ids.values())},
+                reasoning="carried-state: the whole group first")
+        return ConstraintDecision(avoid={},
+                                  reasoning="carried-state: unconstrained")
+
+    async def objective(self, obs, menu):
+        self.objective_obs.append(obs)
+        if obs.iteration == 0:
+            return ObjectiveDecision("infeasible", None,
+                                     "carried-state: loop once")
+        return ObjectiveDecision("hold", None, "carried-state: hold")
+
+
+def test_the_constraints_step_is_told_what_the_timing_step_decided(
+    tmp_path, loaded_state_path, local_server_command, local_server_env,
+):
+    """Fault 3 (spec 1): ClaudeDecider is stateless by design, so the timing
+    decision has to travel on the observation or the constraints call cannot
+    execute it."""
+    decider = _CarriedStateDecider()
+    asyncio.run(_run(_scenario(tmp_path), decider,
+                     loaded_state_path, local_server_command, local_server_env))
+    assert decider.constraint_obs, "the rollout never reached constraints"
+    carried = decider.constraint_obs[0].decided_this_hour
+    assert carried["timing"]["action"] == "act"
+    assert carried["timing"]["claim_priority"] == ["storm-svc-1"]
+    assert carried["probe_answers"] == []
+    # The same object reaches the objective step of the same iteration.
+    assert decider.objective_obs[0].decided_this_hour == carried
+    # ...and the timing step itself was never handed one.
+    assert decider.timing_obs[0].decided_this_hour is None
+
+
+def test_a_second_iteration_is_told_what_the_first_one_tried(
+    tmp_path, loaded_state_path, local_server_command, local_server_env,
+):
+    """D1 spent ten iterations on ten identical avoid sets, each objective
+    saying 'loosen next time' and each fresh constraints call repeating the
+    same avoid. Nothing told it what it had already tried."""
+    decider = _CarriedStateDecider()
+    asyncio.run(_run(_scenario(tmp_path), decider,
+                     loaded_state_path, local_server_command, local_server_env))
+    assert decider.constraint_obs[0].attempts_this_hour == (), (
+        "the first iteration of an hour has tried nothing yet")
+    assert len(decider.constraint_obs) >= 2, (
+        "this test needs a second iteration; see the note below")
+    tried = decider.constraint_obs[1].attempts_this_hour
+    assert len(tried) == 1
+    assert set(tried[0]) == {"avoid", "menu_status", "menu_size", "choice",
+                             "outcome"}
+    assert tried[0]["avoid"] == {
+        "risk_groups": sorted(decider.constraint_obs[0].risk_group_ids.values())}
+    assert tried[0]["choice"] == "infeasible"
+    assert tried[0]["outcome"] == "declared_infeasible"
+    # The same record reaches the objective step of that second iteration.
+    assert decider.objective_obs[1].attempts_this_hour == tried
+
+
+def test_the_standing_ranking_carries_across_hours(
+    tmp_path, loaded_state_path, local_server_command, local_server_env,
+):
+    decider = _CarriedStateDecider()
+    asyncio.run(_run(_scenario(tmp_path), decider,
+                     loaded_state_path, local_server_command, local_server_env))
+    assert decider.timing_obs[0].standing_claim_priority == ()
+    assert len(decider.timing_obs) > 1, "SMOKE must reach a second hour"
+    assert decider.timing_obs[1].standing_claim_priority == ("storm-svc-1",)
+
+
 

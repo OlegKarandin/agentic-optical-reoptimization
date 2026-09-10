@@ -243,10 +243,32 @@ class Observation:
     # it. Defaulted to None for the hand-built Observations in
     # tests/eval/test_agent.py and test_baseline.py.
     next_issuance: dict | None = None
+    # The last non-empty `claim_priority` stated anywhere in this episode, or
+    # (). An empty `claim_priority` on a later timing decision KEEPS this one
+    # rather than clearing it, and `replay.restore_after_cuts` reads THIS at
+    # a cut hour -- not that hour's own decision, which under the
+    # decidable-hours rule may not exist at all.
+    standing_claim_priority: tuple[str, ...] = ()
+    # On the constraints and objective observations only: the timing decision
+    # already made THIS HOUR, with the probe answers obtained alongside it.
+    # `ClaudeDecider` is stateless by construction (one fresh single-turn
+    # request per decision), so this is the only channel by which the step
+    # that EXECUTES a decision can see the decision.  None at the timing
+    # step, and omitted from `to_dict()` there -- an explicit null would read
+    # as "you have already decided nothing this hour".
+    decided_this_hour: dict | None = None
+    # On the constraints and objective observations only: one entry per
+    # COMPLETED iteration this hour -- the avoid set tried, the menu it
+    # produced, and what was answered. Supersedes `last_rejection` as the
+    # carrier of iteration history (`last_rejection` stays, for the ledger
+    # and validation detail a rejection carries). D1 spent ten iterations on
+    # ten identical avoid sets because nothing told it what it had already
+    # tried.
+    attempts_this_hour: tuple[dict, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-serializable form, for the trace and for step 6's prompt."""
-        return {
+        payload = {
             "scenario_id": self.scenario_id,
             # "service under test" is eval-harness vocabulary; on the wire it
             # reads as "this is the important one", which is the framing the
@@ -280,7 +302,17 @@ class Observation:
             "issuance_schedule": list(self.issuance_schedule),
             "deadline_hour": self.deadline_hour,
             "next_issuance": self.next_issuance,
+            "standing_claim_priority": list(self.standing_claim_priority),
         }
+        # Present only where the harness actually supplied them, so the
+        # timing payload never carries an empty shell (see the field
+        # comments above).
+        if self.decided_this_hour is not None:
+            payload["decided_this_hour"] = self.decided_this_hour
+        if self.attempts_this_hour:
+            payload["attempts_this_hour"] = [dict(a)
+                                             for a in self.attempts_this_hour]
+        return payload
 
 
 def build_observation(
@@ -296,6 +328,9 @@ def build_observation(
     endpoint_sites: dict[str, tuple[str, str]] | None = None,
     depot_site: str | None = None,
     protection_spans: dict[str, tuple[Segment, ...]] | None = None,
+    standing_claim_priority: tuple[str, ...] = (),
+    decided_this_hour: dict | None = None,
+    attempts_this_hour: tuple[dict, ...] = (),
 ) -> Observation:
     """The observation for one hour. `service_spans` maps a service id to the
     spans of its working path that the event's own filter admits -- the
@@ -323,7 +358,14 @@ def build_observation(
     SUT's own risk answered T1 2/2 by a bare threshold. Defaulted to None so
     every existing caller with no protection geometry to offer keeps
     constructing exactly as before (`p_cut_service(spans, None, ...)` is
-    `p_cut_region(spans, ...)`, unchanged)."""
+    `p_cut_region(spans, ...)`, unchanged).
+
+    `standing_claim_priority`, `decided_this_hour` and `attempts_this_hour`
+    are runner-supplied facts, not derived from the scenario -- `run_episode`
+    tracks the standing ranking and this hour's decision/iteration history
+    and passes them straight through so the constraints and objective steps
+    of one iteration can see what the timing step (and any earlier iteration
+    this hour) already decided."""
     issuance = latest_issuance(scenario, hour)
     hour_index = scenario.hours.index(hour)
 
@@ -423,4 +465,7 @@ def build_observation(
         issuance_schedule=issuance_schedule,
         deadline_hour=deadline_hour,
         next_issuance=next_issuance,
+        standing_claim_priority=tuple(standing_claim_priority),
+        decided_this_hour=decided_this_hour,
+        attempts_this_hour=tuple(attempts_this_hour),
     )

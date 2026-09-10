@@ -368,3 +368,38 @@ def test_next_issuance_names_the_hour_a_revision_is_still_coming(
         later = build_observation(scenario, hour, service_spans={},
                                   services=(), spares_on_hand=1)
         assert later.next_issuance is None, hour
+
+
+def test_a_timing_observation_carries_no_decision_shell(
+        example_scenario_yaml, write_scenario):
+    """`decided_this_hour: null` at the timing step would read as 'you have
+    already decided nothing this hour'. Absent means not yet asked."""
+    scenario = load_scenario(write_scenario(example_scenario_yaml))
+    payload = build_observation(scenario, "t0", service_spans={}, services=(),
+                                spares_on_hand=1).to_dict()
+    assert "decided_this_hour" not in payload
+    assert "attempts_this_hour" not in payload
+    assert payload["standing_claim_priority"] == []
+
+
+def test_the_carried_decision_and_attempts_survive_to_dict(
+        example_scenario_yaml, write_scenario):
+    scenario = load_scenario(write_scenario(example_scenario_yaml))
+    decided = {"timing": {"action": "act", "reasoning": "spend",
+                          "contested_claim": None, "claim_priority": ["s"]},
+               "probe_answers": [{"service_id": "s",
+                                  "risk_group_id": "rg_ref",
+                                  "status": "ok",
+                                  "full_restore_candidates": 3,
+                                  "min_spares_needed_by_site": {"satna": 1},
+                                  "levers": ["optical_reroute"]}]}
+    attempts = ({"avoid": {"risk_groups": ["rg_ref"]},
+                 "menu_status": "no_solution", "menu_size": 0,
+                 "choice": "infeasible", "outcome": "declared_infeasible"},)
+    payload = build_observation(
+        scenario, "t0", service_spans={}, services=(), spares_on_hand=1,
+        decided_this_hour=decided, attempts_this_hour=attempts,
+        standing_claim_priority=("c", "s")).to_dict()
+    assert payload["decided_this_hour"] == decided
+    assert payload["attempts_this_hour"] == list(attempts)
+    assert payload["standing_claim_priority"] == ["c", "s"]

@@ -117,6 +117,31 @@ def action_payloads(actions, hours=()) -> tuple[dict, ...]:
                  for a in actions)
 
 
+def probe_answers(records) -> list[dict]:
+    """The ACCEPTED probe answers from one hour's `ProbeBinding.records`,
+    flattened into what `decided_this_hour.probe_answers` shows: the question
+    asked and the answer given, one dict each.
+
+    Rejected probes are dropped on purpose -- a probe the harness refused
+    carries no information about the network, only about the model's own
+    mistake, and `last_rejection`/the retry loop already handle that."""
+    return [{"service_id": r["service_id"],
+             "risk_group_id": r["risk_group_id"], **r["answer"]}
+            for r in records if r.get("answer") is not None]
+
+
+def attempt_records(iterations) -> tuple[dict, ...]:
+    """One entry per COMPLETED iteration of this hour's decision loop. An
+    iteration in progress (the one whose observation this is) has no
+    `outcome` yet and is excluded."""
+    return tuple({"avoid": step["constraints"]["avoid"],
+                  "menu_status": step["menu_status"],
+                  "menu_size": step["menu_size"],
+                  "choice": step["objective"]["choice"],
+                  "outcome": step["outcome"]}
+                 for step in iterations if "outcome" in step)
+
+
 def unconstrained_menu_projection(menu: dict,
                                   oms_nodes: dict | None = None) -> dict:
     """What decision 2 is shown of the menu it is about to reshape.
@@ -841,6 +866,10 @@ async def run_episode(
     affected_by_hour: dict[str, tuple[str, ...]] = {}
     all_restorations: list[dict] = []
     terminal_status = "converged"
+    # The last non-empty claim_priority stated this episode. Carried across
+    # hours, and read by the post-cut replay at a cut hour -- which, under
+    # the decidable-hours rule, may have no decision of its own.
+    standing_claim_priority: tuple[str, ...] = ()
 
     for hour_index, hour in enumerate(scenario.hours):
         record: dict = {"hour": hour, "iterations": [], "rejections": []}
@@ -889,7 +918,8 @@ async def run_episode(
                           spares_spent=ledger.spent,
                           endpoint_sites=geometry.endpoint_sites,
                           depot_site=scenario.depot_site,
-                          protection_spans=geometry.protection_cuttable_spans)
+                          protection_spans=geometry.protection_cuttable_spans,
+                          standing_claim_priority=standing_claim_priority)
 
         issuance = latest_issuance(scenario, hour)
         rg_ids = await _define_horizon_risk_groups(
@@ -934,6 +964,11 @@ async def run_episode(
         probe.begin("timing")
         timing = await decider.timing(obs)
         record["timing"] = timing.to_dict()
+        # An empty ranking KEEPS the standing one (spec 6.3): "no change of
+        # opinion", not "no opinion". Only a non-empty statement replaces it.
+        if timing.claim_priority:
+            standing_claim_priority = tuple(timing.claim_priority)
+        record["standing_claim_priority"] = list(standing_claim_priority)
         # What the DECIDER was shown, as against the ground truth above. Read
         # off the decider rather than recomputed: the projection is
         # decider-owned and a recomputation would silently diverge the day it
@@ -967,6 +1002,12 @@ async def run_episode(
                     last_rejection=last_rejection,
                     **{**obs_kwargs, "spares_on_hand": ledger.on_hand,
                        "spares_spent": ledger.spent,
+                       "standing_claim_priority": standing_claim_priority,
+                       "decided_this_hour": {
+                           "timing": timing.to_dict(),
+                           "probe_answers": probe_answers(probe.records)},
+                       "attempts_this_hour": attempt_records(
+                           record["iterations"]),
                        "actions_taken": action_payloads(
                            actions, hours=scenario.hours)})
                 probe.begin("constraints")
