@@ -406,6 +406,53 @@ Full derivation, including the live geometry search each pair needed
 because the solver's leg assignment inverted the design spec's own GIS
 pre-check twice (once for T2, once for T3): `docs/superpowers/plans/notes/2026-09-06-t2-t3-authoring.md`.
 
+### `ConstraintDecision.basis`/`.level` became derived, downgrading `ForecastBlindBaseline`'s own commit-time check (2026-09-11)
+
+The decider-allocation-redesign plan (Task 1, spec §6.4) made
+`ConstraintDecision.basis`/`.level` DERIVED, read-only properties from the
+`avoid` set (`basis = "risk_group" if avoid.get("risk_groups") else
+"physical"`, `level` mirrors it with `"link"`), rather than independently
+settable fields on the wire. This is legitimate and deliberate: every real
+call site already passed the same posture, the toy topology carries no
+static SRLGs, and the four independent wire fields bought a model four ways
+to break its own reroute and no way to improve it. It also **unifies two
+call sites that disagreed before it**: `oracle.py`'s `spend_decider` already
+avoided its decision-hour risk group under `basis="risk_group"`/
+`level="risk_group"` by hand, so the reroute stays clear of the full
+forecast cone; `baseline.py`'s `ForecastBlindBaseline.constraints` hardcoded
+`basis="physical", level="link"` UNCONDITIONALLY for its own commit-time
+disjointness check, regardless of whether its `avoid` named a risk group --
+its own deliberate prior choice, since this toy topology has no static
+SRLGs to check physically against otherwise.
+
+**Concrete consequence, confirmed live for both the `SMOKE` and
+`EXPOSURE_SMOKE` test fixtures:** `ForecastBlindBaseline`'s `avoid` ALWAYS
+names the currently-exposed risk group while the service under test is
+exposed, so its commit-time check now ALWAYS runs at
+`basis="risk_group"`/`level="risk_group"` instead of the old unconditional
+`physical`/`link`. `storm-svc-1`'s cheapest reroute into `allahabad` funnels
+through its own static protection span `oms_jhansi_allahabad` (BURIED, so
+no storm-derived risk group on this topology can ever cover it); before
+Task 1 the unconditional physical/link check caught the resulting
+working/protection collision as a `disjointness_collapse` and forced a
+widen-and-retry onto a genuinely disjoint route. Now `oms_jhansi_allahabad`
+sits outside `avoid["risk_groups"]`, `validate_plan` no longer flags it, and
+the first candidate commits AS-IS with
+`collides_with_protection: {"collides": True, "oms_shared_with_protection":
+["oms_jhansi_allahabad"]}` still on it -- `ForecastBlindBaseline`'s own
+commit is a real physical collision, uncaught by its own commit-time check.
+
+**What still guards correctness:** this is a downgraded hard gate, not a
+silent blind spot. `route_service` still computes `collides_with_protection`
+independently of `validate_plan`'s basis, and it still ships in the menu the
+objective step sees -- a visible-but-optional signal a smarter decider can
+act on, where before Task 1 it was an enforced, unconditional gate every
+decider got for free. Guarded by
+`tests/eval/test_runner.py::_WidensOnDisjointnessRejection`'s docstring
+(the HISTORICAL/CURRENT derivation) and
+`test_recording_costs_no_extra_server_calls`, which assert the collision
+fact is still present on the committed SMOKE/EXPOSURE_SMOKE candidate.
+
 ---
 
 ## Build order

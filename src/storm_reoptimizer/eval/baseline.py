@@ -117,11 +117,16 @@ class ForecastBlindBaseline:
         return ConstraintDecision(
             avoid={"risk_groups": risk_groups},
             reasoning=f"{self.name}: avoid the currently-exposed risk group "
-                      f"only. The protection posture is no longer stated -- "
-                      f"ConstraintDecision derives it from the avoid set "
-                      f"(protected=False, and risk_group basis exactly when "
-                      f"a risk group is named), which is the only posture "
-                      f"this topology and plan translator support.")
+                      f"only. Neither the protection posture nor the basis "
+                      f"is stated any more -- ConstraintDecision derives all "
+                      f"four (protected=False, best_effort=False, which is "
+                      f"the only posture this plan translator supports; "
+                      f"basis/level risk_group exactly when a risk group is "
+                      f"named, physical/link otherwise) from the avoid set "
+                      f"alone (spec 6.4). This policy's avoid always names "
+                      f"the currently-exposed risk group when one applies, "
+                      f"so its own commit-time disjointness check now runs "
+                      f"at risk_group granularity, not physical-link.")
 
     async def objective(self, obs: Observation, menu: dict) -> ObjectiveDecision:
         candidates = menu.get("candidates") or []
