@@ -344,9 +344,19 @@ def ranking_conflict(candidate: dict, *, standing: tuple[str, ...],
     schedules. In fact `act` plus a spare-charging candidate removes the
     spare from the depot before the ranking is ever read (the replay reads
     it only after a realized cut, with whatever REMAINS). This is the one
-    place the two statements can be made consistent, and the consistent
-    answers -- `hold` at the objective step, or a ranking that funds the
-    actionable service -- both remain available.
+    place the two statements can be made consistent. Only ONE of the
+    consistent answers is still available by the time it fires, and the
+    rejection's own `note` says which. `hold` at the objective step remains
+    available, and so does a candidate that charges `depot_site` nothing (the
+    second early return below). A ranking that funds the actionable service
+    does NOT: `claim_priority` is written only at the timing call
+    (runner.py:1089-1090), above the iteration loop, and a conflict
+    `continue`s to the TOP of that loop -- the constraints step. T3b run B
+    seeds 1 and 2 both diagnosed this correctly and held (2026-09-12 failure
+    analysis, finding 8). The structural half of the fix is upstream: a
+    ranking is now required at EVERY timing call (agent._check_named_services),
+    so a stale ordering is at least restated deliberately rather than
+    inherited by default.
 
     The FUNDED PREFIX is the first `spares_on_hand` entries of the standing
     ranking: exactly the services the depot could still pay for if a cut
@@ -363,7 +373,19 @@ def ranking_conflict(candidate: dict, *, standing: tuple[str, ...],
     funded = list(standing[:spares_on_hand])
     if actionable in funded:
         return None
-    return {"type": "ranking_conflict", "funded_prefix": funded}
+    return {
+        "type": "ranking_conflict",
+        "funded_prefix": funded,
+        "note": (
+            "The standing ranking cannot be changed this hour: "
+            "`claim_priority` is written only by the timing decision, and "
+            "this rejection returns to the constraints step, not to timing. "
+            "Two exits remain. Take a candidate that charges nothing at the "
+            "depot site -- an ip_reroute, or a lightpath whose endpoints are "
+            "both away from the depot -- which takes nothing the ranking is "
+            "about; or answer `hold`. If there is a later timing decision in "
+            "this episode, state the ordering you want there."),
+    }
 
 
 SKIPPED_TIMING = {"action": "wait", "reasoning": "skipped: nothing decidable",

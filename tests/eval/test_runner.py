@@ -1988,8 +1988,8 @@ def test_a_spare_charging_commit_outside_the_funded_prefix_is_refused():
     rejection = runner.ranking_conflict(
         _DEPOT_CANDIDATE, standing=("claimant-a", "storm-svc-1"),
         actionable="storm-svc-1", spares_on_hand=1, ledger=_LEDGER)
-    assert rejection == {"type": "ranking_conflict",
-                         "funded_prefix": ["claimant-a"]}
+    assert rejection["type"] == "ranking_conflict"
+    assert rejection["funded_prefix"] == ["claimant-a"]
 
 
 def test_the_funded_prefix_is_as_long_as_the_depot_has_spares():
@@ -2024,5 +2024,37 @@ def test_a_candidate_charging_only_a_non_depot_site_never_conflicts():
     assert runner.ranking_conflict(
         candidate, standing=("claimant-a", "storm-svc-1"),
         actionable="storm-svc-1", spares_on_hand=1, ledger=ledger) is None
+
+
+def test_the_ranking_conflict_rejection_says_which_exits_remain():
+    """The rule's docstring used to name two escapes and the loop offers one.
+    `claim_priority` is written only at the timing call (runner.py:1089-1090),
+    above the iteration loop; the rejection continues to the TOP of that loop,
+    which is the constraints step. T3b run B seeds 1 and 2 both worked this
+    out for themselves and held (2026-09-12 failure analysis, finding 8)."""
+    ledger = _Ledger(oms_nodes={"oms_new": ["jalgaon", "khandwa"]},
+                     depot_site="jalgaon")
+    candidate = {"lever": "optical_reroute", "reused_lightpaths": [],
+                 "new_lightpaths": [{"oms_sequence": ["oms_new"]}]}
+    conflict = runner.ranking_conflict(
+        candidate, standing=("t3-claimant-jalgaon-buldhana", "t3-svc"),
+        actionable="t3-svc", spares_on_hand=1, ledger=ledger)
+    assert conflict["type"] == "ranking_conflict"
+    assert conflict["funded_prefix"] == ["t3-claimant-jalgaon-buldhana"]
+    note = conflict["note"]
+    assert "cannot be changed this hour" in note
+    assert "`hold`" in note
+    assert "charges nothing at the depot site" in note
+
+
+def test_a_candidate_charging_the_depot_nothing_still_never_conflicts():
+    """The rule's second early return, unchanged -- and the exit the new note
+    points at."""
+    ledger = _Ledger(oms_nodes={}, depot_site="jalgaon")
+    assert runner.ranking_conflict(
+        {"lever": "ip_reroute", "reused_lightpaths": ["lp"],
+         "new_lightpaths": []},
+        standing=("someone-else",), actionable="t3-svc",
+        spares_on_hand=1, ledger=ledger) is None
 
 
