@@ -736,14 +736,26 @@ class ClaudeDecider:
     def _check_named_services(decision, payload, tool_name) -> None:
         """Every service id a decision names must be one the model was
         actually shown -- `contested_claim.service_id`, and every id in
-        `claim_priority`.
+        `claim_priority` -- and every id an `avoid` names must be one this
+        observation carries.
 
         Same class of guard as the hallucinated risk-group id that burned 3 of
         5 iterations in a real T3a rollout (control-arm findings, root cause
         #3): the generated JSON disagreeing with the payload it was generated
         from. It rides the existing MAX_ATTEMPTS retry loop rather than a new
         mechanism -- from_dict cannot do this because it never sees the
-        observation."""
+        observation.
+
+        The `avoid` half also rejects an avoid that binds NOTHING, and that
+        forbids a legitimate answer: "I judge no constraint is needed here."
+        The trade is deliberate. A vacuous avoid is not recorded as that
+        judgement -- `route_service` returns the full menu including the
+        service's own current path as a zero-spare `ip_reroute`, the objective
+        step takes it, and the trace shows an inert commit, which reads as an
+        action rather than as a decision not to act (D1 run B seeds 1 and 2,
+        2026-09-12 failure analysis, finding 2). The same answer remains
+        expressible one step later as `hold` or `infeasible` at the objective
+        step, which is where it is RECORDED as a decision."""
         claim = getattr(decision, "contested_claim", None)
         if claim is not None and claim["service_id"] not in payload["exposure"]:
             raise DecisionError(
@@ -764,6 +776,45 @@ class ClaudeDecider:
                 f"standing yet, so there is none to keep. State an ordering "
                 f"of the services shown -- most deserving of this depot's "
                 f"spares first, INCLUDING the actionable service.")
+        if tool_name == CONSTRAINT_TOOL:
+            known_assets = {row["asset_id"]
+                            for group in payload.get("risk_groups") or ()
+                            for row in group.get("assets") or ()}
+            known_groups = {gid for gid in
+                            (payload.get("risk_group_ids") or {}).values()
+                            if gid}
+            if not known_assets and not known_groups:
+                # Nothing was shown that an avoid could legally name. Not
+                # reachable on the shipped suite -- a decidable hour always
+                # has a risk group defined for its exposed horizon -- but
+                # three rejected attempts kill a rollout, so never trap a
+                # model with an unanswerable request.
+                return
+            avoid = getattr(decision, "avoid", None) or {}
+            for asset in avoid.get("assets") or ():
+                if asset not in known_assets:
+                    raise DecisionError(
+                        f"{tool_name}: `avoid.assets` names {asset!r}, which "
+                        f"is not an `asset_id` in any entry of this "
+                        f"observation's `risk_groups`. Name only assets you "
+                        f"were shown.")
+            for group_id in avoid.get("risk_groups") or ():
+                if group_id not in known_groups:
+                    raise DecisionError(
+                        f"{tool_name}: `avoid.risk_groups` names "
+                        f"{group_id!r}, which is not one of this "
+                        f"observation's `risk_group_ids`. Name only groups "
+                        f"you were shown.")
+            if not (avoid.get("assets") or avoid.get("risk_groups")):
+                raise DecisionError(
+                    f"{tool_name}: `avoid` names no asset and no risk group, "
+                    f"so it binds nothing -- `route_service` would return the "
+                    f"menu it returns with no constraint at all, including "
+                    f"this service's CURRENT path as a zero-cost candidate. "
+                    f"Name the assets or the group the reroute must route "
+                    f"around. If your judgement is that no reroute is worth "
+                    f"making, answer `hold` at the objective step, where that "
+                    f"is recorded as a decision.")
 
     async def _decide(self, tool_name, decision_cls, obs, payload, user_content):
         """One decision, with up to MAX_ATTEMPTS self-correction rounds and

@@ -19,8 +19,9 @@ from storm_reoptimizer.eval.agent import (
 )
 from storm_reoptimizer.eval.baseline import ForecastBlindBaseline
 from storm_reoptimizer.eval.decisions import (
-    CONSTRAINT_JSON_SCHEMA, DecisionError, OBJECTIVE_JSON_SCHEMA,
-    TIMING_JSON_SCHEMA, TimingDecision,
+    CONSTRAINT_JSON_SCHEMA, ConstraintDecision, DecisionError,
+    OBJECTIVE_JSON_SCHEMA, ObjectiveDecision, TIMING_JSON_SCHEMA,
+    TimingDecision,
 )
 from storm_reoptimizer.eval.observation import Observation
 from storm_reoptimizer.eval.probe import (
@@ -1403,7 +1404,7 @@ def test_the_decider_shows_the_groups_contents_at_constraints_only():
         _response(TIMING_TOOL, {"reasoning": "r", "action": "act",
                                 "contested_claim": None,
                                 "claim_priority": ["storm-svc-1"]}),
-        _response(CONSTRAINT_TOOL, {"reasoning": "r", "avoid": {}}),
+        _response(CONSTRAINT_TOOL, {"reasoning": "r", "avoid": {"risk_groups": ["rg_T3a_t1_t3"]}}),
         _response(OBJECTIVE_TOOL, {"reasoning": "r", "choice": "hold"}))
     obs = dataclasses.replace(_wide_observation(), risk_group_assets=(
         {"horizon": "t3", "assets": []},))
@@ -1577,3 +1578,78 @@ def test_the_constraints_paragraph_describes_the_real_risk_group_shape():
     has never existed on the wire."""
     assert "risk_groups[<id>]" not in SYSTEM_PROMPT
     assert "`risk_group_id`" in SYSTEM_PROMPT
+
+
+def _constraint_check(avoid, *, obs=None):
+    """Run the guard the way `_decide` does: a real ConstraintDecision plus
+    the constraints step's own projection."""
+    obs = obs if obs is not None else _obs_with_groups(others=CLAIMANTS)
+    payload = project_observation(obs, include_risk_group_assets=True)
+    decision = ConstraintDecision(avoid=avoid, reasoning="r")
+    ClaudeDecider._check_named_services(decision, payload, CONSTRAINT_TOOL)
+
+
+@pytest.mark.parametrize("avoid", [
+    {},
+    {"risk_groups": []},
+    {"assets": []},
+    {"assets": [], "risk_groups": []},
+])
+def test_an_avoid_that_binds_nothing_is_rejected(avoid):
+    """D1 run B seeds 1 and 2: the reasoning named the right eight fibres, the
+    payload bound nothing, route_service returned the full menu including the
+    current path as a zero-spare ip_reroute, and the commit was inert
+    (2026-09-12 failure analysis, finding 2)."""
+    with pytest.raises(DecisionError, match="binds nothing"):
+        _constraint_check(avoid)
+
+
+def test_an_empty_string_risk_group_id_is_rejected_as_an_unknown_id():
+    """Seed 2's literal payload. It is the hallucinated-id case the guard's
+    own docstring already names, walking through the one field it skipped."""
+    with pytest.raises(DecisionError, match="risk_groups"):
+        _constraint_check({"risk_groups": [""]})
+
+
+def test_an_unknown_asset_id_is_rejected_even_beside_a_real_one():
+    with pytest.raises(DecisionError, match="bogus"):
+        _constraint_check({"assets": ["fiber_satna_rewa_0", "bogus"]})
+
+
+def test_a_narrow_avoid_naming_real_assets_passes():
+    _constraint_check({"assets": ["fiber_satna_rewa_0",
+                                  "fiber_satna_jhansi_0"]})
+
+
+def test_a_whole_group_avoid_naming_a_real_group_passes():
+    _constraint_check({"risk_groups": ["rg_T3a_t1_t3"]})
+
+
+def test_a_mixed_avoid_naming_a_real_asset_and_a_real_group_passes():
+    """decisions.ConstraintDecision's own docstring documents the mixed avoid
+    as legal -- the server unions both halves before build_layered_graph sees
+    them -- so the guard must not reject it either."""
+    _constraint_check({"assets": ["fiber_satna_rewa_0"],
+                       "risk_groups": ["rg_T3a_t1_t3"]})
+
+
+def test_the_guard_does_not_trap_a_model_with_nothing_to_name():
+    """An observation carrying neither asset rows nor risk-group ids gives the
+    model no legal avoid to state, and three rejected attempts would kill the
+    rollout. Unreachable in the shipped suite (a decidable hour always has a
+    group defined for its exposed horizon), but a trap is a trap."""
+    bare = dataclasses.replace(_obs(), risk_group_ids={},
+                               risk_group_assets=())
+    _constraint_check({}, obs=bare)
+
+
+def test_the_avoid_guard_does_not_fire_on_the_other_two_decisions():
+    payload = project_observation(_obs_with_groups(), include_risk_group_assets=True)
+    ClaudeDecider._check_named_services(
+        TimingDecision.from_dict(
+            {"reasoning": "r", "action": "wait",
+             "claim_priority": ["storm-svc-1"]}),
+        payload, TIMING_TOOL)
+    ClaudeDecider._check_named_services(
+        ObjectiveDecision.from_dict({"reasoning": "r", "choice": "hold"}),
+        payload, OBJECTIVE_TOOL)
