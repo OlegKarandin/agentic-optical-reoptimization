@@ -407,11 +407,12 @@ storm makes one, happens at a horizon hour. At that hour you give a timing \
 decision first; the cut is injected after it; the harness then restores \
 the services the cut dropped, in the ranking in force at that moment, with \
 whatever spares REMAIN, each restoration effective after its lever's lead \
-time. The ranking in force is the last one you stated: \
-`standing_claim_priority` shows it, and an empty `claim_priority` keeps \
-it. Ranking another service above the actionable one and then committing \
-the depot's last spare to the actionable one is a contradiction, and the \
-harness rejects that commit.
+time. The ranking in force is the last one you stated, and \
+`standing_claim_priority` shows it. State a `claim_priority` at EVERY timing \
+decision -- restate the standing one unchanged if it is still your ordering; \
+an empty list is rejected. Ranking another service above the actionable one \
+and then committing the depot's last spare to the actionable one is a \
+contradiction, and the harness rejects that commit.
 - `actions_taken` and `spares_spent` -- what YOU have already committed \
 earlier in this episode: per action its hour, its lever, the spare pairs it \
 cost, the `avoid` set it was routed under, and `effective_at_hour` -- the \
@@ -773,13 +774,25 @@ class ClaudeDecider:
                     f"not in this observation's `exposure`. Name only "
                     f"services you were shown.")
         if (tool_name == TIMING_TOOL
-                and not getattr(decision, "claim_priority", ())
-                and not payload.get("standing_claim_priority")):
+                and not getattr(decision, "claim_priority", ())):
+            # Unconditional since 2026-09-15. It used to fire only when
+            # nothing was standing, which made restating nothing FREE at
+            # every hour after the first and silently inherited the previous
+            # hour's ordering -- and `replay.restore_after_cuts` then enforces
+            # whichever ordering is standing at the cut (2026-09-12 failure
+            # analysis, finding 9). Mechanics only in this message: telling
+            # the model WHY its ordering might have moved is a nudge, and
+            # nudges are measured arms, not bug fixes (design 2.1).
+            standing = list(payload.get("standing_claim_priority") or ())
             raise DecisionError(
-                f"{tool_name}: `claim_priority` is empty and no ranking is "
-                f"standing yet, so there is none to keep. State an ordering "
-                f"of the services shown -- most deserving of this depot's "
-                f"spares first, INCLUDING the actionable service.")
+                f"{tool_name}: `claim_priority` is empty. State the ordering "
+                f"in force THIS hour -- most deserving of this depot's spares "
+                f"first, INCLUDING the actionable service. "
+                + (f"The ranking standing from an earlier hour is {standing}; "
+                   f"restate it unchanged if it is still your ordering, or "
+                   f"state a different one."
+                   if standing else
+                   "No ranking is standing yet, so there is none to keep."))
         if tool_name == CONSTRAINT_TOOL:
             known_assets = {row["asset_id"]
                             for group in payload.get("risk_groups") or ()

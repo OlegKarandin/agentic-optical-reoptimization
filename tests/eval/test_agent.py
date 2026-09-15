@@ -520,7 +520,8 @@ class FakeAnthropic:
         self.messages = FakeMessages(responses)
 
 
-TIMING_OK = {"action": "wait", "reasoning": "the far cone is 2h out"}
+TIMING_OK = {"action": "wait", "reasoning": "the far cone is 2h out",
+             "claim_priority": ["storm-svc-1"]}
 CONSTRAINT_OK = {"avoid": {"risk_groups": ["rg_T3a_t1_t3"]},
                  "reasoning": "route around the t3 cone"}
 OBJECTIVE_OK = {"choice": "candidate_1",
@@ -956,11 +957,12 @@ def test_a_claim_naming_an_unshown_service_is_retried_not_accepted():
         FakeResponse(FakeToolUse(TIMING_TOOL, {
             "action": "act", "reasoning": "d9999 outranks me",
             "contested_claim": {"service_id": "d9999",
-                                "expected_capacity_at_risk_gbps": 900.0}},
+                                "expected_capacity_at_risk_gbps": 900.0},
+            "claim_priority": ["storm-svc-1"]},
                                  block_id="toolu_first")),
         FakeResponse(FakeToolUse(TIMING_TOOL, {
             "action": "act", "reasoning": "nothing else is exposed",
-            "contested_claim": None})))
+            "contested_claim": None, "claim_priority": ["storm-svc-1"]})))
     decision = _run(decider.timing(_obs(others=CLAIMANTS)))
     assert decision.contested_claim is None
     assert len(client.messages.calls) == 2
@@ -974,7 +976,8 @@ def test_a_claim_naming_a_shown_service_is_accepted_first_time():
     decider, client = _decider(FakeResponse(FakeToolUse(TIMING_TOOL, {
         "action": "wait", "reasoning": "they are ahead of me in the queue",
         "contested_claim": {"service_id": shown,
-                            "expected_capacity_at_risk_gbps": 12.0}})))
+                            "expected_capacity_at_risk_gbps": 12.0},
+        "claim_priority": ["storm-svc-1"]})))
     decision = _run(decider.timing(_obs(others=CLAIMANTS)))
     assert decision.contested_claim["service_id"] == shown
     assert len(client.messages.calls) == 1
@@ -1036,8 +1039,7 @@ def test_the_audit_sidecar_records_what_the_model_was_shown(tmp_path):
                                         "storm-svc-1"]
     assert record["omitted_services"]["below_threshold"]["count"] == 2
     assert record["n_services_total"] == 6
-    assert record["result"] == {**TIMING_OK, "contested_claim": None,
-                                "claim_priority": []}
+    assert record["result"] == {**TIMING_OK, "contested_claim": None}
 
 
 def test_the_audit_records_how_many_attempts_a_decision_took(tmp_path):
@@ -1358,14 +1360,22 @@ def test_the_first_timing_call_of_an_episode_must_state_a_ranking():
         ClaudeDecider._check_named_services(decision, payload, TIMING_TOOL)
 
 
-def test_an_empty_ranking_is_fine_once_one_is_standing():
+def test_an_empty_ranking_is_rejected_even_once_one_is_standing():
+    """Was `test_an_empty_ranking_is_fine_once_one_is_standing`, asserting the
+    opposite: that an empty `claim_priority` is accepted once a ranking is
+    standing. That was exactly the hole finding 9 names (2026-09-12 failure
+    analysis) -- at t1 a ranking is already standing, so restating nothing
+    was free and silently carried t0's ordering into an hour whose own
+    revision could invert it. The guard is now unconditional; restating the
+    standing ranking unchanged still requires stating it."""
     obs = _obs()
     payload = project_observation(obs)
     payload["standing_claim_priority"] = ["storm-svc-1"]
     decision = TimingDecision.from_dict(
         {"reasoning": "unchanged", "action": "wait", "contested_claim": None,
          "claim_priority": []})
-    ClaudeDecider._check_named_services(decision, payload, TIMING_TOOL)
+    with pytest.raises(DecisionError):
+        ClaudeDecider._check_named_services(decision, payload, TIMING_TOOL)
 
 
 def test_the_projection_carries_the_revision_band_through():
@@ -1449,7 +1459,7 @@ def test_the_prompt_says_when_the_ranking_is_read_and_that_it_binds():
     assert "INCLUDING the actionable service" in SYSTEM_PROMPT
     assert "the harness rejects that commit" in SYSTEM_PROMPT
     assert "standing_claim_priority" in SYSTEM_PROMPT
-    assert "an empty `claim_priority` keeps it" in SYSTEM_PROMPT
+    assert "State a `claim_priority` at EVERY timing" in SYSTEM_PROMPT
 
 
 def test_the_prompt_says_what_a_probe_answer_means_for_the_spare():
@@ -1653,3 +1663,68 @@ def test_the_avoid_guard_does_not_fire_on_the_other_two_decisions():
     ClaudeDecider._check_named_services(
         ObjectiveDecision.from_dict({"reasoning": "r", "choice": "hold"}),
         payload, OBJECTIVE_TOOL)
+
+
+def _timing_check(payload_extra=None, *, claim_priority=(),
+                  standing=("storm-svc-1",)):
+    obs = _obs(standing_claim_priority=standing)
+    payload = project_observation(obs)
+    if payload_extra:
+        payload.update(payload_extra)
+    decision = TimingDecision.from_dict(
+        {"reasoning": "r", "action": "act",
+         "claim_priority": list(claim_priority)})
+    ClaudeDecider._check_named_services(decision, payload, TIMING_TOOL)
+
+
+def test_an_empty_ranking_is_rejected_even_when_one_is_standing():
+    """The empty-claim_priority rule used to fire only when NOTHING was
+    standing, so at t1 restating nothing was free and inherited t0's
+    ordering. T3b's t1 revision inverts the pair the ranking is about, and
+    the harness then enforces whichever ordering is standing -- so the path
+    of least resistance carried a stale ranking into the hour whose own
+    revision inverted it (2026-09-12 failure analysis, finding 9)."""
+    with pytest.raises(DecisionError, match="claim_priority` is empty"):
+        _timing_check(standing=("storm-svc-1",))
+
+
+def test_an_empty_ranking_is_still_rejected_when_none_is_standing():
+    with pytest.raises(DecisionError, match="none to keep"):
+        _timing_check(standing=())
+
+
+def test_the_rejection_names_the_standing_ranking_so_it_can_be_restated():
+    with pytest.raises(DecisionError, match="storm-svc-1"):
+        _timing_check(standing=("storm-svc-1",))
+
+
+def test_restating_the_standing_ranking_unchanged_passes():
+    _timing_check(claim_priority=("storm-svc-1",),
+                  standing=("storm-svc-1",))
+
+
+def test_a_fresh_ranking_that_inverts_the_standing_one_passes():
+    obs = _obs(others=CLAIMANTS, standing_claim_priority=(CLAIMANTS[0][0],
+                                                          "storm-svc-1"))
+    payload = project_observation(obs)
+    decision = TimingDecision.from_dict(
+        {"reasoning": "the revision moved the pair", "action": "act",
+         "claim_priority": ["storm-svc-1", CLAIMANTS[0][0]]})
+    ClaudeDecider._check_named_services(decision, payload, TIMING_TOOL)
+
+
+def test_the_ranking_requirement_does_not_reach_the_other_two_decisions():
+    payload = project_observation(_obs_with_groups(),
+                                  include_risk_group_assets=True)
+    ClaudeDecider._check_named_services(
+        ConstraintDecision(avoid={"risk_groups": ["rg_T3a_t1_t3"]},
+                           reasoning="r"),
+        payload, CONSTRAINT_TOOL)
+    ClaudeDecider._check_named_services(
+        ObjectiveDecision.from_dict({"reasoning": "r", "choice": "hold"}),
+        payload, OBJECTIVE_TOOL)
+
+
+def test_the_prompt_no_longer_says_an_empty_claim_priority_keeps_the_standing_one():
+    assert "an empty `claim_priority` keeps" not in SYSTEM_PROMPT
+    assert "EVERY timing decision" in SYSTEM_PROMPT
