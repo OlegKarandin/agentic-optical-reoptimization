@@ -453,6 +453,60 @@ decider got for free. Guarded by
 `test_recording_costs_no_extra_server_calls`, which assert the collision
 fact is still present on the committed SMOKE/EXPOSURE_SMOKE candidate.
 
+### The vacuous-avoid guard and probe-answer carrying have confirmed, narrower scopes than their names suggest (2026-09-15)
+
+The 2026-09-15 harness/agent-fixes branch shipped nine items together
+(`docs/superpowers/specs/2026-09-15-harness-agent-fixes-design.md`) and the
+first paid run under them
+(`docs/superpowers/plans/notes/2026-09-15-rerun.md`) confirmed two of those
+items work exactly as scoped, and no further -- both are standing facts
+about the harness's own mechanics, not about this run's particular scores.
+
+**The vacuous-avoid guard (Item 1) closes the literal empty case, not the
+under-inclusive one.** Across all 21 agent rollouts in the 2026-09-15 run, a
+fully vacuous `avoid` (`{}`, `{"risk_groups": []}`, `{"risk_groups": [""]}`
+-- the exact payloads that produced both of 2026-09-11's `inert_commits`,
+2026-09-12 failure-analysis note, Finding 2) never once recurs -- checked
+programmatically, zero instances. But the guard has no opinion on an `avoid`
+that is non-empty yet under-inclusive: `D1-agent_claude-sonnet-5-1.json`,
+hour t0, iteration 1 sends `{"assets": ["fiber_rewa_satna_0"],
+"risk_groups": []}` -- one real asset, not the gold eight (missing the
+reverse-direction working span and the whole protection corridor) -- and
+still gets a menu whose top candidate reuses the current path unchanged.
+`route_service` offers it as a zero-spare, zero-path-change candidate, the
+objective step takes it as free, and `step["inert"]` fires for the same
+reason the OLD vacuous-avoid bug did (a menu still carrying a do-nothing
+option), through a payload the guard never rejects because it does legitimately
+bind something. **The class of bug is "avoid leaves the currently-used,
+exposed corridor reachable," not "avoid is empty" -- Item 1 catches one
+instance of that class, not the class itself.**
+
+**Probe-answer carrying (Item 2 / Task 6) carries the answer and its
+risk-group id, but not a staleness flag against the CURRENT hour's own
+group.** Confirmed working end-to-end for the first time in a paid run: a
+probe asked at hour N appears in hour N+1..final's own
+`observation.probe_answers_this_episode`, in all three D1 seeds and all
+three T3b seeds of the 2026-09-15 run. But the carried entry names only the
+risk-group id it was answered UNDER, and nothing on the wire marks that id as
+stale when the current hour issues a revised group. `T2b-agent_claude-sonnet-
+5-0.json` and `-2.json`, hour t1: the only probe of
+`t2-claimant-jalgaon-khandwa` on record is from t0, under `rg_T2b_t0_t3`
+(`status: solution`) -- correct at t0, but t1 revises the risk group to
+`rg_T2b_t1_t3`, under which khandwa's answer is actually `no_solution`
+(confirmed directly: `T2b-agent_claude-sonnet-5-1.json` DOES re-probe under
+`rg_T2b_t1_t3` at t1 and gets `no_solution`). Both stale-answer runs'
+reasoning explicitly names the correct, stale group id (*"probed full-restore
+solutions under rg_T2b_t0_t3"*) rather than treating the answer as unscoped
+-- Item 3's scope sentence is being read correctly -- and still treats a
+same-id-named-but-superseded answer as current. **The carrying mechanism
+moves the answer forward; it does not move forward whether the question is
+still the one the current hour is asking.**
+
+Neither of these is a regression from this branch -- both are the first
+direct trace evidence of where each item's own designed scope actually ends,
+which is exactly what a rerun is for. Full derivation:
+`docs/superpowers/plans/notes/2026-09-15-rerun.md`, §3.1 and §3.2.
+
 ---
 
 ## Build order
