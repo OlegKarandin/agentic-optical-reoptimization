@@ -509,6 +509,37 @@ which is exactly what a rerun is for. Full derivation:
 
 ---
 
+### The vacuous/unknown-id `avoid` guard does not recognize ids named only in a rejection's `shared_assets` (2026-09-15)
+
+Task 2 of this same branch added `_check_named_services`'s CONSTRAINT_TOOL
+guard (`src/storm_reoptimizer/eval/agent.py`): it rejects an `avoid` naming
+an asset or risk-group id the model was not shown, to catch the same class of
+hallucinated-id failure as a bogus `claim_priority` entry. `known_assets`/
+`known_groups` are built only from this observation's own storm-derived
+`payload["risk_groups"]`. They do NOT include any id named only in a prior
+`validation_violations`/`disjointness_collapse` rejection's `shared_assets`
+-- a different set, since a rejection can name a buried span (like
+`oms_jhansi_allahabad`, see the 2026-09-11 section above) that can never
+appear in any storm-derived risk group on this topology in the first place.
+A model that reads such a rejection and tries the obvious, correct-seeming
+fix -- `avoid.assets` the colliding span -- gets rejected by this guard
+instead, burning one of `MAX_ATTEMPTS = 3`; three failed attempts raise, and
+`run_episode` never catches a decider exception, so this can kill a rollout
+mid-run.
+
+Concrete instance, from the 2026-09-15 paid run:
+`D1-agent_claude-sonnet-5-0.json`, hour t0, a `disjointness_collapse`
+rejection names `oms_jhansi_allahabad` and related buried spans as
+`shared_assets`; the guard would reject an `avoid` naming any of them.
+Empirically harmless that run -- 14 decisions across the run reached
+`attempts: 2`, none reached 3, 0/21 rollouts were lost to this -- so it
+shipped as a recorded limitation rather than a fix this fix-wave had time to
+verify live. It remains a real, structurally reachable trap: a future run
+with more such collisions could exhaust the retry budget. See
+`_check_named_services`'s own docstring for the same note at the code site.
+
+---
+
 ## Build order
 
 1. **Server dependency + toy topology.** Stand up `multilayer-optical-mcp` against a small,

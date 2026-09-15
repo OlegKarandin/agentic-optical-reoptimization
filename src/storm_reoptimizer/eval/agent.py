@@ -181,9 +181,12 @@ def project_observation(
     `include_risk_group_assets` (spec 5.1) additionally surfaces
     `obs.risk_group_assets` as `risk_groups` -- each horizon's group, named
     down to the asset, with that span's own `p_cut` and whether it lies on
-    the actionable service's own working/protection corridor. It is what
-    makes `avoid.assets` nameable rather than all-or-nothing, and it is
-    large, so only the caller deciding constraints passes it."""
+    the actionable service's own working/protection corridor. Each entry also
+    carries its own `risk_group_id` (from `risk_group_ids`), so `avoid.
+    risk_groups` and `avoid.assets` can both be named without the model
+    having to cross-reference a separate block. It is what makes
+    `avoid.assets` nameable rather than all-or-nothing, and it is large, so
+    only the caller deciding constraints passes it."""
     payload = obs.to_dict()
     payload.pop("damage_radius_km")
     # `list(...)`, NOT `sorted(...)` -- horizon-hour labels ("t2", "t10", ...)
@@ -282,9 +285,12 @@ def project_observation(
         # to perform, and a wrong mental model of the structure is the most
         # likely origin of D1 run B seed 2's `{"risk_groups": [""]}`
         # (2026-09-12 failure analysis, the cross-episode finding).
-        # Fresh dicts, not `list(obs.risk_group_assets)`: the tuple's own
-        # dicts are a frozen Observation's, and `_project_exposure_entry`
-        # already establishes that the projection never hands those out.
+        # Fresh dicts, not `list(obs.risk_group_assets)`: the OUTER per-
+        # horizon dict is freshly built here, not the frozen Observation's
+        # own. Its inner `entry["assets"]` list (and that list's own row
+        # dicts) is still the SAME object the frozen Observation holds --
+        # harmless, since nothing downstream mutates it, but this is not the
+        # same guarantee `_project_exposure_entry` makes for `exposure`.
         payload["risk_groups"] = [
             {"horizon": entry["horizon"],
              "risk_group_id": obs.risk_group_ids.get(entry["horizon"]),
@@ -782,7 +788,22 @@ class ClaudeDecider:
         action rather than as a decision not to act (D1 run B seeds 1 and 2,
         2026-09-12 failure analysis, finding 2). The same answer remains
         expressible one step later as `hold` or `infeasible` at the objective
-        step, which is where it is RECORDED as a decision."""
+        step, which is where it is RECORDED as a decision.
+
+        `known_assets`/`known_groups` are built only from this observation's
+        storm-derived `risk_groups` -- they never include any id a prior
+        `validation_violations`/`disjointness_collapse` rejection's own
+        `shared_assets` might separately name (e.g. a buried span colliding
+        with a static protection route, like `oms_jhansi_allahabad` on this
+        topology per CLAUDE.md's 2026-09-11 section). A model that responds
+        to such a rejection by trying to `avoid` the colliding span gets
+        rejected by THIS guard instead -- "is not an `asset_id` in any entry
+        of this observation's `risk_groups`" -- burning a retry on an
+        otherwise-reasonable response. Confirmed harmless in the 2026-09-15
+        paid run (14 decisions reached `attempts: 2`, none reached 3, 0/21
+        rollouts lost), but this is a known, recorded limitation, not a
+        silently-accepted bug: a future run with more such collisions could
+        exhaust MAX_ATTEMPTS and kill a rollout."""
         claim = getattr(decision, "contested_claim", None)
         if claim is not None and claim["service_id"] not in payload["exposure"]:
             raise DecisionError(

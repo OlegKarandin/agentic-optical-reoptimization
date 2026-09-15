@@ -1570,8 +1570,10 @@ def test_each_projected_risk_group_entry_names_its_own_group_id():
 
 def test_the_projected_entries_are_fresh_dicts_not_the_observations_own():
     """`_project_exposure_entry`'s discipline, applied here too: the payload
-    is handed to json.dumps and to the trace, and nothing downstream should be
-    able to reach back into a frozen Observation's rows."""
+    is handed to json.dumps and to the trace, so the OUTER per-horizon dict
+    must be fresh, not the frozen Observation's own. (This does not extend to
+    the inner `assets` list, which is still shared with the Observation --
+    harmless since nothing downstream mutates it.)"""
     obs = _obs_with_groups()
     payload = project_observation(obs, include_risk_group_assets=True)
     assert payload["risk_groups"][0] is not obs.risk_group_assets[0]

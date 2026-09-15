@@ -192,7 +192,13 @@ def _metrics_sidecar(path: Path) -> dict | None:
     sidecar = path.with_name(f"{path.stem}-metrics.json")
     if not sidecar.exists():
         return None
-    return json.loads(sidecar.read_text(encoding="utf-8"))
+    try:
+        return json.loads(sidecar.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        # A corrupted/truncated sidecar should degrade only THIS run's
+        # `metrics` to None -- which the page already renders as an honest
+        # "no sidecar" note -- rather than crashing the whole viewer build.
+        return None
 
 
 def load_run(trace: dict, *, metrics: dict | None = None) -> dict:
@@ -1193,12 +1199,16 @@ function gateSummary(rejection, hour) {
                 ? `${sut} is not in the standing ranking at all`
                 : `${sut} is #${pos + 1} of ${standing.length}, below the ` +
                   `funded cut at ${funded.length}`;
+            // No esc() here: the result is assigned via .textContent (see
+            // the call site), which does not interpret HTML, so escaping
+            // first double-escapes (e.g. a literal "&" in rejection.note
+            // would render as the literal text "&amp;").
             return 'ranking_conflict: this candidate charges the depot, but ' +
-                `the funded prefix is [${esc(funded.join(', ')) || '(empty)'}]` +
+                `the funded prefix is [${funded.join(', ') || '(empty)'}]` +
                 ` -- the first ${funded.length} of ` +
-                `[${esc(standing.join(', ')) || '(none)'}], one entry per ` +
-                `spare on hand. ${esc(where)}.` +
-                (rejection.note ? `\n${esc(rejection.note)}` : '');
+                `[${standing.join(', ') || '(none)'}], one entry per ` +
+                `spare on hand. ${where}.` +
+                (rejection.note ? `\n${rejection.note}` : '');
         }
         case 'validation_violations': {
             const vs = rejection.violations || [];
@@ -1976,7 +1986,9 @@ function renderScoreboard(episode, run) {
          m.regret_gbps_h === null || m.regret_gbps_h === undefined
              ? 'n/a (not graded on spare_action_by_deadline)'
              : String(m.regret_gbps_h),
-         m.regret_gbps_h === 0],
+         m.regret_gbps_h === null || m.regret_gbps_h === undefined
+             ? null
+             : m.regret_gbps_h === 0],
         ['acted_too_late', String(m.acted_too_late), m.acted_too_late === false],
         ['inert_commits', String(m.inert_commits), m.inert_commits === 0],
         ['probes', probeSplit(run), null],

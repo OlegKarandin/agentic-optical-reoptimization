@@ -127,7 +127,7 @@ def probe_answers(records, *, hour: str | None = None) -> list[dict]:
     mistake, and `last_rejection`/the retry loop already handle that.
 
     Two views come out of this one function. With no `hour`, the entry shape
-    is `decided_this_hour.probe_answers`': this hour's questions, where "when"
+    is `decided_this_hour.probe_answers`: this hour's questions, where "when"
     is implied. With `hour` given, each entry also carries that hour and the
     record's own `decision` -- the episode-level view
     (`Observation.probe_answers_this_episode`), which has to say WHEN and at

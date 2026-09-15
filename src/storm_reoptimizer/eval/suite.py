@@ -118,7 +118,7 @@ async def run_suite(connect_for, *, topology_path, deciders,
                 # otherwise fold in as a run.
                 (traces_dir /
                  f"{scenario_id}-{safe}-{run_index}-metrics.json"
-                 ).write_text(json.dumps(metrics[-1], indent=2),
+                 ).write_text(json.dumps(metrics[-1], indent=2, default=str),
                               encoding="utf-8")
                 traces_by_decider.setdefault(decider.name, {}).setdefault(
                     scenario_id, []).append(trace)
