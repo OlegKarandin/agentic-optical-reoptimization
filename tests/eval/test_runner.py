@@ -525,7 +525,8 @@ def test_the_runner_binds_a_probe_per_hour_and_records_every_call(
     assert record["decision"] == "timing"
     assert record["error"] is None
     assert set(record["answer"]) == {"status", "full_restore_candidates",
-                                     "min_spares_needed_by_site", "levers"}
+                                     "min_spares_needed_by_site", "levers",
+                                     "scope"}
     assert record["answer"] == decider.answers[0]
     # The probe's route_service call is counted like every other tool call.
     assert trace.tool_calls > 0

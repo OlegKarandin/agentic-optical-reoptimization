@@ -9,7 +9,8 @@ import pytest
 
 from storm_reoptimizer.eval import oracle
 from storm_reoptimizer.eval.probe import (
-    MAX_PROBES_PER_DECISION, ProbeBinding, ProbeError, answer_probe,
+    MAX_PROBES_PER_DECISION, ProbeAnswer, ProbeBinding, ProbeError, answer_probe,
+    probe_scope,
 )
 from storm_reoptimizer.eval.runner import (
     EVENT_TYPE, ServiceGeometry, horizon_risk_group_asset_ids, run_episode,
@@ -106,7 +107,8 @@ def test_no_solution_reports_no_candidates_and_null_spares():
     answer = _answer(_call_returning("no_solution", []))
     assert answer.to_dict() == {
         "status": "no_solution", "full_restore_candidates": 0,
-        "min_spares_needed_by_site": None, "levers": []}
+        "min_spares_needed_by_site": None, "levers": [],
+        "scope": "answered while avoiding every asset in rg_x; narrower avoid sets were not evaluated"}
 
 
 def test_an_unknown_service_demand_is_a_probe_error():
@@ -169,6 +171,30 @@ def test_the_cap_is_per_decision_and_begin_resets_it():
 def test_a_probe_outside_any_decision_is_rejected():
     with pytest.raises(ProbeError, match="decision"):
         asyncio.run(_binding()("c", "rg_x"))
+
+
+def test_the_answer_says_what_it_was_conditioned_on():
+    """D1 run A read a `no_solution` under the whole group as "nothing can
+    save this service" and ended the episode at the timing step with zero
+    iterations (2026-09-12 failure analysis, finding 1). The four numeric
+    fields do nothing to scope themselves."""
+    answer = _answer(_call_returning("no_solution", []))
+    assert answer.scope == ("answered while avoiding every asset in rg_x; "
+                           "narrower avoid sets were not evaluated")
+    assert answer.to_dict()["scope"] == answer.scope
+
+
+def test_the_scope_always_names_the_group_it_answered_about():
+    answer = _answer(_call_returning("solution", [LIGHTPATH]),
+                     risk_group_id="rg_D1_t0_t1")
+    assert "rg_D1_t0_t1" in answer.scope
+
+
+def test_probe_scope_is_the_one_phrasing_both_sides_use():
+    assert probe_scope("rg_z") in ProbeAnswer(
+        status="solution", full_restore_candidates=0,
+        min_spares_needed_by_site=None, levers=(),
+        scope=probe_scope("rg_z")).to_dict()["scope"]
 
 
 def test_the_probe_answers_what_the_replay_then_does_on_t1a(

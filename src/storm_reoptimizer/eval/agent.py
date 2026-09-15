@@ -494,7 +494,10 @@ any of the three decisions, ahead of that decision's tool call.
 What the answer means for the spare: a service with no full-restore \
 candidate under the group that cuts it cannot use the spare after its \
 cut, however exposed it is. A service whose cheapest candidate charges \
-nothing at `depot_site` does not need it either.
+nothing at `depot_site` does not need it either. The answer's `scope` states \
+what it was conditioned on: the WHOLE named group was unusable and no \
+narrower avoid set was evaluated, so `no_solution` means "no path exists \
+while every asset in that group is unusable", not "no path exists".
 """
 # The third sentence is a documented NUDGE, kept as an experiment for the
 # first measured run and reported as such (spec 2, and README's "What to
@@ -629,9 +632,10 @@ TOOLS = [
           "network. Returns `status`, `full_restore_candidates` (how many "
           "candidates restore the service's full demand on a genuinely "
           "different path), `min_spares_needed_by_site` (the cheapest such "
-          "candidate's spare transponders per site, null if there is none) "
-          f"and `levers`. At most {MAX_PROBES_PER_DECISION} calls per "
-          "decision.",
+          "candidate's spare transponders per site, null if there is none), "
+          "`levers`, and `scope` (what the answer was conditioned on: the "
+          "whole named group, never a narrower avoid set). At most "
+          f"{MAX_PROBES_PER_DECISION} calls per decision.",
           PROBE_JSON_SCHEMA),
 ]
 

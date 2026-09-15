@@ -41,12 +41,28 @@ class ProbeError(ValueError):
     group, over the per-decision cap, or outside any decision."""
 
 
+def probe_scope(risk_group_id: str) -> str:
+    """The one sentence that stops a `no_solution` reading as "nothing can
+    save this service".
+
+    The probe can only ask about a WHOLE group -- that is what makes its
+    answer equal to what `replay.restore_after_cuts` would actually do, and
+    the reason there is deliberately no narrower-avoid argument (design §4.3).
+    D1 run A read a correct `no_solution` under `rg_D1_t0_t1` as a statement
+    about every possible constraint and ended the episode at the timing step
+    (2026-09-12 failure analysis, finding 1). One phrasing, built here, so the
+    answer and any test of it can never drift apart."""
+    return (f"answered while avoiding every asset in {risk_group_id}; "
+            f"narrower avoid sets were not evaluated")
+
+
 @dataclass(frozen=True)
 class ProbeAnswer:
     status: str | None
     full_restore_candidates: int
     min_spares_needed_by_site: dict[str, int] | None
     levers: tuple[str, ...]
+    scope: str = ""
 
     def to_dict(self) -> dict:
         return {"status": self.status,
@@ -54,7 +70,8 @@ class ProbeAnswer:
                 "min_spares_needed_by_site": (
                     dict(self.min_spares_needed_by_site)
                     if self.min_spares_needed_by_site is not None else None),
-                "levers": list(self.levers)}
+                "levers": list(self.levers),
+                "scope": self.scope}
 
 
 def _spare_cost(needed: dict[str, int]) -> tuple[int, list[tuple[str, int]]]:
@@ -89,7 +106,8 @@ async def answer_probe(call, *, service_id: str, risk_group_id: str,
         status=menu.get("status"),
         full_restore_candidates=len(workable),
         min_spares_needed_by_site=cheapest,
-        levers=tuple(sorted({c["lever"] for c in workable})))
+        levers=tuple(sorted({c["lever"] for c in workable})),
+        scope=probe_scope(risk_group_id))
 
 
 class ProbeBinding:
