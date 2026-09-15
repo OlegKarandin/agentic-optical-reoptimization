@@ -244,5 +244,31 @@ def test_traces_land_on_disk(
         runs_per_episode=1,
         scenarios={"D1": load_all_scenarios()["D1"]}, traces_dir=tmp_path))
     written = sorted(p.name for p in tmp_path.glob("*.json"))
-    assert written == ["D1-baseline_immediate-0.json"]
-    assert json.loads((tmp_path / written[0]).read_text())["scenario_id"] == "D1"
+    assert written == ["D1-baseline_immediate-0-metrics.json",
+                       "D1-baseline_immediate-0.json"]
+    assert json.loads((tmp_path / written[1]).read_text())["scenario_id"] == "D1"
+
+
+def test_a_metrics_sidecar_lands_beside_every_trace(
+    tmp_path, eval_state_paths, local_server_command, local_server_env,
+):
+    """tools/build_viewer_data.py imports nothing that pulls in the MCP
+    client, and scoring.py imports EpisodeTrace from runner, which does -- so
+    decision_label, regret_gbps_h, acted_too_late and inert_commits are
+    uncomputable in the viewer and on no trace (harness explainer, §11 item
+    7's stated blocker)."""
+    results = asyncio.run(run_suite(
+        _connect_for(eval_state_paths, local_server_command,
+                    local_server_env),
+        topology_path=TOPOLOGY_PATH,
+        deciders=[ForecastBlindBaseline("immediate")],
+        runs_per_episode=1,
+        scenarios={"D1": load_all_scenarios()["D1"]}, traces_dir=tmp_path))
+    written = sorted(p.name for p in tmp_path.glob("*.json"))
+    assert written == ["D1-baseline_immediate-0-metrics.json",
+                       "D1-baseline_immediate-0.json"]
+    sidecar = json.loads(
+        (tmp_path / "D1-baseline_immediate-0-metrics.json").read_text())
+    assert sidecar == results["episodes"]["D1"]["baseline:immediate"]["metrics"][0]
+    assert {"decision_label", "regret_gbps_h", "acted_too_late",
+            "inert_commits"} <= set(sidecar)

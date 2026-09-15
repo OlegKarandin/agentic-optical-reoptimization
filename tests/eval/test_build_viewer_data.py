@@ -325,3 +325,26 @@ def test_the_aerial_plant_is_distinguishable_in_the_payload(folded):
               if e["mount_type"] == "aerial"}
     assert ("satna", "rewa") in aerial or ("rewa", "satna") in aerial
     assert ("satna", "jhansi") in aerial or ("jhansi", "satna") in aerial
+
+
+def test_a_metrics_sidecar_is_not_mistaken_for_a_trace(tmp_path):
+    """An episode_metrics dict carries a `scenario_id`, so an unfiltered
+    *.json glob folds it in as a run with decider_name None -- captioned
+    `null #null` in the dropdown, beside the real one."""
+    traces = tmp_path / "traces"
+    traces.mkdir()
+    (traces / "T3b-agent_claude-sonnet-5-0.json").write_text(
+        json.dumps(FIXTURE_TRACE), encoding="utf-8")
+    (traces / "T3b-agent_claude-sonnet-5-0-metrics.json").write_text(
+        json.dumps({"scenario_id": "T3b", "decider": "agent:claude-sonnet-5",
+                    "decision_label": "act", "label_correct": True,
+                    "regret_gbps_h": 0.0, "acted_too_late": False,
+                    "inert_commits": 0}), encoding="utf-8")
+    scenarios = (Path(__file__).parent.parent.parent / "src"
+                 / "storm_reoptimizer" / "eval" / "scenarios")
+    topology = (Path(__file__).parent.parent.parent / "src"
+                / "storm_reoptimizer" / "data" / "toy_india_topology.json")
+    folded = bvd.fold(traces, scenarios, topology)
+    runs = folded["episodes"]["T3b"]["runs"]
+    assert len(runs) == 1
+    assert runs[0]["decider_name"] == "agent:claude-sonnet-5"

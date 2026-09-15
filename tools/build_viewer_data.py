@@ -230,6 +230,13 @@ def _dedup_traces(traces_dir: Path, episodes: dict) -> list[dict]:
     entries captioned identically with no way to tell which is current."""
     by_key: dict[tuple, tuple[Path, dict]] = {}
     for path in sorted(traces_dir.glob("*.json")):
+        # suite.run_suite writes `<trace stem>-metrics.json` beside each
+        # trace. An episode_metrics dict carries a `scenario_id`, so without
+        # this it passes the scenario check below and folds in as a run whose
+        # decider_name and run_index are both None -- captioned `null #null`
+        # in the dropdown, beside the real one.
+        if path.name.endswith("-metrics.json"):
+            continue
         trace = json.loads(path.read_text(encoding="utf-8"))
         scenario_id = trace.get("scenario_id")
         if scenario_id not in episodes:

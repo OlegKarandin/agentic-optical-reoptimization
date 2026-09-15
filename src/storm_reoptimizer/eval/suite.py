@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import copy
+import json
 import statistics
 from pathlib import Path
 
@@ -105,6 +106,20 @@ async def run_suite(connect_for, *, topology_path, deciders,
                         trace_path=traces_dir / f"{scenario_id}-{safe}-{run_index}.json")
                 runs.append(_redact_volatile_ids(trace.to_dict()))
                 metrics.append(episode_metrics(scenario, trace))
+                # The viewer cannot compute these for itself:
+                # tools/build_viewer_data.py deliberately imports nothing that
+                # pulls in the MCP client, and scoring.py imports EpisodeTrace
+                # from runner, which does. A sidecar is less surface than
+                # splitting episode_metrics into a client-free module, and it
+                # moves no code the scoring tests already pin (design §3
+                # item 8). Suffix `-metrics.json`: build_viewer_data's own
+                # trace glob excludes exactly that suffix, because an
+                # episode_metrics dict carries a scenario_id and would
+                # otherwise fold in as a run.
+                (traces_dir /
+                 f"{scenario_id}-{safe}-{run_index}-metrics.json"
+                 ).write_text(json.dumps(metrics[-1], indent=2),
+                              encoding="utf-8")
                 traces_by_decider.setdefault(decider.name, {}).setdefault(
                     scenario_id, []).append(trace)
             results["episodes"][scenario_id][decider.name] = {
