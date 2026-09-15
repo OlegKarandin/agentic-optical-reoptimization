@@ -14,7 +14,7 @@ from storm_reoptimizer.eval import agent as agent_module
 from storm_reoptimizer.eval.agent import (
     CONSTRAINT_TOOL, DEFAULT_MODEL, MAX_ATTEMPTS, OBJECTIVE_INSTRUCTION,
     OBJECTIVE_TOOL, P_CUT_ENUMERATION_THRESHOLD, SYSTEM_PROMPT, TIMING_TOOL,
-    ClaudeDecider, _project_exposure_entry, project_observation,
+    ClaudeDecider, _depot_eligible, _project_exposure_entry, project_observation,
     strict_tool_schema,
 )
 from storm_reoptimizer.eval.baseline import ForecastBlindBaseline
@@ -298,11 +298,11 @@ def test_projection_bounds_the_prompt_against_a_full_573_service_roster():
 
 def test_the_projection_shows_the_restorable_groups_not_the_totals():
     # `horizon_totals`' three figures are all re-derivable from rows the
-    # payload still shows (spec 5.3); `restorable_groups` is the one that
+    # payload still shows (spec 5.3); `co_terminating_groups` is the one that
     # survives onto the wire.
     obs = _obs(others=CLAIMANTS)
     payload = project_observation(obs)
-    assert payload["restorable_groups"] == obs.restorable_groups
+    assert payload["co_terminating_groups"] == obs.restorable_groups
     assert "horizon_totals" not in payload
 
 
@@ -391,7 +391,7 @@ def test_a_mixed_group_survives_whole_not_partially_trimmed():
     payload = project_observation(obs)
     assert "svc-f" in payload["exposure"]
     assert "svc-g" not in payload["exposure"]
-    groups = payload["restorable_groups"][HORIZON]
+    groups = payload["co_terminating_groups"][HORIZON]
     assert len(groups) == 1
     assert groups[0]["members"] == ("svc-f", "svc-g")
     assert groups[0]["ecar_gbps"] == pytest.approx(30.05)
@@ -1085,9 +1085,9 @@ def test_there_is_one_prompt_and_it_names_the_restorable_groups():
     # `sut_ecar_gbps`/`largest_restorable_group_ecar_gbps`/
     # `non_sut_ineligible_ecar_gbps` figures it carried -- left the wire in
     # an earlier task; the bullet describing them is now gone from the
-    # prompt too. `restorable_groups` is the one that survives: it is the
+    # prompt too. `co_terminating_groups` is the one that survives: it is the
     # only view of who shares a restoring lightpath.
-    assert "restorable_groups" in SYSTEM_PROMPT
+    assert "co_terminating_groups" in SYSTEM_PROMPT
     assert not hasattr(agent_module, "SYSTEM_PROMPT_WITH_RIVAL_TOTALS")
 
 
@@ -1520,9 +1520,9 @@ def test_the_removed_bullets_are_actually_removed():
     assert "`services` -- the roster" not in SYSTEM_PROMPT
     assert "protection posture" not in SYSTEM_PROMPT
     assert "basis=" not in SYSTEM_PROMPT
-    # restorable_groups SURVIVES -- it is the only view of who shares a
+    # co_terminating_groups SURVIVES -- it is the only view of who shares a
     # restoring lightpath.
-    assert "restorable_groups" in SYSTEM_PROMPT
+    assert "co_terminating_groups" in SYSTEM_PROMPT
 
 
 # test_the_prompt_still_never_states_the_comparison_or_its_answer (brief
@@ -1728,3 +1728,35 @@ def test_the_ranking_requirement_does_not_reach_the_other_two_decisions():
 def test_the_prompt_no_longer_says_an_empty_claim_priority_keeps_the_standing_one():
     assert "an empty `claim_priority` keeps" not in SYSTEM_PROMPT
     assert "EVERY timing decision" in SYSTEM_PROMPT
+
+
+def test_the_wire_calls_the_groups_what_they_actually_are():
+    """`_restorable_groups` computes co-terminating AND depot-eligible AND
+    exposed. There is no feasibility call in it. In T2b's spend half the top
+    entry asserted 197.0 G of khandwa was restorable by one lightpath and it
+    was false -- khandwa's only other link is inside the same footprint, and
+    four rollouts out of four held on it (2026-09-12 failure analysis,
+    finding 4). The field is not silent on the flip variable; under the old
+    name it stated the opposite."""
+    payload = project_observation(_obs(others=CLAIMANTS))
+    assert "restorable_groups" not in payload
+    groups = payload["co_terminating_groups"][HORIZON]
+    assert [g["members"] for g in groups] == [
+        (CLAIMANTS[0][0],), (CLAIMANTS[1][0],), (CLAIMANTS[2][0],)]
+
+
+def test_the_observation_itself_keeps_the_old_name():
+    """Wire-only: ~120 references across 15 files, including derived.py, which
+    feeds the build-time no-single-variable gates and whose frozen scalar
+    names must not churn for a naming fix (design §3 item 6)."""
+    obs = _obs(others=CLAIMANTS)
+    assert obs.restorable_groups
+    assert _depot_eligible(CLAIMANTS[0][0], obs) is True
+
+
+def test_the_prompt_bullet_names_the_wire_field():
+    assert "`co_terminating_groups`" in SYSTEM_PROMPT
+    assert "`restorable_groups`" not in SYSTEM_PROMPT
+    # W3.2's measured arm: only the NAME moves. What the bullet asserts about
+    # the field must be identical.
+    assert "across groups only the MAXIMUM is an honest competing" in SYSTEM_PROMPT

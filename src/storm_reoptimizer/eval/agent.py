@@ -231,10 +231,27 @@ def project_observation(
     # `observation_record` (runner.py) still writes both to the trace.
     payload.pop("services")
     payload.pop("horizon_totals")
-    payload["restorable_groups"] = {
+    # `co_terminating_groups` on the wire, `restorable_groups` everywhere
+    # else. The computation (observation._restorable_groups) is purely
+    # co-terminating AND depot-eligible AND exposed -- there is no
+    # feasibility call in it -- and the old name asserted a restorability it
+    # never checked. T2b's spend half showed 197.0 G of khandwa as restorable
+    # by one lightpath when khandwa's only other link is inside the same
+    # storm footprint, and four rollouts out of four held on it (2026-09-12
+    # failure analysis, finding 4). The rename stops at the wire on purpose:
+    # ~120 references across 15 files read the Observation's own name,
+    # including derived.py, whose frozen derived-scalar names feed the
+    # build-time gates. The wire is where the false claim was read.
+    #
+    # Deliberately NOT a feasibility flag. `restorable_under_group` per group
+    # would cost one route_service per group per hour and would hand both
+    # T-pairs' flip variable to every decider, baselines included, collapsing
+    # T2 and T3 into lookups (design §2.2). The probe stays the only source
+    # of that fact, and calling it stays the agent's choice.
+    payload["co_terminating_groups"] = {
         horizon: tuple(g for g in groups
                       if any(m in keep for m in g["members"]))
-        for horizon, groups in payload["restorable_groups"].items()}
+        for horizon, groups in payload.pop("restorable_groups").items()}
     payload["n_services_total"] = len(all_services)
     # Roster entries with no exposure data at all (no storm-cuttable span --
     # see build_observation) are neither in `exposure` nor `dropped` above;
@@ -473,7 +490,7 @@ other service listed is a real competing claim on the same depot.
 # says nothing about which way the comparison should come out -- the
 # comparison is the judgement being measured.
 _RESTORABLE_GROUPS_BULLET = """\
-- `restorable_groups` -- per horizon, the co-terminating groups that would \
+- `co_terminating_groups` -- per horizon, the co-terminating groups that would \
 share one restoring lightpath: each with `endpoints`, `members`, and \
 `ecar_gbps`, so you can see WHICH services would share it, not just a \
 summed figure. One spare buys one lightpath: services that co-terminate \
