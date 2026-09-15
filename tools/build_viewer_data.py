@@ -184,7 +184,18 @@ def _mark_committed(hour: dict) -> None:
                 and candidate.get("candidate_label") == chosen)
 
 
-def load_run(trace: dict) -> dict:
+def _metrics_sidecar(path: Path) -> dict | None:
+    """The per-episode scoring dict `suite.run_suite` writes beside each
+    trace. Absent for every trace written before 2026-09-15 and for any trace
+    produced by `runner.run_episode` directly (tests, tools) -- return None,
+    never {}, so the page can say "no sidecar" instead of rendering zeros."""
+    sidecar = path.with_name(f"{path.stem}-metrics.json")
+    if not sidecar.exists():
+        return None
+    return json.loads(sidecar.read_text(encoding="utf-8"))
+
+
+def load_run(trace: dict, *, metrics: dict | None = None) -> dict:
     """One trace, enriched. Tolerates a pre-Phase-A trace: every key added by
     the recording change is optional and defaults to empty, so the 21 archived
     control rollouts load beside a fresh run (run-viewer design, §6.2)."""
@@ -216,12 +227,19 @@ def load_run(trace: dict) -> dict:
             # since the 21 archived control rollouts (§6.2 above) -- a
             # pre-Task-7 trace has none.
             "restorations": trace.get("restorations") or [],
+            # suite.episode_metrics for this rollout, or None when no sidecar
+            # sits beside the trace file. The run level of this dict is a
+            # WHITELIST -- unlike each hour, which is copied wholesale -- so a
+            # new top-level field is invisible to the page until it is named
+            # here.
+            "metrics": metrics,
             "hours": hours}
 
 
-def _dedup_traces(traces_dir: Path, episodes: dict) -> list[dict]:
-    """One trace per (scenario_id, decider_name, run_index): keep the file
-    with the newer mtime, drop the rest.
+def _dedup_traces(traces_dir: Path, episodes: dict) -> list[tuple[Path, dict]]:
+    """One (path, trace) per (scenario_id, decider_name, run_index): keep the
+    file with the newer mtime, drop the rest. The path travels so `fold` can
+    look for the metrics sidecar beside it.
 
     Two files can independently claim the same key -- confirmed live,
     eval/traces/T1a-agent_claude-sonnet-5-{0,rerun}.json both parsed to
@@ -255,7 +273,7 @@ def _dedup_traces(traces_dir: Path, episodes: dict) -> list[dict]:
             print(f"build_viewer_data: WARNING {path.name} and "
                   f"{prior[0].name} both claim {key[1]!r} #{key[2]} on "
                   f"{key[0]!r}; keeping the newer file", flush=True)
-    return [trace for _, trace in by_key.values()]
+    return [(path, trace) for path, trace in by_key.values()]
 
 
 def fold(traces_dir: Path, scenarios_dir: Path, topology_path: Path) -> dict:
@@ -263,8 +281,9 @@ def fold(traces_dir: Path, scenarios_dir: Path, topology_path: Path) -> dict:
     for path in sorted(scenarios_dir.glob("*.yaml")):
         episode = load_episode(path)
         episodes[episode["id"]] = episode
-    for trace in _dedup_traces(traces_dir, episodes):
-        episodes[trace["scenario_id"]]["runs"].append(load_run(trace))
+    for path, trace in _dedup_traces(traces_dir, episodes):
+        episodes[trace["scenario_id"]]["runs"].append(
+            load_run(trace, metrics=_metrics_sidecar(path)))
     for episode in episodes.values():
         episode["runs"].sort(
             key=lambda r: (r["decider_name"], r["run_index"]))
@@ -311,6 +330,7 @@ _HTML_TEMPLATE = """<!doctype html>
   </svg>
   <div id="divider" title="drag to resize"></div>
   <aside id="panels">
+    <section id="scoreboard"></section>
     <section id="saw"></section>
     <section id="said"></section>
     <section id="happened"></section>
@@ -1924,6 +1944,55 @@ function probeCarriedForward(run, probeHour, probe) {
     return sawField ? 'no' : 'unknown (older trace)';
 }
 
+function probeSplit(run) {
+    const sut = ((run.hours || [])[0] || {}).actionable_service;
+    let onSut = 0, onOther = 0;
+    for (const p of episodeProbes(run)) {
+        if (p.error) continue;
+        if (p.service_id === sut) onSut += 1; else onOther += 1;
+    }
+    return `${onSut} on the SUT / ${onOther} on a claimant`;
+}
+
+function renderScoreboard(episode, run) {
+    const el = document.getElementById('scoreboard');
+    el.innerHTML = '<h3>Scoreboard (this run)</h3>';
+    if (!episode || !run) return;
+    const m = run.metrics;
+    if (!m) {
+        const note = document.createElement('div');
+        note.className = 'rejection';
+        note.textContent = 'no metrics sidecar beside this trace -- ' +
+            'suite.run_suite writes one per rollout; a trace produced ' +
+            'directly by run_episode, or written before 2026-09-15, has none';
+        el.appendChild(note);
+        return;
+    }
+    const goldLabel = (episode.gold || {}).label;
+    const rows = [
+        ['decision_label', `${m.decision_label} vs gold ${goldLabel}`,
+         m.label_correct],
+        ['regret_gbps_h',
+         m.regret_gbps_h === null || m.regret_gbps_h === undefined
+             ? 'n/a (not graded on spare_action_by_deadline)'
+             : String(m.regret_gbps_h),
+         m.regret_gbps_h === 0],
+        ['acted_too_late', String(m.acted_too_late), m.acted_too_late === false],
+        ['inert_commits', String(m.inert_commits), m.inert_commits === 0],
+        ['probes', probeSplit(run), null],
+    ];
+    const table = document.createElement('table');
+    table.innerHTML = '<tr><th>metric</th><th>value</th></tr>';
+    for (const [name, value, ok] of rows) {
+        const tr = document.createElement('tr');
+        if (ok === true) tr.className = 'gate-ok';
+        if (ok === false) tr.className = 'rejection';
+        tr.innerHTML = `<td>${esc(name)}</td><td>${esc(value)}</td>`;
+        table.appendChild(tr);
+    }
+    el.appendChild(table);
+}
+
 function renderProbeLedger(episode, run) {
     const el = document.getElementById('probes');
     el.innerHTML = '<h3>probe ledger (whole run, not just this hour)</h3>';
@@ -2002,6 +2071,7 @@ function renderAll() {
     const run = currentRun();
     const hour = currentHour();
     renderMap();
+    renderScoreboard(episode, run);
     renderSaw(hour);
     renderSaid(hour);
     renderHappened(episode, run, hour);

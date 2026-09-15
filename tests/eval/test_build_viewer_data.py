@@ -348,3 +348,28 @@ def test_a_metrics_sidecar_is_not_mistaken_for_a_trace(tmp_path):
     runs = folded["episodes"]["T3b"]["runs"]
     assert len(runs) == 1
     assert runs[0]["decider_name"] == "agent:claude-sonnet-5"
+
+
+def test_the_metrics_sidecar_rides_onto_the_run(tmp_path):
+    traces = tmp_path / "traces"
+    traces.mkdir()
+    (traces / "T3b-agent_claude-sonnet-5-0.json").write_text(
+        json.dumps(FIXTURE_TRACE), encoding="utf-8")
+    metrics = {"scenario_id": "T3b", "decider": "agent:claude-sonnet-5",
+               "decision_label": "spend", "label_correct": False,
+               "regret_gbps_h": 250.0, "acted_too_late": False,
+               "inert_commits": 2}
+    (traces / "T3b-agent_claude-sonnet-5-0-metrics.json").write_text(
+        json.dumps(metrics), encoding="utf-8")
+    scenarios = (Path(__file__).parent.parent.parent / "src"
+                 / "storm_reoptimizer" / "eval" / "scenarios")
+    topology = (Path(__file__).parent.parent.parent / "src"
+                / "storm_reoptimizer" / "data" / "toy_india_topology.json")
+    run = bvd.fold(traces, scenarios, topology)["episodes"]["T3b"]["runs"][0]
+    assert run["metrics"] == metrics
+
+
+def test_a_run_with_no_sidecar_says_so_rather_than_showing_zeros(folded):
+    """"Trace predates this field" is not "field is empty" -- the viewer's own
+    standing lesson (harness explainer, §13). `None`, not `{}`."""
+    assert folded["episodes"]["T3b"]["runs"][0]["metrics"] is None
