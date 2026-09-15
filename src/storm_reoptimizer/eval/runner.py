@@ -1109,6 +1109,14 @@ async def run_episode(
         if hasattr(decider, "bind_probe"):
             decider.bind_probe(probe)
         record.update(observation_record(obs, geometry))
+        # Ground truth, and the ONLY place a risk group's contents reach a
+        # trace. `observation_record` writes the trimmed Observation, and
+        # `risk_group_assets` is threaded only into the transient
+        # per-iteration Observation rebuild below -- never into
+        # `hour.observation`. A baseline run projects nothing at all, so
+        # without this the viewer has nothing to resolve an avoid set against
+        # on the free arm (harness explainer, §13 item 2).
+        record["risk_group_assets"] = [dict(entry) for entry in risk_group_assets]
         decidable = is_decidable(
             obs, spares_on_hand=ledger.on_hand,
             issuance_schedule=obs.issuance_schedule)
@@ -1174,6 +1182,16 @@ async def run_episode(
                            + probe_answers(probe.records, hour=hour))})
                 probe.begin("constraints")
                 constraints = await decider.constraints(obs, unconstrained)
+                # Captured HERE, not at the end of the iteration.
+                # `decider.objective()` overwrites `last_projection` moments
+                # later WITHOUT include_risk_group_assets, and the runner's own
+                # read below therefore only ever sees the objective step's
+                # payload. Two different payloads, kept apart on purpose:
+                # collapsing them would lose the distinction -- which one
+                # carried the `risk_groups` block the avoid set was chosen
+                # from.
+                projected_constraints = getattr(
+                    decider, "last_projection", None)
                 menu = await counting.call(
                     "route_service",
                     constraints.route_service_args(scenario.service_under_test))
@@ -1199,6 +1217,7 @@ async def run_episode(
                         "menu": menu_for_prompt(menu, geometry.oms_nodes),
                         "projected": getattr(decider, "last_projection",
                                              None),
+                        "projected_constraints": projected_constraints,
                         "objective": choice.to_dict()}
                 record["iterations"].append(step)
 

@@ -2118,3 +2118,66 @@ def test_a_probe_answer_bought_at_one_hour_is_on_a_later_hours_observation(
     assert {"status", "scope", "service_id", "risk_group_id"} <= set(carried[0])
 
 
+class _DistinctProjectionsDecider:
+    """Sets a DIFFERENT `last_projection` at each of its two in-loop
+    decisions, so a test can prove which one the runner persisted where. The
+    real ClaudeDecider does exactly this -- `constraints()` projects with
+    `include_risk_group_assets=True`, `objective()` moments later projects
+    without it onto the same attribute (agent.py:901-916)."""
+    name = "distinct-projections"
+
+    def __init__(self) -> None:
+        self.last_projection = None
+
+    async def timing(self, obs):
+        self.last_projection = {"step": "timing"}
+        return TimingDecision("act", "act so the loop runs",
+                              claim_priority=(obs.service_under_test,))
+
+    async def constraints(self, obs, unconstrained_menu=None):
+        self.last_projection = {
+            "step": "constraints",
+            "risk_groups": [{"horizon": h, "risk_group_id": g, "assets": []}
+                            for h, g in obs.risk_group_ids.items()]}
+        return ConstraintDecision(avoid={}, reasoning="unconstrained")
+
+    async def objective(self, obs, menu):
+        self.last_projection = {"step": "objective"}
+        return ObjectiveDecision("hold", None, "end the hour here")
+
+
+def test_the_iteration_records_the_constraints_steps_own_projection(
+    tmp_path, loaded_state_path, local_server_command, local_server_env,
+):
+    """`objective()` overwrites `decider.last_projection` before the runner
+    ever reads it, so the constraints step's `risk_groups` block -- the one
+    thing that says what an `avoid` was chosen FROM -- was computed, sent to
+    the model, and lost on every trace ever written (harness explainer, §13
+    item 2, confirmed against all 33 files on disk)."""
+    trace = asyncio.run(_run(
+        _scenario(tmp_path), _DistinctProjectionsDecider(),
+        loaded_state_path, local_server_command, local_server_env))
+    steps = [s for h in trace.hours for s in h.get("iterations", [])]
+    assert steps, "the acting decider should produce at least one iteration"
+    step = steps[0]
+    assert step["projected"]["step"] == "objective"
+    assert step["projected_constraints"]["step"] == "constraints"
+    assert step["projected_constraints"]["risk_groups"]
+
+
+def test_every_hour_records_the_risk_group_assets_as_ground_truth(
+    tmp_path, loaded_state_path, local_server_command, local_server_env,
+):
+    """Ground truth, so a BASELINE run -- which projects nothing at all --
+    also carries what each horizon's risk group was made of. Without it the
+    viewer's avoid chips have nothing to resolve against on the free arm."""
+    trace = asyncio.run(_run(
+        _scenario(tmp_path), ForecastBlindBaseline("immediate"),
+        loaded_state_path, local_server_command, local_server_env))
+    exposed = [h for h in trace.hours if h.get("risk_group_assets")]
+    assert exposed, "no hour recorded a risk group's contents"
+    entry = exposed[0]["risk_group_assets"][0]
+    assert set(entry) == {"horizon", "assets"}
+    assert all({"asset_id", "p_cut", "on"} <= set(a) for a in entry["assets"])
+
+
