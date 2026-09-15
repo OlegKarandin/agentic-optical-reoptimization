@@ -76,6 +76,10 @@ def load_episode(path: Path) -> dict:
         "damage_radius_km": raw["damage_radius_km"],
         "lead_time_hours": raw["lead_time_hours"],
         "spares_on_hand": raw["spares_on_hand"],
+        # {kind, claimant, expected} on T2/T3 pairs (the design-time answer
+        # key for which claimant's restorability actually decides the
+        # half); absent on D1/T1, which have no probe tool at all.
+        "probe_flip": (raw.get("metadata") or {}).get("probe_flip"),
         "gold": gold, "forecast": forecast, "runs": [],
         # Raw fiber ids, resolved to topology node pairs by _resolve_realized_
         # cuts once the topology is loaded (fold() does this; load_episode
@@ -302,6 +306,8 @@ _HTML_TEMPLATE = """<!doctype html>
   <aside id="panels">
     <section id="saw"></section>
     <section id="said"></section>
+    <section id="happened"></section>
+    <section id="probes"></section>
   </aside>
 </main>
 <footer><div id="scrubber"></div></footer>
@@ -349,11 +355,19 @@ main { flex: 1 1 auto; min-height: 0; display: grid;
 #map.dragging { cursor: grabbing; }
 #divider { background: #ddd; cursor: col-resize; }
 #divider:hover, #divider.dragging { background: #999; }
-#panels { overflow-y: auto; padding: 8px; }
+#panels { overflow-y: auto; overflow-x: hidden; padding: 8px; }
 #panels section { margin-bottom: 16px; }
 #panels h3 { margin: 0 0 4px 0; font-size: 12px; text-transform: uppercase;
              letter-spacing: 0.04em; color: #555; }
-table { border-collapse: collapse; width: 100%; font: inherit; }
+/* display: block + its own overflow-x, not a wrapper div: a candidate table
+   with the raw cost_vector column (or now, the added residual/path/collision
+   ones) is routinely wider than the 380px panel. Without this each such
+   table used to drag the WHOLE panel into horizontal scroll -- scrolling
+   right to read one row's tail column also scrolled the reasoning text
+   above and below it out of view. Scoped to the table itself, only that
+   table's own rows scroll; everything else in #panels stays put. */
+table { border-collapse: collapse; width: 100%; font: inherit;
+        display: block; overflow-x: auto; max-width: 100%; }
 table td, table th { border: 1px solid #ddd; padding: 2px 5px;
                       text-align: left; white-space: nowrap; }
 th { background: #f0f0ee; }
@@ -361,9 +375,14 @@ th { background: #f0f0ee; }
                     font-size: 11px; font-weight: bold; }
 .shown { background: #d6f0d6; color: #146214; }
 .omitted { background: #eee; color: #777; }
-.candidate-row { cursor: default; }
-.candidate-row.committed { cursor: pointer; font-weight: bold; }
-.candidate-row.committed:hover { background: #f0f4ff; }
+/* A plain table-cell background, unlike .shown/.omitted above (those are
+   inline-block badges meant for INSIDE a cell, not the cell itself) -- the
+   funded prefix marks the first spares_on_hand ROWS of a ranking column. */
+td.funded-prefix { background: #eaf7ea; }
+.inversion { color: #a33; font-weight: bold; margin: 4px 0; }
+.candidate-row { cursor: pointer; }
+.candidate-row.committed { font-weight: bold; }
+.candidate-row:hover { background: #f0f4ff; }
 .candidate-row.selected { outline: 2px solid #cc6633; }
 .exposure-row { cursor: pointer; }
 .exposure-row:hover { background: #f0f4ff; }
@@ -382,7 +401,15 @@ footer { flex: 0 0 auto; border-top: 1px solid #ccc; padding: 6px 12px; }
 .gap-marker { stroke: #cc3333; stroke-width: 2; }
 pre.reasoning { white-space: pre-wrap; background: #f7f7f5; padding: 6px;
                 border: 1px solid #eee; margin: 4px 0; }
+/* Space-aligned ASCII columns (gold.rationale), unlike free-text reasoning
+   above -- pre-wrap would rewrap a long row and misalign every column
+   after it at this panel's width. pre + its own overflow-x, the same fix
+   wide tables already got, keeps the alignment intact and scrollable
+   instead of silently garbled. */
+pre.rationale { white-space: pre; overflow-x: auto; background: #f7f7f5;
+                padding: 6px; border: 1px solid #eee; margin: 4px 0; }
 .rejection { color: #a33; margin: 2px 0; }
+.gate-ok { color: #146214; font-weight: bold; margin: 2px 0; }
 .contested { background: #fff4e0; border: 1px solid #e0c080; padding: 4px;
              margin: 4px 0; }
 .probes { background: #eef6ff; border: 1px solid #b8d4f0; padding: 4px 6px;
@@ -392,6 +419,13 @@ pre.reasoning { white-space: pre-wrap; background: #f7f7f5; padding: 6px;
 .sut-row { font-weight: bold; }
 .sut-badge { background: #1f8a4c; color: #fff; font-size: 9px;
              padding: 0 4px; border-radius: 3px; vertical-align: middle; }
+/* Deliberately NOT sut-badge's green -- the flip claimant (metadata.
+   probe_flip) is usually a DIFFERENT service from the SUT, and reusing the
+   SUT's own colour would read as "this is the SUT" when it is the opposite
+   point: the one thing that ISN'T the SUT but should have been probed. */
+.flip-badge { background: #d98c00; color: #fff; font-size: 9px;
+              padding: 0 4px; border-radius: 3px; vertical-align: middle; }
+.flip-row { background: #fff4e0; font-weight: bold; }
 .skipped { background: #f0f0ee; border: 1px dashed #bbb; padding: 6px;
            margin: 4px 0; color: #666; font-style: italic; }
 .step-label { margin: 10px 0 2px; font-weight: bold; }
@@ -405,8 +439,13 @@ details.raw-json pre { max-height: 320px; overflow: auto; background: #f7f7f5;
 
 _JS = r"""
 const P = JSON.parse(document.getElementById('payload').textContent);
+// selectedCandidate: {iteration, label} for whichever candidate row's route
+// is drawn on the map, or null -- not just the committed one (any candidate
+// in any iteration this hour can be inspected). Keyed by iteration number
+// (unique within an hour) + candidate_label, not by object identity, so it
+// survives the re-render that follows every click.
 let state = {episode: null, run: null, hourIndex: 0, spotlight: null,
-             candidateVisible: false};
+             selectedCandidate: null};
 
 // ---- geometry -------------------------------------------------------
 
@@ -927,10 +966,17 @@ function esc(s) {
         .replace(/>/g, '&gt;');
 }
 
-function committedCandidate(hour) {
-    const iter = selectedIteration(hour);
-    const candidates = (iter && iter.menu && iter.menu.candidates) || [];
-    return candidates.find(c => c.committed) || null;
+// Any candidate in any iteration this hour, not just the committed one or
+// the LAST iteration's menu (selectedIteration) -- a rejected iteration's
+// menu is just as inspectable as the one that finally committed.
+function findCandidate(hour, iteration, label) {
+    for (const it of hour.iterations || []) {
+        if (it.iteration !== iteration) continue;
+        for (const c of (it.menu && it.menu.candidates) || []) {
+            if (c.candidate_label === label) return c;
+        }
+    }
+    return null;
 }
 
 // A priced candidate menu, rendered wherever it was ACTUALLY shown to the
@@ -938,36 +984,101 @@ function committedCandidate(hour) {
 // iteration) rather than pinned in a panel of its own at the top -- there is
 // no "menu" independent of an hour and an iteration, so there is no honest
 // place to show one before the reasoning it fed.
-function candidateTable(candidates) {
+// residual_exposure/path_delta/collides_with_protection are computed by
+// menu_with_path_facts (runner.py) against the SAME per-candidate route the
+// cost_vector already prices -- the columns below are not derived here,
+// only formatted, so a change on this table can never disagree with what
+// the decider itself read at the objective step.
+function residualExposureText(residualExposure) {
+    return Object.entries(residualExposure || {})
+        .map(([horizon, e]) => `${horizon}:${e.p_cut}`).join(', ') || '-';
+}
+
+// cost_vector's key set is the server's own (evaluate_objective/route_
+// service), not something this app defines -- every trace on disk today
+// carries the same 8 keys across both levers, but nothing GUARANTEES that,
+// so the columns are discovered from the candidates actually being
+// rendered rather than hardcoded. A key the server drops or adds shows up
+// (or disappears) as a column instead of silently changing what the single
+// old JSON-dump column happened to contain.
+function costVectorColumns(candidates) {
+    const keys = [];
+    const seen = new Set();
+    for (const c of candidates || []) {
+        for (const k of Object.keys(c.cost_vector || {})) {
+            if (!seen.has(k)) { seen.add(k); keys.push(k); }
+        }
+    }
+    return keys;
+}
+
+function candidateTable(candidates, iterationNum) {
     const table = document.createElement('table');
+    const costKeys = costVectorColumns(candidates);
     table.innerHTML = '<tr><th>label</th><th>lever</th><th>spares</th>' +
-        '<th>restored</th><th>shortfall</th><th>cost</th></tr>';
+        '<th>residual p_cut</th><th>changes path</th>' +
+        '<th>collides w/ protection</th>' +
+        '<th>restored</th><th>shortfall</th>' +
+        costKeys.map(k => `<th>${esc(k)}</th>`).join('') + '</tr>';
     (candidates || []).forEach((c) => {
         const tr = document.createElement('tr');
         const committed = !!c.committed;
+        const sel = state.selectedCandidate;
+        const isSelected = !!sel && sel.iteration === iterationNum &&
+            sel.label === c.candidate_label;
         tr.className = 'candidate-row' + (committed ? ' committed' : '') +
-            (committed && state.candidateVisible ? ' selected' : '');
+            (isSelected ? ' selected' : '');
         // spares_needed is site -> transponder count (ledger.py's per-site
         // ledger, exposure-and-depot design §4.1) -- render each site's
         // charge rather than a single count, since a hybrid candidate can
         // charge two DIFFERENT sites unevenly.
         const sparesText = Object.entries(c.spares_needed || {})
             .map(([site, n]) => `${site}:${n}`).join(', ') || '-';
+        const changesPath = c.path_delta
+            ? (c.path_delta.changes_working_path ? 'yes' : 'no') : '-';
+        const collision = c.collides_with_protection || {};
+        const collidesText = 'collides' in collision
+            ? (collision.collides ? 'yes' : 'no') : '-';
+        const collidesTitle = collision.collides &&
+            (collision.oms_shared_with_protection || []).length
+            ? ` title="shared with protection: ` +
+              `${esc(collision.oms_shared_with_protection.join(', '))}"`
+            : '';
+        const cv = c.cost_vector || {};
+        // added_latency (ms) and total_margin (summed dB) arrive at full
+        // float precision from the server; rounded for display only -- the
+        // full value is still in the raw payload below. scalar is left
+        // untouched since it is the actual sort key (score_candidate's
+        // weighted sum, docs/superpowers/specs/2026-08-19-agent-eval-
+        // design.md:80-86) and a display rounding there could misrepresent
+        // a genuine tie-break.
+        const costCells = costKeys.map((k) => {
+            let v = k in cv ? cv[k] : '-';
+            if (v !== '-' && (k === 'added_latency' || k === 'total_margin')) {
+                v = Number(v).toFixed(1);
+            }
+            return `<td>${esc(v)}</td>`;
+        }).join('');
         tr.innerHTML =
             `<td>${esc(c.candidate_label)}</td><td>${esc(c.lever)}</td>` +
             `<td>${esc(sparesText)}</td>` +
+            `<td>${esc(residualExposureText(c.residual_exposure))}</td>` +
+            `<td>${esc(changesPath)}</td>` +
+            `<td${collidesTitle}>${esc(collidesText)}</td>` +
             `<td>${esc(c.restored_gbps)}</td>` +
             `<td>${esc(c.shortfall_gbps)}</td>` +
-            `<td>${esc(JSON.stringify(c.cost_vector || {}))}</td>`;
-        if (committed) {
-            tr.title = state.candidateVisible
-                ? 'click to hide its route on the map'
-                : 'click to show its route on the map';
-            tr.addEventListener('click', () => {
-                state.candidateVisible = !state.candidateVisible;
-                renderAll();
-            });
-        }
+            costCells;
+        // Every row is inspectable, not only the committed one -- a
+        // rejected candidate's route is exactly what the decider read and
+        // turned down.
+        tr.title = isSelected
+            ? 'click to hide its route on the map'
+            : 'click to show its route on the map';
+        tr.addEventListener('click', () => {
+            state.selectedCandidate = isSelected
+                ? null : {iteration: iterationNum, label: c.candidate_label};
+            renderAll();
+        });
         table.appendChild(tr);
     });
     return table;
@@ -1012,6 +1123,49 @@ function stepLabel(text) {
     return div;
 }
 
+// One typed rejection dict (runner.py: declared_infeasible/invalid_choice/
+// insufficient_spares/ranking_conflict/validation_violations, or whatever
+// commit_* / server-named type a future rejection carries) -> one readable
+// line, in place of the raw JSON dump this used to be. The default case
+// still falls back to the raw dict, so an unrecognised type is shown
+// honestly rather than silently dropped.
+function gateSummary(rejection) {
+    if (!rejection) return '(no rejection recorded)';
+    switch (rejection.type) {
+        case 'declared_infeasible':
+            return `declared_infeasible: the menu came back with ` +
+                `${rejection.menu_size} candidate(s) -- nothing to choose`;
+        case 'invalid_choice':
+            return `invalid_choice: "${rejection.choice}" is not a label ` +
+                `on this ${rejection.menu_size}-candidate menu`;
+        case 'insufficient_spares': {
+            const needed = Object.entries(rejection.needed || {})
+                .map(([site, n]) => `${site}:${n}`).join(', ') || '-';
+            const inventory = Object.entries(rejection.inventory || {})
+                .map(([site, n]) => `${site}:${n}`).join(', ') || '-';
+            return `insufficient_spares at ${esc(rejection.site)}: needs ` +
+                `[${needed}], inventory only has [${inventory}]`;
+        }
+        case 'ranking_conflict': {
+            const prefix = (rejection.funded_prefix || []).join(', ') || '(empty)';
+            return 'ranking_conflict: this candidate charges the depot, ' +
+                `but the SUT is not in the funded prefix [${prefix}]`;
+        }
+        case 'validation_violations': {
+            const vs = rejection.violations || [];
+            return vs.map((v) => {
+                const shared = [...(v.shared_assets || []),
+                                ...(v.shared_groups || [])];
+                return `${v.type} on ${v.asset_id} (basis=${v.basis}/` +
+                    `level=${v.level}${v.level_applied ? '' : ', NOT applied'}` +
+                    `, shares ${shared.join(', ') || 'nothing named'})`;
+            }).join('; ') || 'validation_violations: (no violations listed)';
+        }
+        default:
+            return `${rejection.type}: ${JSON.stringify(rejection)}`;
+    }
+}
+
 function renderSaw(hour) {
     const el = document.getElementById('saw');
     el.innerHTML = '<h3>What the agent saw (click a row to spotlight it)</h3>';
@@ -1049,14 +1203,6 @@ function renderSaw(hour) {
     el.appendChild(table);
 
     const obs = hour.observation || {};
-    const totals = obs.horizon_totals || {};
-    el.appendChild(stepLabel(
-        'horizon_totals -- ground truth, NOT shown to the model since ' +
-        '2026-09-10 (every figure is re-derivable from a row above)'));
-    const totalsPre = document.createElement('pre');
-    totalsPre.className = 'reasoning';
-    totalsPre.textContent = 'horizon_totals: ' + JSON.stringify(totals, null, 1);
-    el.appendChild(totalsPre);
 
     // restorable_groups (observation.py: _restorable_groups): depot-eligible
     // non-SUT services -- ones whose path terminates at the depot site --
@@ -1099,7 +1245,20 @@ function renderSaw(hour) {
         `spares_spent: ${JSON.stringify(obs.spares_spent)}\n` +
         `lead_time_hours: ${JSON.stringify(obs.lead_time_hours || {})}\n` +
         `risk_group_ids: ${JSON.stringify(obs.risk_group_ids || {})}\n` +
-        `actions_taken: ${JSON.stringify(obs.actions_taken || [])}`;
+        `actions_taken: ${JSON.stringify(obs.actions_taken || [])}\n` +
+        `hours_remaining: ${JSON.stringify(obs.hours_remaining)}\n` +
+        `issuance_schedule: ${JSON.stringify(obs.issuance_schedule || [])}\n` +
+        // next_issuance is GENUINELY nullable -- {"hour": "t1"} while a later
+        // issuance is still scheduled, else null once it isn't (observation.py:
+        // upcoming = issue hours later than the in-force one). That "null"
+        // must stay visually distinct from a pre-2026-09-10 trace that never
+        // recorded this key at all ('in obs' is false there) -- collapsing
+        // both to the same displayed "null" would silently claim "no more
+        // issuances" about an old trace that simply never said either way.
+        `next_issuance: ${'next_issuance' in obs
+            ? JSON.stringify(obs.next_issuance)
+            : 'unknown (older trace predates this field)'}\n` +
+        `deadline_hour: ${JSON.stringify(obs.deadline_hour || {})}`;
     el.appendChild(misc);
 
     el.appendChild(rawJson('timing', {observation: hour.projected}));
@@ -1159,6 +1318,7 @@ function renderSaid(hour) {
     if (!hour) return;
     if (!hour.timing) {
         el.appendChild(document.createTextNode('(no reasoning recorded)'));
+        appendRanking(el, hour);
         return;
     }
     if (hour.timing.skipped) {
@@ -1168,10 +1328,18 @@ function renderSaid(hour) {
             'nothing was decidable (no spare left, no exposure, or no new ' +
             'issuance). The harness recorded a wait; the model was not called.';
         el.appendChild(note);
+        appendRanking(el, hour);
         return;
     }
     const probeCursor = {i: 0};
     const allProbes = hour.probes || [];
+    // hour.rejections is populated in the SAME order the iterations loop
+    // executes (runner.py: every failing continue appends exactly one
+    // entry; held/committed append none) -- a cursor, the same pattern
+    // takeProbes already uses, lets each iteration consume its own
+    // rejection instead of the whole list being dumped above every
+    // iteration in one block, out of causal order.
+    const rejectionCursor = {i: 0};
 
     el.appendChild(stepLabel('1. Timing'));
     const timing = document.createElement('div');
@@ -1188,18 +1356,12 @@ function renderSaid(hour) {
             JSON.stringify(hour.timing.contested_claim);
         el.appendChild(cc);
     }
+    appendRanking(el, hour);
     el.appendChild(rawJson('timing', {observation: hour.projected}));
     const timingProbes = probesBlock(
         takeProbes(allProbes, probeCursor, 'timing'),
         'probe_restorability calls (timing)');
     if (timingProbes) el.appendChild(timingProbes);
-
-    for (const rej of hour.rejections || []) {
-        const d = document.createElement('div');
-        d.className = 'rejection';
-        d.textContent = 'rejected: ' + JSON.stringify(rej);
-        el.appendChild(d);
-    }
 
     // Each iteration replays BOTH remaining decisions in the order the model
     // actually received them: the unconstrained menu and the constraints
@@ -1260,7 +1422,8 @@ function renderSaid(hour) {
         }
 
         el.appendChild(stepLabel('3. Objective -- priced candidate menu'));
-        el.appendChild(candidateTable((it.menu && it.menu.candidates) || []));
+        el.appendChild(candidateTable(
+            (it.menu && it.menu.candidates) || [], it.iteration));
         el.appendChild(rawJson(`objective, iteration ${it.iteration}`,
             {observation: it.projected, menu: it.menu}));
         const objectiveProbes = probesBlock(
@@ -1287,6 +1450,33 @@ function renderSaid(hour) {
                 JSON.stringify(objective.contested_claim);
             el.appendChild(cc);
         }
+
+        // The gate this iteration actually hit -- right here, where it
+        // happened, instead of in one flat list of every rejection this
+        // hour above all the iterations (out of causal order: you used to
+        // read "rejected: ..." before seeing the avoid/menu that produced
+        // it). held/committed consume no rejection (runner.py never
+        // appends one for either); everything else consumes exactly one,
+        // in order.
+        el.appendChild(stepLabel('4. Outcome'));
+        const gate = document.createElement('div');
+        if (it.outcome === 'committed') {
+            gate.className = 'gate-ok';
+            gate.textContent = `committed: ${it.lever || '?'}` +
+                (it.inert
+                    ? ' -- inert (no working-path change, no spares spent)'
+                    : '');
+        } else if (it.outcome === 'held') {
+            gate.className = 'gate-ok';
+            gate.textContent = 'held: the model chose not to spend; ' +
+                'the hour ends here';
+        } else {
+            gate.className = 'rejection';
+            const rejection = (hour.rejections || [])[rejectionCursor.i];
+            rejectionCursor.i += 1;
+            gate.textContent = gateSummary(rejection);
+        }
+        el.appendChild(gate);
     });
 }
 
@@ -1350,7 +1540,7 @@ function renderScrubber(episode, run) {
 
         cell.addEventListener('click', () => {
             state.hourIndex = i;
-            state.candidateVisible = false;
+            state.selectedCandidate = null;
             renderAll();
         });
         el.appendChild(cell);
@@ -1394,13 +1584,319 @@ function renderMap() {
     if (spotlightId) {
         drawService(spotlightId, hour, {spotlight: true});
     }
-    if (state.candidateVisible) {
-        const committed = committedCandidate(hour);
-        if (committed) {
+    if (state.selectedCandidate) {
+        const candidate = findCandidate(
+            hour, state.selectedCandidate.iteration, state.selectedCandidate.label);
+        if (candidate) {
             const run = currentRun();
-            drawCandidate(committed, run ? run.oms_nodes : {});
+            drawCandidate(candidate, run ? run.oms_nodes : {});
         }
     }
+}
+
+// ---- ranking panel --------------------------------------------------
+// standing_claim_priority (the ranking actually in force -- only TIMING
+// can write it, runner.py §4.3) beside a fresh ECAR ordering computed from
+// this hour's own ground truth, so a reader can see whether the standing
+// ranking still agrees with what the numbers currently say -- and, if
+// timing carried a stale ranking forward (empty claim_priority is legal
+// once one is standing, agent.py's _check_named_services), whether that
+// staleness now disagrees with the SUT's own position.
+
+// One ECAR per service -- peak across horizons, matching CLAUDE.md's own
+// "peaked over all horizons" convention for collapsing a per-horizon ECAR
+// into one comparable scalar (the DERIVED_VARS discussion, rules.py).
+// Restricted to shown rows only: an omitted service was never a legal
+// claim_priority entry (agent.py's _check_named_services checks names
+// against the shown exposure), so it has no place in this comparison.
+function ecarOrder(hour) {
+    const peak = new Map();
+    for (const r of hour.exposure_rows || []) {
+        if (!r.shown) continue;
+        const v = r.expected_capacity_at_risk_gbps || 0;
+        if (!peak.has(r.service_id) || v > peak.get(r.service_id)) {
+            peak.set(r.service_id, v);
+        }
+    }
+    return Array.from(peak.entries())
+        .sort((a, b) => b[1] - a[1])
+        .map(([id]) => id);
+}
+
+// emptyMark distinguishes "-" (this list is genuinely shorter than n rows)
+// from "?" (we don't know -- standing_claim_priority is unrecorded on this
+// trace), so an old trace's ranking column never reads as a confirmed empty.
+function rankingCell(name, sut, isFunded, emptyMark) {
+    if (name === undefined) {
+        return `<td${isFunded ? ' class="funded-prefix"' : ''}>` +
+            `${emptyMark || '-'}</td>`;
+    }
+    const label = name === sut
+        ? `${esc(name)} <span class="sut-badge">SUT</span>` : esc(name);
+    return `<td${isFunded ? ' class="funded-prefix"' : ''}>${label}</td>`;
+}
+
+// Appends into `el` (a spot in "What it said", right after wherever this
+// hour's timing content lands -- real reasoning, "skipped", or "no
+// reasoning recorded") rather than owning a section of its own: the
+// standing ranking is a RESULT of the timing decision (only timing can
+// write it), so it reads right where that decision's own reasoning does,
+// the same reason the candidate table sits at the objective step rather
+// than in a panel of its own (candidateTable's own comment, above).
+function appendRanking(el, hour) {
+    el.appendChild(stepLabel(
+        "standing ranking (as of this hour's timing decision) vs. " +
+        "current ECAR order"));
+    const obs = hour.observation || {};
+    // hour.standing_claim_priority (top-level, NOT hour.observation's copy)
+    // is written by runner.py right after THIS hour's timing call returns
+    // (runner.py:1089-1091), before the objective step's ranking_conflict
+    // gate ever runs -- so it is the ranking actually in force for the rest
+    // of this hour. hour.observation.standing_claim_priority is captured
+    // earlier, at "read the world" (§4.1), before timing decides -- it can
+    // legitimately still show the OLD ranking while this field already
+    // shows the new one, whenever timing changes it. Using the observation
+    // copy here would make the panel silently stale for the very hour a
+    // ranking change happens.
+    const standingKnown = 'standing_claim_priority' in hour;
+    const standing = hour.standing_claim_priority || [];
+    const ecar = ecarOrder(hour);
+    if (!standingKnown && !ecar.length) {
+        const note = document.createElement('div');
+        note.className = 'reasoning';
+        note.textContent = '(no shown exposure this hour; standing_claim_' +
+            'priority unknown -- older trace predates this field)';
+        el.appendChild(note);
+        return;
+    }
+    const funded = obs.spares_on_hand || 0;
+    const sut = hour.actionable_service;
+    const standingIdx = standing.indexOf(sut);
+    const ecarIdx = ecar.indexOf(sut);
+    if (!standingKnown) {
+        const note = document.createElement('div');
+        note.className = 'reasoning';
+        note.textContent = 'standing_claim_priority: unknown ' +
+            '(older trace predates this field)';
+        el.appendChild(note);
+    } else if (!standing.length) {
+        const note = document.createElement('div');
+        note.className = 'reasoning';
+        note.textContent = '(no standing ranking yet this episode)';
+        el.appendChild(note);
+    } else if (standingIdx !== -1 && ecarIdx !== -1 && standingIdx !== ecarIdx) {
+        const warn = document.createElement('div');
+        warn.className = 'inversion';
+        warn.textContent = `inverted: SUT ranks #${standingIdx + 1} in the ` +
+            `standing order but #${ecarIdx + 1} by current ECAR`;
+        el.appendChild(warn);
+    }
+    const table = document.createElement('table');
+    table.innerHTML = '<tr><th>#</th><th>standing_claim_priority</th>' +
+        '<th>current ECAR order</th></tr>';
+    const n = Math.max(standing.length, ecar.length);
+    for (let i = 0; i < n; i++) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${i + 1}</td>` +
+            rankingCell(standing[i], sut, i < funded,
+                        standingKnown ? '-' : '?') +
+            rankingCell(ecar[i], sut, i < funded);
+        table.appendChild(tr);
+    }
+    el.appendChild(table);
+}
+
+// ---- cut-hour panel ---------------------------------------------------
+// dropped_after_cut / restorations are ground truth from the harness's OWN
+// deterministic post-cut replay (runner.py §4.6, "restore_after_cuts") --
+// the only mechanism by which a held spare ever does anything. Shown
+// against the episode's gold outcome table (already computed at build
+// time from the scenario YAML, no server call needed) so a reader can
+// compare what actually happened here to the two scripted policies this
+// episode was graded against.
+
+function dropLabel(id, sut) {
+    return id === sut
+        ? `<b>${esc(id)} <span class="sut-badge">SUT</span></b>` : `<b>${esc(id)}</b>`;
+}
+
+function renderHappened(episode, run, hour) {
+    const el = document.getElementById('happened');
+    el.innerHTML = '<h3>what happened (realized cuts, restoration ' +
+        'attempts)</h3>';
+    if (!hour) return;
+    const dropped = hour.dropped_after_cut || [];
+    const restorations = ((run && run.restorations) || [])
+        .filter(r => r.hour === hour.hour);
+    if (!dropped.length && !restorations.length) {
+        const note = document.createElement('div');
+        note.className = 'reasoning';
+        note.textContent = '(no cuts realized this hour)';
+        el.appendChild(note);
+        return;
+    }
+    const sut = hour.actionable_service;
+    const competing = new Set(hour.competing_services || []);
+
+    if (dropped.length) {
+        // Only the SUT and restorable-group members are named -- the same
+        // "the roster is mostly background traffic the storm never comes
+        // near" filter _competing_services already applies to the map, so
+        // a 26-service drop list does not bury the one claim that matters.
+        const tracked = dropped.filter(id => id === sut || competing.has(id));
+        const rest = dropped.length - tracked.length;
+        const div = document.createElement('div');
+        div.className = 'reasoning';
+        div.innerHTML = `dropped_after_cut (${dropped.length} services ` +
+            'down this hour):<br>' +
+            (tracked.map(id => dropLabel(id, sut)).join(', ') || '(none competing)') +
+            (rest > 0
+                ? ` <span class="omitted">+${rest} other, ` +
+                  'not competing for this depot</span>' : '');
+        el.appendChild(div);
+    }
+
+    if (restorations.length) {
+        el.appendChild(stepLabel(
+            "restore_after_cuts -- the harness's own post-cut replay " +
+            '(SUT + claimant_services, in standing_claim_priority order)'));
+        const table = document.createElement('table');
+        table.innerHTML = '<tr><th>service</th><th>outcome</th>' +
+            '<th>lever</th><th>spares</th><th>effective_at_hour</th></tr>';
+        for (const r of restorations) {
+            const sparesText = Object.entries(r.spares || {})
+                .map(([site, n]) => `${site}:${n}`).join(', ') || '-';
+            const tr = document.createElement('tr');
+            tr.innerHTML =
+                `<td>${dropLabel(r.service_id, sut)}</td>` +
+                `<td>${esc(r.outcome)}</td>` +
+                `<td>${esc(r.lever || '-')}</td>` +
+                `<td>${esc(sparesText)}</td>` +
+                `<td>${esc(r.effective_at_hour || '-')}</td>`;
+            if (r.rejection) {
+                tr.title = 'rejection: ' + JSON.stringify(r.rejection);
+            }
+            table.appendChild(tr);
+        }
+        el.appendChild(table);
+    }
+
+    const gold = episode.gold || {};
+    if (gold.rationale) {
+        el.appendChild(stepLabel(`gold outcome (label: ${gold.label || '?'})`));
+        const pre = document.createElement('pre');
+        pre.className = 'rationale';
+        pre.textContent = gold.rationale;
+        el.appendChild(pre);
+    }
+}
+
+// ---- probe ledger (whole episode/run, not scoped to the current hour) --
+// findings 5 and 7 (the harness explainer, §9) are both about a probe's
+// ABSENCE or its DISAPPEARANCE across hours -- neither is visible from a
+// single hour's own probesBlock, which only ever shows what THIS hour
+// asked. This flattens every probe_restorability call the run ever made.
+
+function episodeProbes(run) {
+    const rows = [];
+    for (const h of (run && run.hours) || []) {
+        for (const p of h.probes || []) {
+            rows.push({...p, hour: h.hour});
+        }
+    }
+    return rows;
+}
+
+// Whether this probe's answer shows up in decided_this_hour.probe_answers
+// on any LATER hour -- the one place a carried-forward answer would have
+// to appear (runner.py: decided_this_hour is rebuilt fresh every hour from
+// THAT hour's own probe.records, never a prior hour's -- agent.py's
+// _decide also opens a fresh `messages` list each hour). 'unknown (older
+// trace)' when decided_this_hour is never recorded anywhere in this run
+// -- the question genuinely cannot be answered from such a trace, and a
+// bare "no" there would assert a fact this trace never actually confirmed.
+function probeCarriedForward(run, probeHour, probe) {
+    const hours = (run && run.hours) || [];
+    const hourIdx = hours.findIndex(h => h.hour === probeHour);
+    if (hourIdx === -1 || hourIdx === hours.length - 1) return 'n/a (last hour)';
+    let sawField = false;
+    for (let i = hourIdx + 1; i < hours.length; i++) {
+        for (const it of hours[i].iterations || []) {
+            const decided = (it.projected || {}).decided_this_hour;
+            if (!decided) continue;
+            sawField = true;
+            const answers = decided.probe_answers || [];
+            if (answers.some(a => a.service_id === probe.service_id &&
+                                  a.risk_group_id === probe.risk_group_id)) {
+                return 'yes';
+            }
+        }
+    }
+    return sawField ? 'no' : 'unknown (older trace)';
+}
+
+function renderProbeLedger(episode, run) {
+    const el = document.getElementById('probes');
+    el.innerHTML = '<h3>probe ledger (whole run, not just this hour)</h3>';
+    if (!episode || !run) return;
+    const rows = episodeProbes(run);
+    const flip = episode.probe_flip;
+    if (flip) {
+        const div = document.createElement('div');
+        div.className = 'reasoning';
+        div.textContent = `metadata.probe_flip: claimant ${flip.claimant}, ` +
+            `kind ${flip.kind}, expected ${flip.expected}`;
+        el.appendChild(div);
+    }
+    const flipProbed = !!flip && rows.some(r => r.service_id === flip.claimant);
+    if (flip && !flipProbed) {
+        const warn = document.createElement('div');
+        warn.className = 'inversion';
+        warn.textContent = `never probed: ${flip.claimant} (the deciding ` +
+            'claimant per metadata.probe_flip) was not asked about at ' +
+            'all this run';
+        el.appendChild(warn);
+    }
+    if (!rows.length) {
+        const note = document.createElement('div');
+        note.className = 'reasoning';
+        note.textContent = '(no probe_restorability calls this run)';
+        el.appendChild(note);
+        return;
+    }
+    const table = document.createElement('table');
+    table.innerHTML = '<tr><th>hour</th><th>decision</th><th>service</th>' +
+        '<th>risk_group</th><th>status</th><th>candidates</th>' +
+        '<th>min_spares</th><th>levers</th>' +
+        '<th>carried into next hour?</th></tr>';
+    for (const p of rows) {
+        const tr = document.createElement('tr');
+        const isFlip = !!flip && p.service_id === flip.claimant;
+        if (isFlip) tr.className = 'flip-row';
+        if (p.error) {
+            tr.innerHTML = `<td>${esc(p.hour)}</td><td>${esc(p.decision)}</td>` +
+                `<td>${esc(p.service_id)}</td><td>${esc(p.risk_group_id)}</td>` +
+                `<td class="probe-error" colspan="5">error: ${esc(p.error)}</td>`;
+            table.appendChild(tr);
+            continue;
+        }
+        const a = p.answer || {};
+        const spares = Object.entries(a.min_spares_needed_by_site || {})
+            .map(([site, n]) => `${site}:${n}`).join(', ') || '-';
+        const carried = probeCarriedForward(run, p.hour, p);
+        tr.innerHTML =
+            `<td>${esc(p.hour)}</td><td>${esc(p.decision)}</td>` +
+            `<td>${esc(p.service_id)}` +
+            `${isFlip ? ' <span class="flip-badge">FLIP</span>' : ''}</td>` +
+            `<td>${esc(p.risk_group_id)}</td>` +
+            `<td>${esc(a.status)}</td>` +
+            `<td>${esc(a.full_restore_candidates)}</td>` +
+            `<td>${esc(spares)}</td>` +
+            `<td>${esc((a.levers || []).join(', '))}</td>` +
+            `<td>${esc(carried)}</td>`;
+        table.appendChild(tr);
+    }
+    el.appendChild(table);
 }
 
 function renderGold() {
@@ -1419,6 +1915,8 @@ function renderAll() {
     renderMap();
     renderSaw(hour);
     renderSaid(hour);
+    renderHappened(episode, run, hour);
+    renderProbeLedger(episode, run);
     renderScrubber(episode, run);
     renderGold();
 }
@@ -1435,7 +1933,7 @@ function populateDropdowns() {
         state.run = 0;
         state.hourIndex = 0;
         state.spotlight = null;
-        state.candidateVisible = false;
+        state.selectedCandidate = null;
         resetView();
         populateRunDropdown();
         renderAll();
@@ -1462,7 +1960,7 @@ function populateRunDropdown() {
         state.run = Number(runSel.value);
         state.hourIndex = 0;
         state.spotlight = null;
-        state.candidateVisible = false;
+        state.selectedCandidate = null;
         resetView();
         renderAll();
     };
@@ -1484,11 +1982,11 @@ document.addEventListener('keydown', (ev) => {
     if (!run) return;
     if (ev.key === 'ArrowLeft' && state.hourIndex > 0) {
         state.hourIndex -= 1;
-        state.candidateVisible = false;
+        state.selectedCandidate = null;
         renderAll();
     } else if (ev.key === 'ArrowRight' && state.hourIndex < run.hours.length - 1) {
         state.hourIndex += 1;
-        state.candidateVisible = false;
+        state.selectedCandidate = null;
         renderAll();
     }
 });
