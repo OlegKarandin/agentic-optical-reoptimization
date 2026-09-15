@@ -441,6 +441,10 @@ details.raw-json summary { cursor: pointer; font-size: 11px; color: #555; }
 details.raw-json pre { max-height: 320px; overflow: auto; background: #f7f7f5;
                         border: 1px solid #eee; padding: 6px; margin: 4px 0;
                         white-space: pre-wrap; word-break: break-word; }
+.chips { margin: 2px 0 6px 0; }
+.chip { display: inline-block; padding: 1px 6px; margin: 0 4px 3px 0;
+        border-radius: 9px; border: 1px solid #999; font-size: 11px; }
+.chip-empty { border-color: #c00; color: #c00; font-weight: 600; }
 """
 
 
@@ -1191,6 +1195,65 @@ function gateSummary(rejection, hour) {
     }
 }
 
+// The emitted avoid set, resolved against the risk group it was chosen from
+// and counted. Two sources, in order: the constraints step's OWN projection
+// (runner.py's `projected_constraints`) is what the model actually saw; a
+// baseline run projects nothing at all, so fall back to the hour's ground
+// truth (`hour.risk_group_assets`), which carries no group ids of its own --
+// resolve those through the observation's risk_group_ids.
+//
+// A red "binds nothing" chip on a trace written after 2026-09-15 means the
+// agent.py guard failed; on an archived trace it IS finding 2 (D1 run B seeds
+// 1 and 2 both narrated the right eight-asset fix and emitted `[]`/`[""]`).
+function avoidChips(hour, it) {
+    const el = document.createElement('div');
+    el.className = 'chips';
+    const avoid = (it.constraints || {}).avoid || {};
+    const assets = avoid.assets || [];
+    const groups = avoid.risk_groups || [];
+    if (!assets.length && !groups.length) {
+        const chip = document.createElement('span');
+        chip.className = 'chip chip-empty';
+        chip.textContent = 'binds nothing';
+        el.appendChild(chip);
+        return el;
+    }
+    const raw = (it.projected_constraints || {}).risk_groups ||
+        hour.risk_group_assets || [];
+    const ids = (hour.observation || {}).risk_group_ids || {};
+    const rows = raw.map(r => ({
+        risk_group_id: r.risk_group_id || ids[r.horizon] || null,
+        assets: r.assets || []}));
+    for (const g of groups) {
+        const entry = rows.find(r => r.risk_group_id === g);
+        const chip = document.createElement('span');
+        chip.className = 'chip';
+        chip.textContent = entry
+            ? `${g}: whole group, ${entry.assets.length} assets`
+            : `${g}: whole group (contents not on this trace)`;
+        el.appendChild(chip);
+    }
+    if (assets.length) {
+        const byId = new Map();
+        for (const r of rows) {
+            for (const a of r.assets) byId.set(a.asset_id, a);
+        }
+        const counts = {working: 0, protection: 0, none: 0, unresolved: 0};
+        for (const a of assets) {
+            const row = byId.get(a);
+            counts[row ? (row.on || 'none') : 'unresolved'] += 1;
+        }
+        const parts = Object.entries(counts)
+            .filter(([, n]) => n).map(([k, n]) => `${n} ${k}`);
+        const chip = document.createElement('span');
+        chip.className = 'chip';
+        chip.textContent = `binds ${assets.length} named asset(s): ` +
+            parts.join(', ');
+        el.appendChild(chip);
+    }
+    return el;
+}
+
 function renderSaw(hour) {
     const el = document.getElementById('saw');
     el.innerHTML = '<h3>What the agent saw (click a row to spotlight it)</h3>';
@@ -1438,6 +1501,7 @@ function renderSaid(hour) {
         cPre.textContent = `avoid: ${JSON.stringify(constraints.avoid || {})}\n` +
             (constraints.reasoning || '');
         el.appendChild(cPre);
+        el.appendChild(avoidChips(hour, it));
         if (constraints.contested_claim) {
             const cc = document.createElement('div');
             cc.className = 'contested';
