@@ -1135,8 +1135,10 @@ function stepLabel(text) {
 // commit_* / server-named type a future rejection carries) -> one readable
 // line, in place of the raw JSON dump this used to be. The default case
 // still falls back to the raw dict, so an unrecognised type is shown
-// honestly rather than silently dropped.
-function gateSummary(rejection) {
+// honestly rather than silently dropped. The second parameter `hour` is
+// optional; ranking_conflict uses it to show the funded prefix against the
+// actual standing ranking that will be enforced.
+function gateSummary(rejection, hour) {
     if (!rejection) return '(no rejection recorded)';
     switch (rejection.type) {
         case 'declared_infeasible':
@@ -1154,9 +1156,25 @@ function gateSummary(rejection) {
                 `[${needed}], inventory only has [${inventory}]`;
         }
         case 'ranking_conflict': {
-            const prefix = (rejection.funded_prefix || []).join(', ') || '(empty)';
-            return 'ranking_conflict: this candidate charges the depot, ' +
-                `but the SUT is not in the funded prefix [${prefix}]`;
+            const funded = rejection.funded_prefix || [];
+            // The TOP-LEVEL hour.standing_claim_priority, not
+            // hour.observation's: the observation's copy was captured before
+            // the timing call ran, and the ranking a same-hour gate enforces
+            // is the one written right after timing decides
+            // (runner.py:1089-1091). Different field, not a duplicate.
+            const standing = (hour && hour.standing_claim_priority) || [];
+            const sut = (hour && hour.actionable_service) || '?';
+            const pos = standing.indexOf(sut);
+            const where = pos < 0
+                ? `${sut} is not in the standing ranking at all`
+                : `${sut} is #${pos + 1} of ${standing.length}, below the ` +
+                  `funded cut at ${funded.length}`;
+            return 'ranking_conflict: this candidate charges the depot, but ' +
+                `the funded prefix is [${esc(funded.join(', ')) || '(empty)'}]` +
+                ` -- the first ${funded.length} of ` +
+                `[${esc(standing.join(', ')) || '(none)'}], one entry per ` +
+                `spare on hand. ${esc(where)}.` +
+                (rejection.note ? `\n${esc(rejection.note)}` : '');
         }
         case 'validation_violations': {
             const vs = rejection.violations || [];
@@ -1481,7 +1499,7 @@ function renderSaid(hour) {
             gate.className = 'rejection';
             const rejection = (hour.rejections || [])[rejectionCursor.i];
             rejectionCursor.i += 1;
-            gate.textContent = gateSummary(rejection);
+            gate.textContent = gateSummary(rejection, hour);
         }
         el.appendChild(gate);
     });
