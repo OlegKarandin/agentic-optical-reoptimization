@@ -258,7 +258,21 @@ def project_observation(
     # fibres, and the payload is the scarce resource here.
     payload.pop("risk_group_assets", None)
     if include_risk_group_assets:
-        payload["risk_groups"] = list(obs.risk_group_assets)
+        # Each entry names the GROUP it belongs to, not only the horizon.
+        # The constraints paragraph below tells the model to name asset ids
+        # out of this block and risk-group ids out of `risk_group_ids`; with
+        # no id here, connecting the two was a cross-reference the model had
+        # to perform, and a wrong mental model of the structure is the most
+        # likely origin of D1 run B seed 2's `{"risk_groups": [""]}`
+        # (2026-09-12 failure analysis, the cross-episode finding).
+        # Fresh dicts, not `list(obs.risk_group_assets)`: the tuple's own
+        # dicts are a frozen Observation's, and `_project_exposure_entry`
+        # already establishes that the projection never hands those out.
+        payload["risk_groups"] = [
+            {"horizon": entry["horizon"],
+             "risk_group_id": obs.risk_group_ids.get(entry["horizon"]),
+             "assets": entry["assets"]}
+            for entry in obs.risk_group_assets]
     return payload
 
 
@@ -506,16 +520,19 @@ What waiting costs is lead time. What it buys is the next issuance, if \
 `next_issuance` says one is still scheduled before `deadline_hour`.
 
 2. **Constraints** (`""" + CONSTRAINT_TOOL + """`). What must the reroute \
-route around? `avoid` takes risk-group ids from `risk_group_ids` and \
-asset ids from `risk_groups[<id>].assets`. A risk group contains every \
-span the cone touches, including spans that are not on the actionable \
-service's path, and a group naming all of a site's spans leaves that \
-site unroutable. Avoiding the whole group is the safest reroute and \
-sometimes has no path; avoiding only the spans that matter keeps a path \
-open at some residual exposure, which the menu then reports per \
-candidate. If `probe_restorability` reports no solution under a group, \
-that avoid set has no path and repeating it cannot produce one. This \
-decision changes which candidates EXIST.
+route around? `avoid` takes risk-group ids from `risk_group_ids`, and asset \
+ids from `risk_groups` -- a LIST with one entry per horizon, each entry \
+naming its `horizon`, its `risk_group_id`, and its `assets`: one row per \
+asset with `asset_id`, that asset's own `p_cut`, and `on` (whether it sits \
+on the actionable service's working path, its protection path, or neither). \
+A risk group contains every span the cone touches, including spans that are \
+not on the actionable service's path, and a group naming all of a site's \
+spans leaves that site unroutable. Avoiding the whole group is the safest \
+reroute and sometimes has no path; avoiding only the spans that matter keeps \
+a path open at some residual exposure, which the menu then reports per \
+candidate. If `probe_restorability` reports no solution under a group, that \
+avoid set has no path and repeating it cannot produce one. This decision \
+changes which candidates EXIST.
 
 3. **Objective** (`""" + OBJECTIVE_TOOL + """`). Which candidate from the \
 routing menu? Answer with the `candidate_label` of the entry you want, \

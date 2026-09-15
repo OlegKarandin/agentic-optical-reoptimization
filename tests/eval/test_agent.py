@@ -1389,7 +1389,13 @@ def test_only_the_constraints_step_is_shown_the_groups_contents():
                                       "p_cut": 0.97, "on": "working"}]},))
     assert "risk_groups" not in project_observation(obs)
     at_constraints = project_observation(obs, include_risk_group_assets=True)
-    assert at_constraints["risk_groups"] == list(obs.risk_group_assets)
+    # The projected risk_groups include risk_group_id, not just the raw entry.
+    assert len(at_constraints["risk_groups"]) == 1
+    entry = at_constraints["risk_groups"][0]
+    assert entry["horizon"] == "t3"
+    assert entry["risk_group_id"] == obs.risk_group_ids.get("t3")
+    assert entry["assets"] == [{"asset_id": "fiber_a_b_0",
+                                "p_cut": 0.97, "on": "working"}]
 
 
 def test_the_decider_shows_the_groups_contents_at_constraints_only():
@@ -1472,7 +1478,10 @@ def test_the_prompt_says_the_later_steps_execute_the_timing_decision():
 def test_the_constraints_block_says_a_group_can_disconnect_a_site():
     assert "a group naming all of a site's spans leaves that site unroutable" \
         in SYSTEM_PROMPT
-    assert "risk_groups[<id>].assets" in SYSTEM_PROMPT
+    # The constraints paragraph now describes the real risk_groups shape: a LIST
+    # with risk_group_id in each entry, not a mapping keyed by id.
+    assert "`risk_group_id`" in SYSTEM_PROMPT
+    assert "a LIST with one entry per horizon" in SYSTEM_PROMPT
 
 
 def test_the_seven_cost_terms_are_gone():
@@ -1510,3 +1519,61 @@ def test_the_removed_bullets_are_actually_removed():
 # list ("spend", "hold the spare for", "gold", "T1"/"T2"/"T3", "claimant")
 # is merged into test_the_system_prompt_never_leaks_scoring_internals above,
 # per the brief's own instruction not to ship two overlapping lists.
+
+
+RISK_GROUP_ASSETS = (
+    {"horizon": HORIZON,
+     "assets": [{"asset_id": "fiber_satna_rewa_0", "p_cut": 0.91,
+                 "on": "working"},
+                {"asset_id": "fiber_satna_jhansi_0", "p_cut": 0.88,
+                 "on": "protection"},
+                {"asset_id": "fiber_satna_jabalpur_0", "p_cut": 0.77,
+                 "on": "none"}]},
+)
+
+
+def _obs_with_groups(**kwargs):
+    """`_obs()` plus the asset rows the constraints step is the only step to
+    see. `_obs` already sets `risk_group_ids={HORIZON: "rg_T3a_t1_t3"}`, so
+    the horizon here resolves to a real id."""
+    return dataclasses.replace(_obs(**kwargs),
+                               risk_group_assets=RISK_GROUP_ASSETS)
+
+
+def test_each_projected_risk_group_entry_names_its_own_group_id():
+    """The prompt tells the model to draw asset ids from a structure keyed by
+    risk-group id. Before this change the wire carried a list keyed by
+    horizon with no id in it at all, and the model had to cross-reference
+    `risk_group_ids` to connect the two (harness explainer, §5.1's second
+    consequence)."""
+    payload = project_observation(_obs_with_groups(others=CLAIMANTS),
+                                  include_risk_group_assets=True)
+    assert [e["horizon"] for e in payload["risk_groups"]] == [HORIZON]
+    entry = payload["risk_groups"][0]
+    assert entry["risk_group_id"] == "rg_T3a_t1_t3"
+    assert entry["risk_group_id"] == payload["risk_group_ids"][HORIZON]
+    assert [a["asset_id"] for a in entry["assets"]] == [
+        "fiber_satna_rewa_0", "fiber_satna_jhansi_0",
+        "fiber_satna_jabalpur_0"]
+
+
+def test_the_projected_entries_are_fresh_dicts_not_the_observations_own():
+    """`_project_exposure_entry`'s discipline, applied here too: the payload
+    is handed to json.dumps and to the trace, and nothing downstream should be
+    able to reach back into a frozen Observation's rows."""
+    obs = _obs_with_groups()
+    payload = project_observation(obs, include_risk_group_assets=True)
+    assert payload["risk_groups"][0] is not obs.risk_group_assets[0]
+
+
+def test_the_risk_group_block_is_still_absent_from_timing_and_objective():
+    obs = _obs_with_groups(others=CLAIMANTS)
+    assert "risk_groups" not in project_observation(obs)
+    assert "risk_group_assets" not in project_observation(obs)
+
+
+def test_the_constraints_paragraph_describes_the_real_risk_group_shape():
+    """The paragraph used to say `risk_groups[<id>].assets` -- a mapping that
+    has never existed on the wire."""
+    assert "risk_groups[<id>]" not in SYSTEM_PROMPT
+    assert "`risk_group_id`" in SYSTEM_PROMPT
