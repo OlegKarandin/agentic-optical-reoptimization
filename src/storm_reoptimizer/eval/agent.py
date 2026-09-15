@@ -422,6 +422,11 @@ past the episode's last hour; plus the running total of pairs already spent. \
 A reroute you committed in an earlier hour has already moved the service, so \
 the `exposure` above describes its CURRENT path, not the path it had when \
 you acted.
+- `probe_answers_this_episode` -- every answer `probe_restorability` has \
+returned anywhere in this episode so far, oldest first, each stamped with the \
+`hour` and the `decision` it was bought at. Each request is a fresh \
+conversation, so this list is the only record you have of what you already \
+asked and what came back.
 - `lead_time_hours` -- hours between issuing an action on a lever and it \
 being effective, per lever. An `ip_reroute` is a config change and lands \
 immediately. Lighting a new optical path is provisioning and takes the \

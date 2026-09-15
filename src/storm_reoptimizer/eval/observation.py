@@ -280,6 +280,21 @@ class Observation:
     # horizon -- so `agent.project_observation` shows it only at the
     # constraints step, gated per DECISION, not by this field alone.
     risk_group_assets: tuple[dict, ...] = ()
+    # Every probe answer ACCEPTED anywhere in this episode so far, oldest
+    # first, each stamped with the `hour` and the `decision` it was bought at.
+    # The same argument as `actions_taken` above, which the codebase already
+    # accepted: ClaudeDecider opens a fresh conversation for every decision
+    # (agent.py:770), so a probe answer bought at t0's timing call does not
+    # exist at t0's own constraints call, let alone at t1's. T3b run B seed 0
+    # probed buldhana at t0, used the answer correctly, and at t1 reverted to
+    # the raw ECAR ordering the answer contradicted -- not a self-
+    # contradiction, the information was genuinely gone (2026-09-12 failure
+    # analysis, finding 7).
+    #
+    # Distinct from `decided_this_hour.probe_answers`, which is THIS hour's,
+    # rebuilt per iteration: one says "what I have asked in this decision",
+    # this one "what I have ever asked".
+    probe_answers_this_episode: tuple[dict, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-serializable form, for the trace and for step 6's prompt."""
@@ -318,6 +333,8 @@ class Observation:
             "deadline_hour": self.deadline_hour,
             "next_issuance": self.next_issuance,
             "standing_claim_priority": list(self.standing_claim_priority),
+            "probe_answers_this_episode": [
+                dict(entry) for entry in self.probe_answers_this_episode],
         }
         # Present only where the harness actually supplied them, so the
         # timing payload never carries an empty shell (see the field
@@ -350,6 +367,7 @@ def build_observation(
     decided_this_hour: dict | None = None,
     attempts_this_hour: tuple[dict, ...] = (),
     risk_group_assets: tuple[dict, ...] = (),
+    probe_answers_this_episode: tuple[dict, ...] = (),
 ) -> Observation:
     """The observation for one hour. `service_spans` maps a service id to the
     spans of its working path that the event's own filter admits -- the
@@ -508,4 +526,5 @@ def build_observation(
         decided_this_hour=decided_this_hour,
         attempts_this_hour=tuple(attempts_this_hour),
         risk_group_assets=tuple(risk_group_assets),
+        probe_answers_this_episode=tuple(probe_answers_this_episode),
     )

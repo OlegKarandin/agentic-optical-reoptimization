@@ -2058,3 +2058,63 @@ def test_a_candidate_charging_the_depot_nothing_still_never_conflicts():
         spares_on_hand=1, ledger=ledger) is None
 
 
+def test_probe_answers_stamps_the_hour_and_decision_only_when_asked():
+    records = [
+        {"decision": "timing", "service_id": "svc-b",
+         "risk_group_id": "rg_t3", "error": None,
+         "answer": {"status": "solution", "full_restore_candidates": 1,
+                    "min_spares_needed_by_site": {"satna": 1},
+                    "levers": ["optical_reroute"], "scope": "s"}},
+        {"decision": "constraints", "service_id": "svc-c",
+         "risk_group_id": "rg_t3", "error": "rejected", "answer": None},
+    ]
+    # The existing hour-level view: no hour, no decision, rejected dropped.
+    assert runner.probe_answers(records) == [
+        {"service_id": "svc-b", "risk_group_id": "rg_t3",
+         "status": "solution", "full_restore_candidates": 1,
+         "min_spares_needed_by_site": {"satna": 1},
+         "levers": ["optical_reroute"], "scope": "s"}]
+    # The episode-level view: same records, plus WHEN and at which decision.
+    episode = runner.probe_answers(records, hour="t0")
+    assert len(episode) == 1
+    assert episode[0]["hour"] == "t0"
+    assert episode[0]["decision"] == "timing"
+    assert episode[0]["service_id"] == "svc-b"
+
+
+def test_a_probe_answer_bought_at_one_hour_is_on_a_later_hours_observation(
+    tmp_path, loaded_state_path, local_server_command, local_server_env,
+):
+    """T3b run B seed 0's failure, as an integration test. Read off the TRACE
+    rather than off the decider: `observation_record` trims only `exposure`
+    and `services`, so the hour record's own `observation` is the whole
+    `to_dict()` payload, and the hour-level Observation is built BEFORE that
+    hour's timing call (runner.py:1033) -- which is exactly the boundary this
+    field has to cross.
+
+    `_ProbingDecider(ScriptedDecider("hold"))` is the same pair
+    `test_the_runner_binds_a_probe_per_hour_and_records_every_call` already
+    uses: it probes the first non-SUT PROJECTED service at every timing call,
+    so its probes are accepted rather than rejected by ProbeBinding's own
+    guards."""
+    decider = _ProbingDecider(ScriptedDecider("hold"))
+    trace = asyncio.run(_run(
+        _scenario(tmp_path), decider,
+        loaded_state_path, local_server_command, local_server_env))
+    answered = [i for i, h in enumerate(trace.hours)
+                if any(p.get("answer") for p in h.get("probes", ()))]
+    assert answered, "no hour recorded an accepted probe answer"
+    first = answered[0]
+    assert first + 1 < len(trace.hours), \
+        "the probe landed on the last hour; nothing to carry into"
+    # Nothing is carried INTO the hour the first probe was bought at.
+    assert trace.hours[first]["observation"][
+        "probe_answers_this_episode"] == []
+    carried = trace.hours[first + 1]["observation"][
+        "probe_answers_this_episode"]
+    assert carried, "the probe answer did not survive into a later hour"
+    assert carried[0]["hour"] == trace.hours[first]["hour"]
+    assert carried[0]["decision"] == "timing"
+    assert {"status", "scope", "service_id", "risk_group_id"} <= set(carried[0])
+
+

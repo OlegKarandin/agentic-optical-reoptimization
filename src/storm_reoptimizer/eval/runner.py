@@ -118,17 +118,32 @@ def action_payloads(actions, hours=()) -> tuple[dict, ...]:
                  for a in actions)
 
 
-def probe_answers(records) -> list[dict]:
+def probe_answers(records, *, hour: str | None = None) -> list[dict]:
     """The ACCEPTED probe answers from one hour's `ProbeBinding.records`,
-    flattened into what `decided_this_hour.probe_answers` shows: the question
-    asked and the answer given, one dict each.
+    flattened into one dict each: the question asked and the answer given.
 
     Rejected probes are dropped on purpose -- a probe the harness refused
     carries no information about the network, only about the model's own
-    mistake, and `last_rejection`/the retry loop already handle that."""
-    return [{"service_id": r["service_id"],
-             "risk_group_id": r["risk_group_id"], **r["answer"]}
-            for r in records if r.get("answer") is not None]
+    mistake, and `last_rejection`/the retry loop already handle that.
+
+    Two views come out of this one function. With no `hour`, the entry shape
+    is `decided_this_hour.probe_answers`': this hour's questions, where "when"
+    is implied. With `hour` given, each entry also carries that hour and the
+    record's own `decision` -- the episode-level view
+    (`Observation.probe_answers_this_episode`), which has to say WHEN and at
+    which decision an answer was bought. Widened rather than duplicated: two
+    functions building near-identical dicts from the same records is how two
+    views drift."""
+    out = []
+    for r in records:
+        if r.get("answer") is None:
+            continue
+        entry = {"service_id": r["service_id"],
+                 "risk_group_id": r["risk_group_id"], **r["answer"]}
+        if hour is not None:
+            entry = {"hour": hour, "decision": r["decision"], **entry}
+        out.append(entry)
+    return out
 
 
 def attempt_records(iterations) -> tuple[dict, ...]:
@@ -977,6 +992,10 @@ async def run_episode(
     # hours, and read by the post-cut replay at a cut hour -- which, under
     # the decidable-hours rule, may have no decision of its own.
     standing_claim_priority: tuple[str, ...] = ()
+    # Every accepted probe answer this episode, oldest first. Accumulated the
+    # way `actions` is, and for the same reason (observation.py's own comment
+    # on the field).
+    probe_answers_this_episode: list[dict] = []
 
     for hour_index, hour in enumerate(scenario.hours):
         record: dict = {"hour": hour, "iterations": [], "rejections": []}
@@ -1026,7 +1045,9 @@ async def run_episode(
                           endpoint_sites=geometry.endpoint_sites,
                           depot_site=scenario.depot_site,
                           protection_spans=geometry.protection_cuttable_spans,
-                          standing_claim_priority=standing_claim_priority)
+                          standing_claim_priority=standing_claim_priority,
+                          probe_answers_this_episode=tuple(
+                              probe_answers_this_episode))
 
         issuance = latest_issuance(scenario, hour)
         rg_ids, rg_assets, optical_oms = await _define_horizon_risk_groups(
@@ -1147,7 +1168,10 @@ async def run_episode(
                            record["iterations"]),
                        "actions_taken": action_payloads(
                            actions, hours=scenario.hours),
-                       "risk_group_assets": risk_group_assets})
+                       "risk_group_assets": risk_group_assets,
+                       "probe_answers_this_episode": tuple(
+                           probe_answers_this_episode
+                           + probe_answers(probe.records, hour=hour))})
                 probe.begin("constraints")
                 constraints = await decider.constraints(obs, unconstrained)
                 menu = await counting.call(
@@ -1335,6 +1359,8 @@ async def run_episode(
             record["restorations"] = restore_records
             all_restorations.extend(restore_records)
         record["probes"] = list(probe.records)
+        probe_answers_this_episode.extend(
+            probe_answers(probe.records, hour=hour))
         if hasattr(decider, "bind_probe"):
             decider.bind_probe(None)
         hours.append(record)

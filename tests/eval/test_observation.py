@@ -437,3 +437,33 @@ def test_the_band_scales_with_how_far_ahead_the_horizon_is(
     far = obs.exposure["storm-svc-1"]["t3"]["p_cut_if_track_revised"]
     assert near["revision_radius_km"] == 30.0
     assert far["revision_radius_km"] == 90.0
+
+
+def test_probe_answers_carry_across_the_episode_on_the_observation(scenario):
+    """ClaudeDecider opens a FRESH conversation for every decision
+    (agent.py:770), so without this field a probe answer bought at t0 does not
+    exist at t0's own constraints call, let alone at t1's timing call. T3b run
+    B seed 0 probed buldhana at t0, used the answer, and reverted at t1
+    (2026-09-12 failure analysis, finding 7). Same argument as `actions_taken`,
+    which the codebase already accepted."""
+    carried = ({"hour": "t0", "decision": "timing", "service_id": "svc-b",
+                "risk_group_id": "rg_t3", "status": "no_solution",
+                "full_restore_candidates": 0,
+                "min_spares_needed_by_site": None, "levers": [],
+                "scope": "answered while avoiding every asset in rg_t3; "
+                         "narrower avoid sets were not evaluated"},)
+    obs = build_observation(scenario, "t1", service_spans=SPANS,
+                            services=SERVICES, spares_on_hand=1,
+                            probe_answers_this_episode=carried)
+    assert obs.probe_answers_this_episode == carried
+    assert obs.to_dict()["probe_answers_this_episode"] == list(carried)
+
+
+def test_the_carried_probe_field_is_always_emitted_even_when_empty(scenario):
+    """Always present, unlike `decided_this_hour`/`attempts_this_hour`: an
+    absent key then means "this trace predates the field" and an empty list
+    means "nothing has been asked yet", which are different facts (the viewer's
+    own standing lesson, harness explainer §13)."""
+    obs = build_observation(scenario, "t0", service_spans=SPANS,
+                            services=SERVICES, spares_on_hand=1)
+    assert obs.to_dict()["probe_answers_this_episode"] == []
