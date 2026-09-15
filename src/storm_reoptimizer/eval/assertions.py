@@ -1848,6 +1848,20 @@ def assert_gold_matches_outcomes(
 PROBE_FLIP_KINDS = ("restorable", "spares_needed")
 
 
+def _answer_ignoring_scope(answer):
+    """`scope` (probe.py's ProbeAnswer.scope / probe_scope) names the
+    risk-group id a probe was conditioned on, which differs between
+    scenario halves BY CONSTRUCTION (it embeds scenario.id) -- it is not
+    a fact about the answer's restorability content. Comparing it across
+    halves would report a mismatch on every claimant regardless of
+    whether status/full_restore_candidates/min_spares_needed_by_site/
+    levers actually agree, which is what this function is meant to
+    check."""
+    if answer is None:
+        return None
+    return {k: v for k, v in answer.items() if k != "scope"}
+
+
 def probe_reading(kind: str, answer: dict) -> str:
     """The categorical fact one probe answer states, for one `probe_flip`
     kind: `restorable`/`not_restorable`, or (`spares_needed`) `spare`/`free`
@@ -1882,7 +1896,7 @@ def probe_flip_mismatches(a: ScenarioFile, answers_a: dict[str, dict],
         # observation). The probe must then say the same thing about every
         # claimant in both halves, or the probe carries an undeclared flip.
         for claimant in sorted(set(answers_a) | set(answers_b)):
-            if answers_a.get(claimant) != answers_b.get(claimant):
+            if _answer_ignoring_scope(answers_a.get(claimant)) != _answer_ignoring_scope(answers_b.get(claimant)):
                 problems.append(
                     f"{claimant!r}: neither half declares a probe_flip, yet "
                     f"the probe answers differently: {answers_a.get(claimant)!r} "
@@ -1925,7 +1939,7 @@ def probe_flip_mismatches(a: ScenarioFile, answers_a: dict[str, dict],
     for claimant in sorted(set(answers_a) | set(answers_b)):
         if claimant in named:
             continue
-        if answers_a.get(claimant) != answers_b.get(claimant):
+        if _answer_ignoring_scope(answers_a.get(claimant)) != _answer_ignoring_scope(answers_b.get(claimant)):
             problems.append(
                 f"{claimant!r} is named by neither half's probe_flip but "
                 f"answers differently: {answers_a.get(claimant)!r} ({a.id}) "

@@ -1181,6 +1181,9 @@ FREE = {"status": "solution", "full_restore_candidates": 1,
         "min_spares_needed_by_site": {}, "levers": ["ip_reroute"]}
 DEAD = {"status": "no_solution", "full_restore_candidates": 0,
         "min_spares_needed_by_site": None, "levers": []}
+# Answers with scope fields (as returned from probe.answer_probe after Task 3)
+RESTORABLE_WITH_SCOPE_A = {**RESTORABLE, "scope": "answered while avoiding every asset in rg_T1a_t1_t3; narrower avoid sets were not evaluated"}
+RESTORABLE_WITH_SCOPE_B = {**RESTORABLE, "scope": "answered while avoiding every asset in rg_T1b_t1_t3; narrower avoid sets were not evaluated"}
 
 
 def test_probe_reading_names_the_fact_each_kind_asks_about():
@@ -1244,6 +1247,33 @@ def test_a_pair_with_no_declared_probe_flip_must_probe_identically(tmp_path):
     b = _half(tmp_path, "B", metadata=dict(claimant_services=["c1"]))
     assert probe_flip_mismatches(a, {"c1": RESTORABLE}, b, {"c1": RESTORABLE}) == []
     assert probe_flip_mismatches(a, {"c1": RESTORABLE}, b, {"c1": DEAD})
+
+
+def test_scope_differences_are_ignored_for_t1_shaped_pairs(tmp_path):
+    """Task 3 added `scope` field to probe answers. `scope` names the
+    risk-group id (which embeds scenario.id), so it ALWAYS differs between
+    halves by construction. The comparison should ignore scope and compare
+    only the semantic content (status, full_restore_candidates, etc.)."""
+    a = _half(tmp_path, "A", metadata=dict(claimant_services=["c1"]))
+    b = _half(tmp_path, "B", metadata=dict(claimant_services=["c1"]))
+    # Same semantic content but different scope (as it naturally differs by scenario)
+    problems = probe_flip_mismatches(
+        a, {"c1": RESTORABLE_WITH_SCOPE_A},
+        b, {"c1": RESTORABLE_WITH_SCOPE_B})
+    assert problems == [], f"expected no problems but got: {problems}"
+
+
+def test_scope_differences_dont_hide_real_semantic_differences(tmp_path):
+    """Even though scope is ignored, real semantic differences should still
+    be caught."""
+    a = _half(tmp_path, "A", metadata=dict(claimant_services=["c1"]))
+    b = _half(tmp_path, "B", metadata=dict(claimant_services=["c1"]))
+    # Same scope, but different semantic content
+    problems = probe_flip_mismatches(
+        a, {"c1": RESTORABLE_WITH_SCOPE_A},
+        b, {"c1": {**DEAD, "scope": RESTORABLE_WITH_SCOPE_A["scope"]}})
+    assert len(problems) > 0, "expected to catch the real semantic difference"
+    assert "c1" in problems[0]
 
 
 def test_the_two_halves_must_declare_different_expectations(tmp_path):
