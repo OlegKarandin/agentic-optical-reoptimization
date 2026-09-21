@@ -161,13 +161,13 @@ gold:
     service                               spend         hold
     t1-svc-jalgaon-indore                 0.000        0.000
     t1-claimant-jalgaon-dhulia-fwd      500.000      200.000
-    t1-claimant-jalgaon-dhulia-rev      500.000      500.000
-    TOTAL                             13000.000    12700.000
-    gold: hold (argmin total Gbps-hours lost, margin 300.000 over 'spend')
+    t1-claimant-jalgaon-dhulia-rev      500.000      200.000
+    TOTAL                             13000.000    12400.000
+    gold: hold (argmin total Gbps-hours lost, margin 600.000 over 'spend')
   outcome_gbps_h:
     spend: 13000.0
-    hold: 12700.0
-  min_margin_gbps_h: 175.0
+    hold: 12400.0
+  min_margin_gbps_h: 100.0
 flip_variable:
 - spend
 - hold
