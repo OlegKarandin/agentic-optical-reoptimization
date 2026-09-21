@@ -247,6 +247,30 @@ def test_the_t2_and_t3_pin_sets_are_the_specs():
         "t3-claimant-jalgaon-buldhana")
 
 
+def test_t2_and_t3_pins_contain_no_mate_pair():
+    """Transponder-pairing spec (2026-09-21), §3.6: T2's and T3's own pins
+    must not contain a mate pair (same unordered endpoint pair, opposite
+    direction) -- after Task 1, a claimant restoring for free because its
+    reverse mate is already lit would collapse the spare contention these
+    pairs are built to test, exactly the failure the pre-2026-08-30 satna
+    claimants had for a different reason (CLAUDE.md). Enforced here rather
+    than merely believed."""
+    for name, pins in (("T2", build_eval_state.T2_PINS),
+                       ("T3", build_eval_state.T3_PINS)):
+        directions: dict[tuple[str, str], tuple[str, str]] = {}
+        for pin in pins:
+            direction = (pin["src"], pin["dst"])
+            pair = tuple(sorted(direction))
+            prior = directions.get(pair)
+            assert prior is None or prior == direction, (
+                f"{name}: {pin['id']!r} ({direction}) is the reverse mate "
+                f"of an earlier pin over the same endpoint pair {pair} "
+                f"({prior}) -- the ledger's mate-pairing rule would make "
+                f"its restoration free, collapsing the spare contention "
+                f"this pair is built to test")
+            directions.setdefault(pair, direction)
+
+
 def test_the_pair_state_files_carry_their_pins_and_the_base(eval_state_paths):
     base = {s["id"] for s in json.loads(
         eval_state_paths["eval/states/loaded-s17.json"].read_text(encoding="utf-8"))["services"]}
