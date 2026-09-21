@@ -753,6 +753,10 @@ async def assert_gold_spare_action_is_grounded(
             f"real menu under reference_avoid {scenario.reference_avoid!r}; "
             f"gold_spare_action {action!r} cannot be grounded against reality")
 
+    # lit_runs deliberately left at its default (): this asks whether a
+    # menu offers a VARIETY of standalone costs under reference_avoid;
+    # pairing against a rollout that doesn't exist here would mask a menu
+    # that really is uniform (transponder-pairing spec, 2026-09-21).
     costs = {sum(spares_needed(c, oms_nodes).values()) for c in candidates}
     if action == "spend" and not any(cost > 0 for cost in costs):
         raise PairInvalid(
@@ -882,6 +886,10 @@ def _check_no_free_escape(scenario_id: str, menu: dict, current: set[str], *,
 
     oms_nodes = oms_nodes or {}
     for index, candidate in enumerate(menu.get("candidates") or []):
+        # lit_runs deliberately left at its default (): this asks whether a
+        # candidate is INTRINSICALLY zero-spare (a groom), not whether it
+        # happens to be free today because some other candidate mated
+        # against it (transponder-pairing spec, 2026-09-21).
         if sum(spares_needed(candidate, oms_nodes).values()) != 0:
             continue
         reused = set(candidate.get("reused_lightpaths") or ())
@@ -1457,6 +1465,9 @@ def _binding_site_violations(
 
     violations: list[tuple[int, str, int, int]] = []
     for index, candidate in enumerate(candidates):
+        # lit_runs deliberately left at its default (): this is an
+        # authoring-time check over a fresh menu, no rollout in progress
+        # (transponder-pairing spec, 2026-09-21).
         needed = spares_needed(candidate, oms_nodes)
         for site, count in needed.items():
             if site == depot_site:

@@ -149,6 +149,9 @@ async def probe(topology: Path, state: Path, service: str, lat: float,
         print(f"\n=== route_service({service}, avoid={avoid}) -> "
               f"{menu['status']} ===")
         for i, cand in enumerate(menu["candidates"]):
+            # lit_runs deliberately left at its default (): an offline
+            # authoring tool, no rollout ledger (transponder-pairing spec,
+            # 2026-09-21).
             print(f"  candidate_{i}: lever={cand['lever']:<16} "
                   f"restored={cand['restored_gbps']:>6.0f}G "
                   f"shortfall={cand['shortfall_gbps']:>6.0f}G "

@@ -354,6 +354,9 @@ async def evaluate(topology_path: str | Path, base_state_path: str | Path,
                     cand["path_delta"]["changes_working_path"],
                 "collides_with_protection":
                     cand["collides_with_protection"]["collides"],
+                # lit_runs deliberately left at its default (): an offline
+                # authoring tool, no rollout ledger (transponder-pairing
+                # spec, 2026-09-21).
                 "spares_needed": spares_needed(cand, geometry.oms_nodes),
                 "residual_p_cut": cand["residual_exposure"]["probe"]["p_cut"],
             } for i, cand in enumerate(annotated.get("candidates") or [])]
