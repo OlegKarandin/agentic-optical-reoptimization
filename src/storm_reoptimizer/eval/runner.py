@@ -33,6 +33,7 @@ from __future__ import annotations
 import functools
 import json
 import time
+from typing import Iterable
 from dataclasses import asdict, dataclass, field
 from functools import partial
 from pathlib import Path
@@ -159,7 +160,9 @@ def attempt_records(iterations) -> tuple[dict, ...]:
 
 
 def unconstrained_menu_projection(menu: dict,
-                                  oms_nodes: dict | None = None) -> dict:
+                                  oms_nodes: dict | None = None, *,
+                                  lit_runs: Iterable[tuple[str, str]] = ()
+                                  ) -> dict:
     """What decision 2 is shown of the menu it is about to reshape.
 
     decisions.py states the mechanic: decision 2's `avoid` is what
@@ -177,18 +180,23 @@ def unconstrained_menu_projection(menu: dict,
     `oms_nodes` resolves each candidate's `new_lightpaths` to endpoint SITES
     (ledger.spares_needed) -- the static optical adjacency, unchanged across
     an episode's hours, so callers read it once from
-    `ServiceGeometry.oms_nodes` rather than re-fetching it."""
+    `ServiceGeometry.oms_nodes` rather than re-fetching it.
+
+    `lit_runs` -- see `menu_for_prompt` below; the SAME rollout state must
+    reach both projections, or decision 2's and decision 3's own spare
+    figures for the SAME candidate could silently disagree."""
     oms_nodes = oms_nodes or {}
     return {"status": menu.get("status"),
             "candidates": [{"candidate_label": f"candidate_{i}",
                             "lever": candidate["lever"],
-                            "spares_needed": spares_needed(candidate,
-                                                          oms_nodes)}
+                            "spares_needed": spares_needed(
+                                candidate, oms_nodes, lit_runs=lit_runs)}
                            for i, candidate in enumerate(
                                menu.get("candidates") or [])]}
 
 
-def menu_for_prompt(menu: dict, oms_nodes: dict | None = None) -> dict:
+def menu_for_prompt(menu: dict, oms_nodes: dict | None = None, *,
+                    lit_runs: Iterable[tuple[str, str]] = ()) -> dict:
     """The routing menu with two derived fields per candidate: the label the
     objective decision must answer with, and `spares_needed` -- the
     candidate's OWN spare cost PER SITE (ledger.spares_needed), which
@@ -201,12 +209,21 @@ def menu_for_prompt(menu: dict, oms_nodes: dict | None = None) -> dict:
     vector on purpose -- that one is shown to decision 2, this one to decision
     3.
 
+    `lit_runs` (transponder-pairing spec, 2026-09-21) is this rollout's own
+    `SpareLedger.lit_runs` at the moment of this call -- both this
+    function's callers (runner.run_episode's own trace recording, and
+    agent.ClaudeDecider's identical call rendering the wire payload the
+    model reads) MUST pass the SAME `lit_runs`, or the number the trace
+    records and the number the model saw would silently disagree, exactly
+    the failure this docstring's own "one function so the two can never
+    disagree" sentence exists to prevent.
+
     `oms_nodes` -- see unconstrained_menu_projection above."""
     oms_nodes = oms_nodes or {}
     projected = dict(menu)
     projected["candidates"] = [
         {**candidate, "candidate_label": f"candidate_{i}",
-         "spares_needed": spares_needed(candidate, oms_nodes)}
+         "spares_needed": spares_needed(candidate, oms_nodes, lit_runs=lit_runs)}
         for i, candidate in enumerate(menu.get("candidates") or [])]
     return projected
 
@@ -383,7 +400,8 @@ def ranking_conflict(candidate: dict, *, standing: tuple[str, ...],
     reason unrelated to the pair."""
     if not standing:
         return None
-    if not spares_needed(candidate, ledger.oms_nodes).get(ledger.depot_site):
+    if not spares_needed(candidate, ledger.oms_nodes,
+                         lit_runs=ledger.lit_runs).get(ledger.depot_site):
         return None
     funded = list(standing[:spares_on_hand])
     if actionable in funded:
@@ -1020,6 +1038,13 @@ async def run_episode(
         # attribute, hence the guard.
         if hasattr(decider, "oms_nodes"):
             decider.oms_nodes = geometry.oms_nodes
+        # ClaudeDecider's own menu render (agent.py's _menu_for_prompt call,
+        # the SAME menu_for_prompt this loop's trace recording uses) must
+        # see the SAME lit_runs, or menu_for_prompt's own "one function so
+        # the two can never disagree" promise breaks for a mate pair
+        # (transponder-pairing spec, 2026-09-21).
+        if hasattr(decider, "lit_runs"):
+            decider.lit_runs = ledger.lit_runs
         services = tuple((await counting.call("get_services"))["services"])
         # For menu_with_path_facts' residual_exposure -- the SUT's own
         # demand, already on this hour's roster fetch, so no extra call.
@@ -1086,7 +1111,7 @@ async def run_episode(
         _probe_answer = functools.partial(
             answer_probe, counting.call, geometry=geometry,
             issuance=issuance, damage_radius_km=scenario.damage_radius_km,
-            demands=record["demands"])
+            demands=record["demands"], lit_runs=ledger.lit_runs)
         # Spec §5.1: `service_id` must be in the PROJECTED `exposure` -- the
         # same rule `agent._check_named_services` applies to `claim_priority`
         # -- not the raw, unprojected `obs.exposure` (potentially hundreds of
@@ -1157,7 +1182,7 @@ async def run_episode(
             ).route_service_args(scenario.service_under_test)
             unconstrained = unconstrained_menu_projection(
                 await counting.call("route_service", probe_args),
-                geometry.oms_nodes)
+                geometry.oms_nodes, lit_runs=ledger.lit_runs)
             record["unconstrained_menu"] = unconstrained
             last_rejection: dict | None = None
             committed = False
@@ -1213,7 +1238,8 @@ async def run_episode(
                         # the viewer draws a route from. Recorded through the
                         # SAME function the prompt uses (menu_for_prompt), so
                         # the two cannot disagree.
-                        "menu": menu_for_prompt(menu, geometry.oms_nodes),
+                        "menu": menu_for_prompt(
+                            menu, geometry.oms_nodes, lit_runs=ledger.lit_runs),
                         "projected": getattr(decider, "last_projection",
                                              None),
                         "projected_constraints": projected_constraints,

@@ -149,6 +149,12 @@ def test_a_menu_with_no_solution_projects_to_an_empty_candidate_list():
     assert projected == {"status": "NO_SOLUTION", "candidates": []}
 
 
+def test_the_probe_projection_reflects_a_lit_mate():
+    projected = unconstrained_menu_projection(
+        PROBE_MENU, PROBE_OMS_NODES, lit_runs=[("rewa", "satna")])
+    assert projected["candidates"][1]["spares_needed"] == {}
+
+
 # A minimal, deliberately non-discriminating episode: two hours, one issuance,
 # no realized cut. Its job is to exercise the loop, not to score anyone.
 #
@@ -1373,6 +1379,19 @@ def test_menu_for_prompt_adds_the_label_and_the_spare_cost_and_keeps_the_rest():
         "cost_vector": {"transponders": 418.0}}     # no mutation
 
 
+def test_menu_for_prompt_reflects_a_lit_mate():
+    menu = {"status": "solution", "candidates": [
+        {"lever": "optical_reroute", "reused_lightpaths": [],
+         "new_lightpaths": [{"oms_sequence": ["oms_sj"], "lam": 3,
+                             "mode_id": "m1", "gsnr_db": 17.0,
+                             "bitrate_gbps": 400.0}],
+         "restored_gbps": 300.0, "shortfall_gbps": 0.0,
+         "cost_vector": {"transponders": 420.0}}]}
+    out = runner.menu_for_prompt(
+        menu, {"oms_sj": ["satna", "jhansi"]}, lit_runs=[("jhansi", "satna")])
+    assert out["candidates"][0]["spares_needed"] == {}
+
+
 # T1 inert-reroute finding (2026-08-31-t1-inert-reroute-finding.md): a
 # candidate reusing storm-svc-1's OWN working lightpath survived `avoid` and
 # out-scored a genuinely different corridor by a 1-count services_at_risk
@@ -1968,11 +1987,14 @@ def test_the_standing_ranking_carries_across_hours(
 
 
 class _Ledger:
-    """The two things ranking_conflict reads off a SpareLedger."""
+    """The three things ranking_conflict reads off a SpareLedger. `lit_runs`
+    defaults to `()`, preserving the old (pre-mate-pairing) arithmetic for
+    every test below that does not pass one."""
 
-    def __init__(self, oms_nodes, depot_site):
+    def __init__(self, oms_nodes, depot_site, lit_runs=()):
         self.oms_nodes = oms_nodes
         self.depot_site = depot_site
+        self.lit_runs = lit_runs
 
 
 _DEPOT_CANDIDATE = {"new_lightpaths": [{"oms_sequence": ["oms_sr"]}]}

@@ -678,6 +678,16 @@ def test_the_objective_prompt_states_each_candidates_own_spare_cost():
         "candidate_0", "candidate_1"]
 
 
+def test_the_objective_menu_reflects_a_lit_mate():
+    decider, client = _decider(
+        FakeResponse(FakeToolUse(OBJECTIVE_TOOL, OBJECTIVE_OK)),
+        lit_runs=[("site_b", "site_a")])
+    _run(decider.objective(_obs(), MENU))
+    content = client.messages.calls[0]["messages"][0]["content"]
+    menu = json.loads(content.split("\n\n")[0])["menu"]
+    assert menu["candidates"][0]["spares_needed"] == {}
+
+
 def test_build_deciders_wiring_gap_is_closed(monkeypatch):
     """Whole-branch final review, finding 1: suite.build_deciders() builds a
     ClaudeDecider with no `oms_nodes` (suite.py never passes that kwarg), and

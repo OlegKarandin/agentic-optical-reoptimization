@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Iterable
 
 from .cone import expected_capacity_at_risk_gbps
 from .decisions import (
@@ -702,7 +703,8 @@ class ClaudeDecider:
     def __init__(self, model: str = DEFAULT_MODEL, *, client=None,
                  p_cut_threshold: float = P_CUT_ENUMERATION_THRESHOLD,
                  audit_path: str | Path | None = None,
-                 oms_nodes: dict[str, list[str]] | None = None) -> None:
+                 oms_nodes: dict[str, list[str]] | None = None,
+                 lit_runs: Iterable[tuple[str, str]] | None = None) -> None:
         self.model = model
         # suite.run_suite keys its results dict AND the trace filename on
         # `name`.
@@ -721,6 +723,17 @@ class ClaudeDecider:
         # -- decisions.py's `Decider` protocol is shared by every decider,
         # including baselines that never touch spares_needed at all.
         self.oms_nodes: dict[str, list[str]] = oms_nodes or {}
+        # This rollout's own SpareLedger.lit_runs, at the moment of the
+        # current call -- set once per hour by runner.run_episode
+        # (mirroring oms_nodes' own wiring right beside it), read by
+        # menu_for_prompt via _user_content so the menu this class renders
+        # onto the wire prices a mate pair exactly the way the trace's own
+        # recorded menu (and the replay that will actually spend the
+        # spares) does. A list reference kept live by the ledger, not
+        # reassigned here -- runner.py hands the SAME list object every
+        # hour, so a mutation from an earlier hour's debit is already
+        # visible without any extra wiring.
+        self.lit_runs: list[tuple[str, str]] = list(lit_runs) if lit_runs else []
         # Bound by runner.run_episode per hour; see bind_probe below.
         self._probe = None
 
@@ -744,7 +757,8 @@ class ClaudeDecider:
                       menu: dict | None = None) -> str:
         body = {"observation": payload}
         if menu is not None:
-            body["menu"] = _menu_for_prompt(menu, self.oms_nodes)
+            body["menu"] = _menu_for_prompt(menu, self.oms_nodes,
+                                            lit_runs=self.lit_runs)
         rendered = json.dumps(body, indent=2, sort_keys=True, default=str)
         return f"{rendered}\n\n{instruction}"
 
