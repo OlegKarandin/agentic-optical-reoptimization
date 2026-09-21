@@ -371,3 +371,82 @@ def test_ties_in_spare_cost_keep_menu_order(write_scenario):
     # Two lightpaths at equal cost: the first in menu order wins, as today.
     _actions, records = _run(write_scenario, affected=["c-fwd"], priority=())
     assert records[0]["lever"] == "optical_reroute"
+
+
+FWD_LIGHTPATH = {"lever": "optical_reroute", "reused_lightpaths": [],
+                 "new_lightpaths": [{"oms_sequence": ["oms_fwd"], "lam": 5,
+                                     "mode_id": "M", "gsnr_db": 10.0,
+                                     "bitrate_gbps": 300.0}],
+                 "shortfall_gbps": 0.0}
+REV_LIGHTPATH = {"lever": "optical_reroute", "reused_lightpaths": [],
+                 "new_lightpaths": [{"oms_sequence": ["oms_rev"], "lam": 6,
+                                     "mode_id": "M", "gsnr_db": 10.0,
+                                     "bitrate_gbps": 300.0}],
+                 "shortfall_gbps": 0.0}
+
+
+class _MatePairCounting(_FakeCounting):
+    """The real T1a shape: c-fwd's menu offers a new lightpath on oms_fwd
+    (tirupati->nellore); c-rev's offers oms_rev (nellore->tirupati) -- each
+    direction served by a physically DIFFERENT OMS/lightpath id, exactly
+    like T1a's own t1-claimant-jalgaon-dhulia-fwd/-rev (CLAUDE.md,
+    2026-09-21)."""
+
+    async def call(self, name, arguments=None, **kw):
+        if name == "route_service":
+            self.calls.append((name, arguments))
+            lp = (FWD_LIGHTPATH if arguments["service_id"] == "c-fwd"
+                 else REV_LIGHTPATH)
+            return {"status": "solution",
+                    "candidates": [dict(MENU_CANDIDATES[0]), dict(lp)]}
+        if name == "get_topology":
+            layer = (arguments or {}).get("layer")
+            if layer == "optical":
+                return {"oms": [
+                    {"id": "oms_fwd", "src_node_id": "tirupati",
+                     "dst_node_id": "nellore", "elements": ["fiber_fwd"]},
+                    {"id": "oms_rev", "src_node_id": "nellore",
+                     "dst_node_id": "tirupati", "elements": ["fiber_rev"]}]}
+            if layer == "ip":
+                return {"routers": [{"site": "tirupati", "id": "router_tirupati"},
+                                    {"site": "nellore", "id": "router_nellore"}],
+                        "ip_links": []}
+            raise AssertionError(f"unexpected layer {layer!r}")
+        return await super().call(name, arguments, **kw)
+
+
+def _mate_pair_geometry():
+    geometry = _geometry()
+    return dataclasses.replace(
+        geometry, oms_nodes={"oms_fwd": ["tirupati", "nellore"],
+                             "oms_rev": ["nellore", "tirupati"]})
+
+
+def _mate_pair_ledger():
+    return SpareLedger(inventory={"tirupati": 1}, depot_site="tirupati",
+                       oms_nodes={"oms_fwd": ["tirupati", "nellore"],
+                                 "oms_rev": ["nellore", "tirupati"]})
+
+
+def test_the_t1a_shape_end_to_end_one_spare_a_mate_pair_cut_both_restored(
+        write_scenario):
+    """T1a's own shape: one spare on hand, a bidirectional claim cut as two
+    unidirectional pins riding physically separate lightpaths. Before Task
+    1, c-rev was unaffordable once c-fwd spent the depot's only pair; after
+    it, c-rev mates against c-fwd's already-lit run and restores for free."""
+    scenario = load_scenario(
+        write_scenario(REPLAY_SCENARIO_YAML, "REPLAY_TEST.yaml"))
+    counting = _MatePairCounting()
+    ledger = _mate_pair_ledger()
+    actions, records = asyncio.run(restore_after_cuts(
+        counting, scenario=scenario, hour="t1", hour_index=1,
+        affected=["c-fwd", "c-rev"], priority=("c-fwd", "c-rev"),
+        ledger=ledger, geometry=_mate_pair_geometry(), issuance=_issuance(),
+        rg_for_cut_hour=None, index_factory=_index_factory(counting)))
+    by_service = {r["service_id"]: r for r in records}
+    assert by_service["c-fwd"]["outcome"] == "restored"
+    assert by_service["c-fwd"]["spares"] == {"tirupati": 1, "nellore": 1}
+    assert by_service["c-rev"]["outcome"] == "restored"
+    assert by_service["c-rev"]["spares"] == {}
+    assert ledger.on_hand == 0
+    assert len(actions) == 2

@@ -18,7 +18,7 @@ runner writes the records to the hour's trace under `probes`."""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, Iterable
 
 from .ledger import spares_needed
 
@@ -80,10 +80,18 @@ def _spare_cost(needed: dict[str, int]) -> tuple[int, list[tuple[str, int]]]:
 
 async def answer_probe(call, *, service_id: str, risk_group_id: str,
                        geometry, issuance, damage_radius_km: float,
-                       demands: dict[str, float]) -> ProbeAnswer:
+                       demands: dict[str, float],
+                       lit_runs: Iterable[tuple[str, str]] = ()) -> ProbeAnswer:
     """`route_service` for `service_id` avoiding `risk_group_id`, in the
     replay's own posture, reduced to the facts a decider may see. `call` is
-    an `async call(name, arguments) -> dict`."""
+    an `async call(name, arguments) -> dict`.
+
+    `lit_runs` is this rollout's own `SpareLedger.lit_runs` at the moment
+    of the probe -- threaded in from the caller (`ProbeBinding`'s binder in
+    runner.py), never a whole ledger, so this module stays read-only. Load-
+    bearing for the module docstring's own promise: `spares_needed`'s
+    mate-pairing rule must see the SAME lit runs the replay would, or a
+    probe answer and the replay's real spend silently diverge."""
     from .runner import menu_with_path_facts   # lazy: runner imports this module
 
     if service_id not in demands:
@@ -100,7 +108,8 @@ async def answer_probe(call, *, service_id: str, risk_group_id: str,
     workable = [c for c in (menu.get("candidates") or [])
                 if c.get("shortfall_gbps") == 0
                 and c.get("path_delta", {}).get("changes_working_path")]
-    costs = [spares_needed(c, geometry.oms_nodes) for c in workable]
+    costs = [spares_needed(c, geometry.oms_nodes, lit_runs=lit_runs)
+            for c in workable]
     cheapest = min(costs, key=_spare_cost) if costs else None
     return ProbeAnswer(
         status=menu.get("status"),

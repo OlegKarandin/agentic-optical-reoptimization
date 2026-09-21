@@ -103,6 +103,19 @@ def test_a_zero_spare_groom_is_the_cheapest_full_restore():
     assert answer.levers == ("ip_reroute", "optical_reroute")
 
 
+def test_min_spares_needed_falls_when_a_mate_is_already_lit():
+    """§2.2's promise: a probe's answer is what the replay would actually
+    spend, so a claimant whose reverse mate this rollout already lit must
+    price the same as replay.restore_after_cuts would (Task 3.5, spec
+    2026-09-21)."""
+    answer = asyncio.run(answer_probe(
+        _call_returning("solution", [LIGHTPATH]), service_id="c",
+        risk_group_id="rg_x", geometry=_geometry(), issuance=_issuance(),
+        damage_radius_km=50.0, demands={"c": 200.0},
+        lit_runs=[("khandwa", "jalgaon")]))
+    assert answer.min_spares_needed_by_site == {}
+
+
 def test_no_solution_reports_no_candidates_and_null_spares():
     answer = _answer(_call_returning("no_solution", []))
     assert answer.to_dict() == {

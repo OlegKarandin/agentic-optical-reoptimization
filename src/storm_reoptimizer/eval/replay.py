@@ -173,9 +173,13 @@ async def restore_after_cuts(
         # lightpath with headroom is taken over a spare-charging lightpath.
         # `sorted` is stable, so equal-cost candidates keep menu order. This
         # is also what makes probe.answer_probe's min_spares_needed_by_site
-        # equal to what this replay would actually spend.
+        # equal to what this replay would actually spend -- `lit_runs=
+        # ledger.lit_runs` (transponder-pairing spec, 2026-09-21) is what
+        # keeps that equality true for a mate pair too: c-rev's own cost
+        # here must already reflect whatever c-fwd's earlier restoration
+        # in this SAME hour just lit.
         workable.sort(key=lambda c: sum(
-            spares_needed(c, ledger.oms_nodes).values()))
+            spares_needed(c, ledger.oms_nodes, lit_runs=ledger.lit_runs).values()))
         if not workable:
             records.append(_empty_record(hour, service, "no_candidate"))
             continue
