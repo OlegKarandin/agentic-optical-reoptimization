@@ -9,7 +9,7 @@ from storm_reoptimizer.eval.runner import Action, EpisodeTrace
 from storm_reoptimizer.eval.scenario_file import load_scenario
 from storm_reoptimizer.eval.scoring import (
     cites_flip_variable, cross_twin_metrics, decision_label, episode_metrics,
-    gbps_hours_lost,
+    gbps_hours_lost, reexposed,
 )
 
 BASE = textwrap.dedent("""
@@ -68,7 +68,8 @@ def _trace(*, timing_at_t1="wait", raw_at_t0="wait", effective_at_t0="wait",
            actions=(), dropped=(), affected=None,
            rejections_at=(), committed_at=(), reasoning="the cone is centred "
            "on svc-b, so the spare is worth more held",
-           hours=("t0", "t1", "t2", "t3"), demands=None, debits=()):
+           hours=("t0", "t1", "t2", "t3"), demands=None, debits=(),
+           sut_p_cut_by_hour=None):
     # `dropped` grew a second shape (Task 8): a dict {hour: [service_id,
     # ...]} populates each hour's own `dropped_after_cut` (what the loss
     # metrics read), while the original flat tuple/list still only feeds
@@ -97,7 +98,7 @@ def _trace(*, timing_at_t1="wait", raw_at_t0="wait", effective_at_t0="wait",
             effective = effective_at_t1
         else:
             effective = action
-        records.append({
+        record = {
             "hour": hour,
             "services": ["storm-svc-1", "svc-b"],
             "timing": {"action": action, "reasoning": reasoning},
@@ -108,7 +109,11 @@ def _trace(*, timing_at_t1="wait", raw_at_t0="wait", effective_at_t0="wait",
             "committed": hour in committed_at,
             "dropped_after_cut": list(dropped_after_cut.get(hour, [])),
             "demands": dict(demands) if demands else {},
-        })
+        }
+        if sut_p_cut_by_hour and hour in sut_p_cut_by_hour:
+            record["observation"] = {"exposure": {"storm-svc-1": {
+                "h": {"p_cut": sut_p_cut_by_hour[hour]}}}}
+        records.append(record)
     return EpisodeTrace(
         scenario_id="X", decider_name="test", run_index=0,
         hours=tuple(records), actions=tuple(actions),
@@ -178,13 +183,40 @@ def test_spares_spent_on_a_service_never_cut_are_wasted(tmp_path):
     assert episode_metrics(s, trace)["spares_wasted"] == 1
 
 
-def test_reexposure_is_a_restored_service_cut_by_a_later_hour(tmp_path):
+def test_reexposed_is_false_when_the_reroute_lands_clear(tmp_path):
     s = _scenario(tmp_path, "Pa", "act")
     m = episode_metrics(s, _trace(
         actions=(Action("t1", 1, "optical_reroute", 2, {"satna": 1},
                        "storm-svc-1"),),
-        affected={"t3": ("storm-svc-1",)}))
+        sut_p_cut_by_hour={"t3": 0.0}))
+    assert m["reexposed"] is False
+
+
+def test_reexposed_is_true_when_the_new_path_reenters_a_later_cone(tmp_path):
+    s = _scenario(tmp_path, "Pa", "act")
+    m = episode_metrics(s, _trace(
+        actions=(Action("t1", 1, "optical_reroute", 2, {"satna": 1},
+                       "storm-svc-1"),),
+        sut_p_cut_by_hour={"t3": 0.35}))
     assert m["reexposed"] is True
+
+
+def test_reexposed_is_keyed_off_effective_not_hour_index(tmp_path):
+    # Calls reexposed() directly (not through episode_metrics) -- it is a
+    # standalone, independently-testable function, not only a dict key.
+    # Between commit and effectiveness the service is still on its OLD
+    # path by construction -- exposure at the hour immediately after the
+    # ACTION's hour_index (but before effective_at_index) must not count.
+    s = _scenario(tmp_path, "Pa", "act", hours="[t0, t1, t2, t3, t4]")
+    action = Action("t1", 1, "optical_reroute", 3, {"satna": 1},
+                    "storm-svc-1")    # effective at index 3 (t3)
+    trace = _trace(
+        hours=("t0", "t1", "t2", "t3", "t4"), actions=(action,),
+        sut_p_cut_by_hour={"t2": 0.9, "t4": 0.0})
+    # t2 (index 2) is BEFORE effective_at_index 3 -- its exposure must not
+    # be read even though it is > hour_index (1); only t4 (index 4, after
+    # effective_at_index) is in scope, and it reads 0.0.
+    assert reexposed(s, trace) is False
 
 
 def test_recovered_from_rejection_needs_both_a_rejection_and_a_commit(tmp_path):

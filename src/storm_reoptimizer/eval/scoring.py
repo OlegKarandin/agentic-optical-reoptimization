@@ -173,6 +173,48 @@ def decision_label(scenario: ScenarioFile, trace: EpisodeTrace) -> str | None:
     raise ValueError(f"unhandled label_rule {rule!r}")
 
 
+def reexposed(scenario: ScenarioFile, trace: EpisodeTrace) -> bool:
+    """Whether the service under test's OWN path, at any hour strictly
+    after one of this episode's actions took EFFECT, sits inside a
+    still-published cone -- read from the SUT's own per-hour recomputed
+    exposure (`observation.build_observation`'s `p_cut`, stored on the
+    trace's `hour["observation"]["exposure"]`), not from `affected_by_hour`
+    (realized-cut membership against the PRE-action path).
+
+    `affected_by_hour` fires on every successful pre-emptive reroute -- it
+    is realized-cut membership against the path the service rode BEFORE
+    the action, which is precisely the event the reroute was issued
+    against. Measured on the 2026-09-15 paid run: `reexposed: true` on all
+    six T1b rows (three agent seeds, both baselines) while the committed
+    candidate's own `residual_exposure` already read
+    `{"p_cut": 0.0, "ecar_gbps": 0.0}` and the SUT appeared nowhere in
+    `gbps_hours_lost` -- the old metric was a synonym for `acted`, not a
+    report of what CLAUDE.md promises ("reroute clear of the full forecast
+    cone, so the reroute isn't re-exposed at t+3h").
+
+    Keyed off `effective_at_index`, not `hour_index`: between commit and
+    effectiveness the service is still on its OLD path by construction, so
+    the honest question is whether the path the reroute LANDED sits in a
+    later cone, not whether the OLD path (which the episode is trying to
+    leave) does.
+
+    Reach: `observation.exposure` is computed against whichever forecast
+    issuance is in force at that hour. An episode that publishes no
+    issuance after the action hour can never report a re-exposure this
+    metric would catch -- T1 publishes only t0 and t1, so it can only ever
+    confirm the reroute was clear of the t1 issuance's own t3 cone. Reading
+    False there is a fact about the EPISODE's own issuance schedule, not
+    evidence the moving-cone hazard was tested."""
+    sut = scenario.service_under_test
+    hours = scenario.hours
+    return any(
+        float(entry["p_cut"]) > 0.0
+        for a in trace.actions
+        for h in hours[a.effective_at_index + 1:]
+        for entry in (_hour_record(trace, h) or {})
+            .get("observation", {}).get("exposure", {}).get(sut, {}).values())
+
+
 def episode_metrics(scenario: ScenarioFile, trace: EpisodeTrace) -> dict:
     """Everything the spec's per-episode table names."""
     hours = scenario.hours
@@ -195,11 +237,6 @@ def episode_metrics(scenario: ScenarioFile, trace: EpisodeTrace) -> dict:
     survived = _known_service_ids(trace) - dropped
     if acted_too_late:
         survived.discard(sut)
-
-    reexposed = any(
-        sut in trace.affected_by_hour.get(h, ())
-        for a in trace.actions
-        for h in hours[a.hour_index + 1:])
 
     # Total transponders across every charged SITE, not just the depot: a
     # wasted spend is wasted wherever it lands, and a lightpath's true cost is
@@ -250,7 +287,7 @@ def episode_metrics(scenario: ScenarioFile, trace: EpisodeTrace) -> dict:
         "spares_wasted": spares_wasted,
         "within_max_spares_wasted": spares_wasted <= scenario.gold.max_spares_wasted,
         "acted_too_late": acted_too_late,
-        "reexposed": reexposed,
+        "reexposed": reexposed(scenario, trace),
         "first_shot_correct":
             t0.get("timing_effective", t0.get("timing", {}).get("action"))
             == scenario.gold.decision_at_t0,
