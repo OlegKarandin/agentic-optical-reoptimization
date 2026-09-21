@@ -312,6 +312,48 @@ def test_the_actionable_service_is_not_its_own_competing_claim(scenario):
     assert "storm-svc-1" not in members
 
 
+def test_a_group_over_capacity_is_capped_to_the_admitted_members(scenario):
+    from storm_reoptimizer.eval.observation import _restorable_groups
+    exposure = {
+        "svc-b": {"t3": {"expected_capacity_at_risk_gbps": 500.0,
+                         "demand_gbps": 500.0}},
+        "svc-c": {"t3": {"expected_capacity_at_risk_gbps": 400.0,
+                         "demand_gbps": 400.0}},
+        "svc-d": {"t3": {"expected_capacity_at_risk_gbps": 100.0,
+                         "demand_gbps": 100.0}},
+    }
+    endpoint_sites = {"svc-b": ("satna", "raipur"),
+                      "svc-c": ("satna", "raipur"),
+                      "svc-d": ("satna", "raipur")}
+    groups = _restorable_groups(
+        exposure, endpoint_sites, depot_site="satna",
+        service_under_test="storm-svc-1", lightpath_capacity_gbps=800.0)
+    [group] = groups["t3"]
+    # Highest-ECAR-first: svc-b (500) admitted, svc-c (400) would push the
+    # running sum to 900 > 800 and is left out, svc-d (100) fits in the
+    # remaining 300 and is admitted.
+    assert group["members"] == ("svc-b", "svc-d")
+    assert group["ecar_gbps"] == pytest.approx(600.0)
+
+
+def test_the_t1_shape_100g_each_direction_is_not_capped(scenario):
+    from storm_reoptimizer.eval.observation import _restorable_groups
+    exposure = {
+        "c-fwd": {"t3": {"expected_capacity_at_risk_gbps": 90.0,
+                        "demand_gbps": 100.0}},
+        "c-rev": {"t3": {"expected_capacity_at_risk_gbps": 85.0,
+                        "demand_gbps": 100.0}},
+    }
+    endpoint_sites = {"c-fwd": ("jalgaon", "dhulia"),
+                      "c-rev": ("dhulia", "jalgaon")}
+    groups = _restorable_groups(
+        exposure, endpoint_sites, depot_site="jalgaon",
+        service_under_test="storm-svc-1")     # default capacity (800.0)
+    [group] = groups["t3"]
+    assert group["members"] == ("c-fwd", "c-rev")
+    assert group["ecar_gbps"] == pytest.approx(175.0)
+
+
 def test_the_observation_carries_the_episodes_damage_radius(
     write_scenario, example_scenario_yaml,
 ):

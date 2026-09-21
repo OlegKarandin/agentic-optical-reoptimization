@@ -453,7 +453,8 @@ def test_the_group_total_is_computed_from_the_same_grouping_the_agent_sees(
                            p_cut_region(svc_spans, cone.center["lat"],
                                        cone.center["lon"], cone.width_km,
                                        scenario.damage_radius_km),
-                           demands[svc_id])}}
+                           demands[svc_id]),
+                       "demand_gbps": demands[svc_id]}}
         for svc_id, svc_spans in spans.items()}
     groups = _restorable_groups(exposure, endpoint_sites,
                                 depot_site=scenario.depot_site,

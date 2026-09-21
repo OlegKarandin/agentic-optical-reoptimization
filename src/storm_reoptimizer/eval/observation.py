@@ -49,6 +49,19 @@ def lead_time_hours_for(lever: str, scenario_lead_time_hours: int) -> int:
     return 0 if rule == "zero" else scenario_lead_time_hours
 
 
+# multilayer_optical_network.model.modes.default_modes()'s largest
+# transceiver mode's bitrate -- the most a single lightpath can carry in the
+# best available mode. A plain constant, not an import of the sibling
+# library from src/ (CLAUDE.md's hard seam): confirmed against the real
+# server by tools/probe_claimants.py ("max lightpath capacity: 800.0 Gbps"),
+# also recorded in docs/superpowers/plans/notes/2026-08-30-claimant-
+# family.md. Owned here (moved from assertions.py, 2026-09-21 transponder-
+# pairing spec) because _restorable_groups is the RUNTIME consumer;
+# assertions.py's own static invariant now imports it from here instead of
+# duplicating it.
+MAX_LIGHTPATH_CAPACITY_GBPS: float = 800.0
+
+
 def latest_issuance(scenario: ScenarioFile, hour: str) -> Issuance:
     """The most recent forecast issuance at or before `hour`. An hour with no
     advisory of its own carries the previous one forward -- which is exactly
@@ -64,23 +77,46 @@ def latest_issuance(scenario: ScenarioFile, hour: str) -> Issuance:
 
 
 def _restorable_groups(exposure: dict, endpoint_sites: dict, *,
-                       depot_site: str | None, service_under_test: str
+                       depot_site: str | None, service_under_test: str,
+                       lightpath_capacity_gbps: float = MAX_LIGHTPATH_CAPACITY_GBPS,
                        ) -> dict[str, tuple[dict, ...]]:
     """Per horizon, the depot-eligible services grouped by what one new
     lightpath could restore.
 
     ONE spare transponder buys ONE lightpath. A set of services is jointly
     restored by it only if they CO-TERMINATE -- share both endpoints, so a
-    single bidirectional lightpath serves all of them. Otherwise they COMPETE
-    for the spare and only one is restored, which makes summing across groups
-    an overstatement: the honest figure across groups is the MAXIMUM.
+    single bidirectional lightpath serves all of them -- AND their combined
+    same-direction demand fits inside `lightpath_capacity_gbps`. Before the
+    2026-09-21 transponder-pairing fix, "a single bidirectional lightpath
+    serves all of them" was not yet true even for a genuine mate pair (each
+    direction billed its own card); it is true now, which is why the
+    unbounded sum this function used to compute is wrong even for a
+    perfectly co-terminating group once its own demand exceeds one
+    lightpath's bitrate. Otherwise they COMPETE for the spare and only one
+    is restored, which makes summing across groups an overstatement: the
+    honest figure across groups is the MAXIMUM.
 
     Depot-eligible means terminating at `depot_site`. A service that does not
     may be badly exposed, but restoring it draws on ITS OWN sites' depots --
     a satna line card cannot restore kolkata <-> mumbai -- so it is no part
     of this contest. The service under test is excluded: it is the claim
-    being weighed, not a claim against itself."""
-    groups: dict[str, dict[tuple[str, str], dict]] = {}
+    being weighed, not a claim against itself.
+
+    `lightpath_capacity_gbps` is an OPTIMISTIC upper bound -- the real
+    restoring mode depends on the chosen route's own GSNR, unknowable
+    before routing -- deliberately generous, since overstating the
+    competing claim is the conservative direction for a figure the agent
+    weighs AGAINST acting on the SUT. Per direction (the group's sorted
+    endpoint pair against each member's own `endpoint_sites` order),
+    members are considered highest-ECAR-first; a member is admitted if
+    admitting it keeps the running `demand_gbps` sum within capacity, else
+    it is left out of both `members` and `ecar_gbps` for that horizon and
+    the NEXT (smaller) member is still tried against the remaining
+    headroom -- filling the lightpath as full as the priority order allows
+    is the more optimistic (larger) reading of the competing claim, the
+    conservative direction per the paragraph above, rather than stopping
+    admission at the first member that doesn't fit."""
+    raw: dict[str, dict[tuple[str, str], list[dict]]] = {}
     for svc_id, per_horizon in exposure.items():
         if svc_id == service_under_test:
             continue
@@ -88,17 +124,41 @@ def _restorable_groups(exposure: dict, endpoint_sites: dict, *,
         if sites is None or depot_site not in sites:
             continue
         key = tuple(sorted(sites))
+        direction = "fwd" if sites == key else "bwd"
         for horizon, entry in per_horizon.items():
-            slot = groups.setdefault(horizon, {}).setdefault(
-                key, {"endpoints": key, "members": [], "ecar_gbps": 0.0})
-            slot["members"].append(svc_id)
-            slot["ecar_gbps"] += entry["expected_capacity_at_risk_gbps"]
-    return {horizon: tuple(
-                sorted(({**g, "members": tuple(sorted(g["members"])),
-                         "ecar_gbps": round(g["ecar_gbps"], 3)}
-                        for g in by_key.values()),
-                       key=lambda g: (-g["ecar_gbps"], g["endpoints"])))
-            for horizon, by_key in groups.items()}
+            raw.setdefault(horizon, {}).setdefault(key, []).append({
+                "service_id": svc_id, "direction": direction,
+                "ecar_gbps": entry["expected_capacity_at_risk_gbps"],
+                "demand_gbps": entry["demand_gbps"]})
+
+    groups: dict[str, tuple[dict, ...]] = {}
+    for horizon, by_key in raw.items():
+        entries = []
+        for key, members in by_key.items():
+            admitted: list[dict] = []
+            for direction in ("fwd", "bwd"):
+                running = 0.0
+                ranked = sorted(
+                    (m for m in members if m["direction"] == direction),
+                    key=lambda m: (-m["ecar_gbps"], m["service_id"]))
+                for m in ranked:
+                    # `continue`, not `break`: a smaller, lower-priority
+                    # member still fits in whatever headroom remains after
+                    # a bigger one was skipped -- see the docstring
+                    # paragraph above for why the fuller (more optimistic)
+                    # reading is the one wanted here.
+                    if running + m["demand_gbps"] > lightpath_capacity_gbps:
+                        continue
+                    running += m["demand_gbps"]
+                    admitted.append(m)
+            entries.append({
+                "endpoints": key,
+                "members": tuple(sorted(m["service_id"] for m in admitted)),
+                "ecar_gbps": round(
+                    sum(m["ecar_gbps"] for m in admitted), 3)})
+        groups[horizon] = tuple(sorted(
+            entries, key=lambda g: (-g["ecar_gbps"], g["endpoints"])))
+    return groups
 
 
 def _horizon_totals(exposure: dict, endpoint_sites: dict, *,

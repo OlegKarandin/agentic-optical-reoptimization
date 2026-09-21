@@ -46,7 +46,9 @@ from .derived import (
     DERIVED_TOLERANCE, FLIP_VARS, DerivedGeometry, FlipScalars,
     derived_geometry,
 )
-from .observation import build_observation, latest_issuance
+from .observation import (
+    MAX_LIGHTPATH_CAPACITY_GBPS, build_observation, latest_issuance,
+)
 from .risk_assets import fiber_span_index, risk_group_rows
 from .runner import (
     EVENT_TYPE, horizon_risk_group_asset_ids, menu_for_prompt,
@@ -54,15 +56,6 @@ from .runner import (
 )
 from .scenario_file import ScenarioFile
 from .scoring import decision_label, episode_metrics
-
-# multilayer_optical_network.model.modes.default_modes()'s largest
-# transceiver mode's bitrate -- the most a single lightpath can carry in the
-# best available mode. A plain constant, not an import of the sibling
-# library from src/ (CLAUDE.md's hard seam): confirmed against the real
-# server by tools/probe_claimants.py ("max lightpath capacity: 800.0 Gbps"),
-# also recorded in docs/superpowers/plans/notes/2026-08-30-claimant-
-# family.md.
-MAX_LIGHTPATH_CAPACITY_GBPS: float = 800.0
 
 # The scalars a one-line rule could key on. Held EQUAL across the halves, so
 # no surface correlation is left to key on.

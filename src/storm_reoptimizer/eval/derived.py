@@ -577,7 +577,8 @@ def flip_scalars_from_spans(
                              and svc_id in protection_spans else None,
                              cone.center["lat"], cone.center["lon"],
                              cone.width_km, scenario.damage_radius_km),
-                         float(demands_gbps.get(svc_id, 0.0)))}
+                         float(demands_gbps.get(svc_id, 0.0))),
+                     "demand_gbps": float(demands_gbps.get(svc_id, 0.0))}
             for horizon, cone in issuance.horizons.items()}
         for svc_id, svc_spans in spans.items()}
     groups_by_horizon = _restorable_groups(
