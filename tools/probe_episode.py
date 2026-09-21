@@ -72,7 +72,7 @@ class _WaitsAlways:
     async def timing(self, obs) -> TimingDecision:
         return TimingDecision(action="wait", reasoning="probe_episode "
                               "--dump-prompt: never acts",
-                              contested_claim=None, claim_priority=())
+                              claim_priority=())
 
     async def constraints(self, obs, unconstrained_menu=None):
         raise NotImplementedError("timing() always waits; never reached")

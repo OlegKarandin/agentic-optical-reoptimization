@@ -465,7 +465,7 @@ that cone. These ids are what you name when you constrain routing.
 attempts. `last_rejection` tells you why the previous attempt failed.
 - `decided_this_hour` -- on the constraints and menu requests only: the \
 timing decision you already made this hour, with its reasoning, \
-`contested_claim`, `claim_priority`, and the probe answers you obtained. \
+`claim_priority`, and the probe answers you obtained. \
 The constraints and the menu choice EXECUTE that decision. If the menu \
 holds nothing consistent with it, answer `hold`.
 - `attempts_this_hour` -- on the constraints and menu requests: every \
@@ -614,9 +614,6 @@ you preferred over the claims you did not serve. If you held one, say what \
 you held it for and what you accepted on the service you can act on in \
 exchange.
 
-`contested_claim` names the strongest competing claim on the depot you are \
-aware of and its `expected_capacity_at_risk_gbps` from the observation, or \
-null if you judge there is none. Name a service that appears in `exposure`. \
 If you stated a `claim_priority`, say why that order.
 
 Do not pad it with a checklist of terms from this prompt. A paragraph naming \
@@ -768,9 +765,8 @@ class ClaudeDecider:
     @staticmethod
     def _check_named_services(decision, payload, tool_name) -> None:
         """Every service id a decision names must be one the model was
-        actually shown -- `contested_claim.service_id`, and every id in
-        `claim_priority` -- and every id an `avoid` names must be one this
-        observation carries.
+        actually shown -- every id in `claim_priority` -- and every id an
+        `avoid` names must be one this observation carries.
 
         Same class of guard as the hallucinated risk-group id that burned 3 of
         5 iterations in a real T3a rollout (control-arm findings, root cause
@@ -804,12 +800,6 @@ class ClaudeDecider:
         rollouts lost), but this is a known, recorded limitation, not a
         silently-accepted bug: a future run with more such collisions could
         exhaust MAX_ATTEMPTS and kill a rollout."""
-        claim = getattr(decision, "contested_claim", None)
-        if claim is not None and claim["service_id"] not in payload["exposure"]:
-            raise DecisionError(
-                f"{tool_name}: `contested_claim.service_id` "
-                f"{claim['service_id']!r} is not in this observation's "
-                f"`exposure`. Name a service you were shown, or null.")
         for svc in getattr(decision, "claim_priority", ()):
             if svc not in payload["exposure"]:
                 raise DecisionError(

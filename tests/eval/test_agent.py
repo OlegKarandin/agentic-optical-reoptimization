@@ -414,26 +414,13 @@ def test_the_prompt_no_longer_claims_a_shared_global_depot():
     assert "pairs_needed" not in SYSTEM_PROMPT
 
 
-def test_a_contested_claim_must_still_name_a_service_in_exposure():
-    # Free consequence of the eligibility filter: agent._check_named_services's
-    # existing "must be in `exposure`" rule becomes exactly the right
-    # depot-eligibility check, with no new validation logic. svc-d is real
-    # (it is in the full Observation's `exposure`) but was filtered out of
-    # the payload for being depot-ineligible, so naming it must still fail.
-    payload = project_observation(_wide_observation())
-    decision = SimpleNamespace(contested_claim={
-        "service_id": "svc-d", "expected_capacity_at_risk_gbps": 90.0})
-    with pytest.raises(DecisionError, match="svc-d"):
-        ClaudeDecider._check_named_services(decision, payload, TIMING_TOOL)
-
-
 def test_claim_priority_must_name_shown_services():
     payload = {"exposure": {"s": {}, "c": {}}}
-    ok = TimingDecision("wait", "x", None, ("c",))
+    ok = TimingDecision("wait", "x", ("c",))
     ClaudeDecider._check_named_services(ok, payload, TIMING_TOOL)
     with pytest.raises(DecisionError):
         ClaudeDecider._check_named_services(
-            TimingDecision("wait", "x", None, ("ghost",)),
+            TimingDecision("wait", "x", ("ghost",)),
             payload, TIMING_TOOL)
 
 
@@ -566,20 +553,9 @@ def test_strict_tool_schemas_drop_the_keywords_the_api_rejects():
     # very first real call.
     assert strict_tool_schema(TIMING_JSON_SCHEMA) == {
         "type": "object", "additionalProperties": False,
-        "required": ["reasoning", "contested_claim", "claim_priority",
-                     "action"],
+        "required": ["reasoning", "claim_priority", "action"],
         "properties": {
             "reasoning": {"type": "string"},
-            "contested_claim": {"anyOf": [
-                {"type": "object", "additionalProperties": False,
-                 "required": ["service_id",
-                              "expected_capacity_at_risk_gbps"],
-                 "properties": {
-                     "service_id": {"type": "string"},
-                     "expected_capacity_at_risk_gbps": {"type": "number"},
-                 }},
-                {"type": "null"},
-            ]},
             "claim_priority": {"type": "array",
                                "items": {"type": "string"}},
             "action": {"type": "string", "enum": ["act", "wait"]},
@@ -952,37 +928,6 @@ def test_a_tool_use_block_naming_a_different_tool_is_not_accepted():
     assert TIMING_TOOL in correction["content"]
 
 
-def test_a_claim_naming_an_unshown_service_is_retried_not_accepted():
-    decider, client = _decider(
-        FakeResponse(FakeToolUse(TIMING_TOOL, {
-            "action": "act", "reasoning": "d9999 outranks me",
-            "contested_claim": {"service_id": "d9999",
-                                "expected_capacity_at_risk_gbps": 900.0},
-            "claim_priority": ["storm-svc-1"]},
-                                 block_id="toolu_first")),
-        FakeResponse(FakeToolUse(TIMING_TOOL, {
-            "action": "act", "reasoning": "nothing else is exposed",
-            "contested_claim": None, "claim_priority": ["storm-svc-1"]})))
-    decision = _run(decider.timing(_obs(others=CLAIMANTS)))
-    assert decision.contested_claim is None
-    assert len(client.messages.calls) == 2
-    correction = client.messages.calls[1]["messages"][-1]["content"][0]
-    assert correction["is_error"] is True
-    assert "d9999" in correction["content"]
-
-
-def test_a_claim_naming_a_shown_service_is_accepted_first_time():
-    shown = CLAIMANTS[0][0]
-    decider, client = _decider(FakeResponse(FakeToolUse(TIMING_TOOL, {
-        "action": "wait", "reasoning": "they are ahead of me in the queue",
-        "contested_claim": {"service_id": shown,
-                            "expected_capacity_at_risk_gbps": 12.0},
-        "claim_priority": ["storm-svc-1"]})))
-    decision = _run(decider.timing(_obs(others=CLAIMANTS)))
-    assert decision.contested_claim["service_id"] == shown
-    assert len(client.messages.calls) == 1
-
-
 def test_recovery_on_the_third_attempt_still_returns_a_decision():
     decider, client = _decider(
         FakeResponse(FakeToolUse(TIMING_TOOL, TIMING_BAD_ACTION)),
@@ -1039,7 +984,7 @@ def test_the_audit_sidecar_records_what_the_model_was_shown(tmp_path):
                                         "storm-svc-1"]
     assert record["omitted_services"]["below_threshold"]["count"] == 2
     assert record["n_services_total"] == 6
-    assert record["result"] == {**TIMING_OK, "contested_claim": None}
+    assert record["result"] == TIMING_OK
 
 
 def test_the_audit_records_how_many_attempts_a_decision_took(tmp_path):
@@ -1354,8 +1299,7 @@ def test_the_first_timing_call_of_an_episode_must_state_a_ranking():
     payload = project_observation(obs)
     payload["standing_claim_priority"] = []
     decision = TimingDecision.from_dict(
-        {"reasoning": "hold", "action": "wait", "contested_claim": None,
-         "claim_priority": []})
+        {"reasoning": "hold", "action": "wait", "claim_priority": []})
     with pytest.raises(DecisionError, match="claim_priority"):
         ClaudeDecider._check_named_services(decision, payload, TIMING_TOOL)
 
@@ -1372,8 +1316,7 @@ def test_an_empty_ranking_is_rejected_even_once_one_is_standing():
     payload = project_observation(obs)
     payload["standing_claim_priority"] = ["storm-svc-1"]
     decision = TimingDecision.from_dict(
-        {"reasoning": "unchanged", "action": "wait", "contested_claim": None,
-         "claim_priority": []})
+        {"reasoning": "unchanged", "action": "wait", "claim_priority": []})
     with pytest.raises(DecisionError):
         ClaudeDecider._check_named_services(decision, payload, TIMING_TOOL)
 
@@ -1412,7 +1355,6 @@ def test_only_the_constraints_step_is_shown_the_groups_contents():
 def test_the_decider_shows_the_groups_contents_at_constraints_only():
     decider, _ = _decider(
         _response(TIMING_TOOL, {"reasoning": "r", "action": "act",
-                                "contested_claim": None,
                                 "claim_priority": ["storm-svc-1"]}),
         _response(CONSTRAINT_TOOL, {"reasoning": "r", "avoid": {"risk_groups": ["rg_T3a_t1_t3"]}}),
         _response(OBJECTIVE_TOOL, {"reasoning": "r", "choice": "hold"}))

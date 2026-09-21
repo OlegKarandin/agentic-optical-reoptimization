@@ -430,6 +430,13 @@ footer { flex: 0 0 auto; border-top: 1px solid #ccc; padding: 6px 12px; }
 .hcell .strip.match { background: #2e8b2e; }
 .hcell .strip.mismatch { background: #cc3333; }
 .hcell .strip.unknown { background: #ccc; }
+/* Distinct from .unknown: "the decider was never called this hour" is a
+   different fact from "it was called but there's nothing to grade" -- a
+   hatch reads as "no decision happened" at a glance, not just "ungraded". */
+.hcell .strip.skipped {
+    background: repeating-linear-gradient(
+        45deg, #ccc, #ccc 3px, #eee 3px, #eee 6px);
+}
 .aerial { stroke-dasharray: 4 3; }
 .gap-marker { stroke: #cc3333; stroke-width: 2; }
 pre.reasoning { white-space: pre-wrap; background: #f7f7f5; padding: 6px;
@@ -443,8 +450,6 @@ pre.rationale { white-space: pre; overflow-x: auto; background: #f7f7f5;
                 padding: 6px; border: 1px solid #eee; margin: 4px 0; }
 .rejection { color: #a33; margin: 2px 0; }
 .gate-ok { color: #146214; font-weight: bold; margin: 2px 0; }
-.contested { background: #fff4e0; border: 1px solid #e0c080; padding: 4px;
-             margin: 4px 0; }
 .probes { background: #eef6ff; border: 1px solid #b8d4f0; padding: 4px 6px;
           margin: 4px 0; font-size: 12px; }
 .probes-label { font-weight: bold; margin-bottom: 2px; }
@@ -1294,7 +1299,9 @@ function renderSaw(hour) {
     const rows = (hour.exposure_rows || []).filter(r => r.shown);
     const table = document.createElement('table');
     table.innerHTML = '<tr><th>service</th><th>horizon</th><th>offset_km</th>' +
-        '<th>p_cut</th><th>if revised</th><th>demand_gbps</th><th>ECAR</th></tr>';
+        '<th>p_cut</th><th>if revised</th><th>demand_gbps</th>' +
+        '<th title="expected capacity at risk: demand_gbps * p_cut, ' +
+        'Gbps">ECAR (Gbps)</th></tr>';
     for (const r of rows) {
         const isSut = r.service_id === hour.actionable_service;
         const tr = document.createElement('tr');
@@ -1337,7 +1344,8 @@ function renderSaw(hour) {
             '(one group shares one lightpath; different groups compete for it)'));
         const gTable = document.createElement('table');
         gTable.innerHTML = '<tr><th>horizon</th><th>endpoints</th>' +
-            '<th>members</th><th>ECAR</th></tr>';
+            '<th>members</th><th title="expected capacity at risk, summed ' +
+            'across the group\'s members, Gbps">ECAR (Gbps)</th></tr>';
         for (const [horizon, glist] of Object.entries(groups)) {
             for (const g of glist) {
                 const tr = document.createElement('tr');
@@ -1361,7 +1369,6 @@ function renderSaw(hour) {
     misc.textContent =
         `spares_on_hand: ${JSON.stringify(obs.spares_on_hand)}\n` +
         `spares_spent: ${JSON.stringify(obs.spares_spent)}\n` +
-        `lead_time_hours: ${JSON.stringify(obs.lead_time_hours || {})}\n` +
         `risk_group_ids: ${JSON.stringify(obs.risk_group_ids || {})}\n` +
         `actions_taken: ${JSON.stringify(obs.actions_taken || [])}\n` +
         `hours_remaining: ${JSON.stringify(obs.hours_remaining)}\n` +
@@ -1376,7 +1383,12 @@ function renderSaw(hour) {
         `next_issuance: ${'next_issuance' in obs
             ? JSON.stringify(obs.next_issuance)
             : 'unknown (older trace predates this field)'}\n` +
-        `deadline_hour: ${JSON.stringify(obs.deadline_hour || {})}`;
+        // obs.lead_time_hours (the raw per-lever provisioning delay) is also
+        // on the wire but not shown here -- deadline_hour is it, already
+        // resolved against the current hour into the number that actually
+        // matters: the last hour each lever can still be issued on time.
+        `act_by_hour (deadline_hour, per lever): ` +
+        `${JSON.stringify(obs.deadline_hour || {})}`;
     el.appendChild(misc);
 
     el.appendChild(rawJson('timing', {observation: hour.projected}));
@@ -1392,22 +1404,50 @@ function renderSaw(hour) {
 // probes are never merged into one bucket -- the record itself carries no
 // iteration index to group by directly.
 
-function probeRow(p) {
-    const div = document.createElement('div');
-    if (p.error) {
-        div.innerHTML = `probe_restorability(${esc(p.service_id)}, ` +
-            `${esc(p.risk_group_id)}) &rarr; ` +
-            `<span class="probe-error">error: ${esc(p.error)}</span>`;
-        return div;
+// One row per probe_restorability call, in the SAME column set the combined
+// ledger uses (renderProbeLedger, below) -- so a probe reads identically
+// whether it's shown in-place (scoped to one decision) or in the whole-run
+// table. `flip`-marking and "carried into next hour?" both need context
+// beyond the probe list itself (the episode's own metadata.probe_flip, and
+// a look-ahead across the run's later hours), so this reads them off
+// currentEpisode()/currentRun() rather than taking them as parameters --
+// every call site renders after those are already the state in force.
+function probeTable(probes) {
+    const run = currentRun();
+    const flip = (currentEpisode() || {}).probe_flip;
+    const table = document.createElement('table');
+    table.innerHTML = '<tr><th>hour</th><th>decision</th><th>service</th>' +
+        '<th>risk_group</th><th>status</th><th>candidates</th>' +
+        '<th>min_spares</th><th>levers</th>' +
+        '<th>carried into next hour?</th></tr>';
+    for (const p of probes) {
+        const tr = document.createElement('tr');
+        const isFlip = !!flip && p.service_id === flip.claimant;
+        if (isFlip) tr.className = 'flip-row';
+        if (p.error) {
+            tr.innerHTML = `<td>${esc(p.hour)}</td><td>${esc(p.decision)}</td>` +
+                `<td>${esc(p.service_id)}</td><td>${esc(p.risk_group_id)}</td>` +
+                `<td class="probe-error" colspan="5">error: ${esc(p.error)}</td>`;
+            table.appendChild(tr);
+            continue;
+        }
+        const a = p.answer || {};
+        const spares = Object.entries(a.min_spares_needed_by_site || {})
+            .map(([site, n]) => `${site}:${n}`).join(', ') || '-';
+        const carried = run ? probeCarriedForward(run, p.hour, p) : '?';
+        tr.innerHTML =
+            `<td>${esc(p.hour)}</td><td>${esc(p.decision)}</td>` +
+            `<td>${esc(p.service_id)}` +
+            `${isFlip ? ' <span class="flip-badge">FLIP</span>' : ''}</td>` +
+            `<td>${esc(p.risk_group_id)}</td>` +
+            `<td>${esc(a.status)}</td>` +
+            `<td>${esc(a.full_restore_candidates)}</td>` +
+            `<td>${esc(spares)}</td>` +
+            `<td>${esc((a.levers || []).join(', '))}</td>` +
+            `<td>${esc(carried)}</td>`;
+        table.appendChild(tr);
     }
-    const a = p.answer || {};
-    const spares = Object.entries(a.min_spares_needed_by_site || {})
-        .map(([site, n]) => `${site}:${n}`).join(', ') || '-';
-    div.innerHTML = `probe_restorability(${esc(p.service_id)}, ` +
-        `${esc(p.risk_group_id)}) &rarr; ${esc(a.status)}, ` +
-        `${esc(a.full_restore_candidates)} full-restore candidate(s), ` +
-        `spares[${esc(spares)}], levers[${esc((a.levers || []).join(', '))}]`;
-    return div;
+    return table;
 }
 
 function probesBlock(probes, label) {
@@ -1418,7 +1458,7 @@ function probesBlock(probes, label) {
     h.className = 'probes-label';
     h.textContent = label;
     wrap.appendChild(h);
-    probes.forEach((p) => wrap.appendChild(probeRow(p)));
+    wrap.appendChild(probeTable(probes));
     return wrap;
 }
 
@@ -1467,18 +1507,14 @@ function renderSaid(hour) {
     timingReasoning.textContent = hour.timing.reasoning || '';
     el.appendChild(timing);
     el.appendChild(timingReasoning);
-    if (hour.timing.contested_claim) {
-        const cc = document.createElement('div');
-        cc.className = 'contested';
-        cc.textContent = 'contested_claim (timing): ' +
-            JSON.stringify(hour.timing.contested_claim);
-        el.appendChild(cc);
-    }
     appendRanking(el, hour);
-    el.appendChild(rawJson('timing', {observation: hour.projected}));
+    // The raw payload this decision saw is NOT repeated here -- it is the
+    // exact same {observation: hour.projected} object "What the agent saw"
+    // already dumps, and showing it twice just to have it in-panel read as
+    // confusing duplication rather than a second exhibit.
     const timingProbes = probesBlock(
         takeProbes(allProbes, probeCursor, 'timing'),
-        'probe_restorability calls (timing)');
+        'probes asked at this decision (timing)');
     if (timingProbes) el.appendChild(timingProbes);
 
     // Each iteration replays BOTH remaining decisions in the order the model
@@ -1521,7 +1557,7 @@ function renderSaid(hour) {
              unconstrained_menu: hour.unconstrained_menu}));
         const constraintsProbes = probesBlock(
             takeProbes(allProbes, probeCursor, 'constraints'),
-            `probe_restorability calls (constraints, iteration ${it.iteration})`);
+            `probes asked at this decision (constraints, iteration ${it.iteration})`);
         if (constraintsProbes) el.appendChild(constraintsProbes);
 
         const constraints = it.constraints || {};
@@ -1532,13 +1568,6 @@ function renderSaid(hour) {
             (constraints.reasoning || '');
         el.appendChild(cPre);
         el.appendChild(avoidChips(hour, it));
-        if (constraints.contested_claim) {
-            const cc = document.createElement('div');
-            cc.className = 'contested';
-            cc.textContent = 'contested_claim (constraints): ' +
-                JSON.stringify(constraints.contested_claim);
-            el.appendChild(cc);
-        }
 
         el.appendChild(stepLabel('3. Objective -- priced candidate menu'));
         el.appendChild(candidateTable(
@@ -1547,7 +1576,7 @@ function renderSaid(hour) {
             {observation: it.projected, menu: it.menu}));
         const objectiveProbes = probesBlock(
             takeProbes(allProbes, probeCursor, 'objective'),
-            `probe_restorability calls (objective, iteration ${it.iteration})`);
+            `probes asked at this decision (objective, iteration ${it.iteration})`);
         if (objectiveProbes) el.appendChild(objectiveProbes);
 
         const objective = it.objective || {};
@@ -1557,18 +1586,6 @@ function renderSaid(hour) {
         oPre.textContent = `choice: ${objective.choice}\n` +
             (objective.reasoning || '');
         el.appendChild(oPre);
-        // Both decisions can carry a contested_claim, and T3's graded
-        // spend/conserve judgement lives in the objective decision's
-        // `choice` -- render both, independently labelled, rather than
-        // silently preferring one when both are populated (final-review
-        // fix, 2026-08-29).
-        if (objective.contested_claim) {
-            const cc = document.createElement('div');
-            cc.className = 'contested';
-            cc.textContent = 'contested_claim (objective): ' +
-                JSON.stringify(objective.contested_claim);
-            el.appendChild(cc);
-        }
 
         // The gate this iteration actually hit -- right here, where it
         // happened, instead of in one flat list of every rejection this
@@ -1583,7 +1600,7 @@ function renderSaid(hour) {
             gate.className = 'gate-ok';
             gate.textContent = `committed: ${it.lever || '?'}` +
                 (it.inert
-                    ? ' -- inert (no working-path change, no spares spent)'
+                    ? ' -- no-op (no working-path change, no spares spent)'
                     : '');
         } else if (it.outcome === 'held') {
             gate.className = 'gate-ok';
@@ -1635,7 +1652,7 @@ function renderScrubber(episode, run) {
         // judgment -- same convention, same field (Task 16 fix-report).
         const decided = acted.filter(a => a.origin === 'decider');
         const skipped = !!(h.timing && h.timing.skipped);
-        let cls = skipped ? 'unknown' : 'unknown';
+        let cls = skipped ? 'skipped' : 'unknown';
         if (!skipped && gold.gold_spare_action && decided.length) {
             // Any site charged (a non-empty, non-zero `spares` dict) spends
             // a physical spare (optical_reroute); an empty dict does not
@@ -1654,7 +1671,10 @@ function renderScrubber(episode, run) {
         strip.className = 'strip ' + cls;
         strip.title = acted.length
             ? `agent action(s): ${JSON.stringify(acted)}`
-            : 'no action this hour';
+            : skipped
+                ? 'skipped: nothing decidable this hour, the decider was ' +
+                  'never called'
+                : 'no action this hour';
         cell.appendChild(strip);
 
         cell.addEventListener('click', () => {
@@ -1892,10 +1912,21 @@ function renderHappened(episode, run, hour) {
                 `<td>${esc(r.lever || '-')}</td>` +
                 `<td>${esc(sparesText)}</td>` +
                 `<td>${esc(r.effective_at_hour || '-')}</td>`;
-            if (r.rejection) {
-                tr.title = 'rejection: ' + JSON.stringify(r.rejection);
-            }
             table.appendChild(tr);
+            // Visible, not a hover-only title: this is the one thing that
+            // explains WHY a restore attempt failed, reusing gateSummary so
+            // it reads exactly like the same rejection type does in "What
+            // it said" (r.rejection is "the same typed dict run_episode's
+            // own hourly loop records" -- replay.py's own docstring).
+            if (r.rejection) {
+                const reasonRow = document.createElement('tr');
+                const cell = document.createElement('td');
+                cell.colSpan = 5;
+                cell.className = 'rejection';
+                cell.textContent = gateSummary(r.rejection, hour);
+                reasonRow.appendChild(cell);
+                table.appendChild(reasonRow);
+            }
         }
         el.appendChild(table);
     }
@@ -1990,7 +2021,7 @@ function renderScoreboard(episode, run) {
              ? null
              : m.regret_gbps_h === 0],
         ['acted_too_late', String(m.acted_too_late), m.acted_too_late === false],
-        ['inert_commits', String(m.inert_commits), m.inert_commits === 0],
+        ['no-op commits', String(m.inert_commits), m.inert_commits === 0],
         ['probes', probeSplit(run), null],
     ];
     const table = document.createElement('table');
@@ -2007,7 +2038,8 @@ function renderScoreboard(episode, run) {
 
 function renderProbeLedger(episode, run) {
     const el = document.getElementById('probes');
-    el.innerHTML = '<h3>probe ledger (whole run, not just this hour)</h3>';
+    el.innerHTML = '<h3>Combined probe ledger -- every probe_restorability ' +
+        'call this run, all hours and decisions together</h3>';
     if (!episode || !run) return;
     const rows = episodeProbes(run);
     const flip = episode.probe_flip;
@@ -2034,39 +2066,7 @@ function renderProbeLedger(episode, run) {
         el.appendChild(note);
         return;
     }
-    const table = document.createElement('table');
-    table.innerHTML = '<tr><th>hour</th><th>decision</th><th>service</th>' +
-        '<th>risk_group</th><th>status</th><th>candidates</th>' +
-        '<th>min_spares</th><th>levers</th>' +
-        '<th>carried into next hour?</th></tr>';
-    for (const p of rows) {
-        const tr = document.createElement('tr');
-        const isFlip = !!flip && p.service_id === flip.claimant;
-        if (isFlip) tr.className = 'flip-row';
-        if (p.error) {
-            tr.innerHTML = `<td>${esc(p.hour)}</td><td>${esc(p.decision)}</td>` +
-                `<td>${esc(p.service_id)}</td><td>${esc(p.risk_group_id)}</td>` +
-                `<td class="probe-error" colspan="5">error: ${esc(p.error)}</td>`;
-            table.appendChild(tr);
-            continue;
-        }
-        const a = p.answer || {};
-        const spares = Object.entries(a.min_spares_needed_by_site || {})
-            .map(([site, n]) => `${site}:${n}`).join(', ') || '-';
-        const carried = probeCarriedForward(run, p.hour, p);
-        tr.innerHTML =
-            `<td>${esc(p.hour)}</td><td>${esc(p.decision)}</td>` +
-            `<td>${esc(p.service_id)}` +
-            `${isFlip ? ' <span class="flip-badge">FLIP</span>' : ''}</td>` +
-            `<td>${esc(p.risk_group_id)}</td>` +
-            `<td>${esc(a.status)}</td>` +
-            `<td>${esc(a.full_restore_candidates)}</td>` +
-            `<td>${esc(spares)}</td>` +
-            `<td>${esc((a.levers || []).join(', '))}</td>` +
-            `<td>${esc(carried)}</td>`;
-        table.appendChild(tr);
-    }
-    el.appendChild(table);
+    el.appendChild(probeTable(rows));
 }
 
 function renderGold() {

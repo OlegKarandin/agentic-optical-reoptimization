@@ -404,8 +404,7 @@ def ranking_conflict(candidate: dict, *, standing: tuple[str, ...],
 
 
 SKIPPED_TIMING = {"action": "wait", "reasoning": "skipped: nothing decidable",
-                  "contested_claim": None, "claim_priority": [],
-                  "skipped": True}
+                  "claim_priority": [], "skipped": True}
 
 
 def is_decidable(obs, *, spares_on_hand: int,

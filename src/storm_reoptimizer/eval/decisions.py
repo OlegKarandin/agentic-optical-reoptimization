@@ -63,45 +63,6 @@ def _reasoning(payload: dict, where: str) -> str:
     return text
 
 
-_CLAIM_KEYS = ("service_id", "expected_capacity_at_risk_gbps")
-
-
-def _contested_claim(payload: dict, where: str) -> dict | None:
-    """The strongest competing claim on the shared depot this decision
-    weighed, or None for "there is none".
-
-    Elicited, never scored: the graded labels stay exactly what they were, so
-    this run's label_correct/pair_solved stay comparable with the control-arm
-    findings. What it buys is the decomposition a human currently gets only by
-    reading 21 rollouts of prose -- a wrong answer WITH the rival named is a
-    judgement failure, the same answer with `null` is an attention failure,
-    and the two need different fixes (eval-fairness design, §5.2).
-
-    Deliberately not a spend|conserve enum: that names the axis outright, and
-    the scenario files are explicit that enumerating `gold_spare_action`
-    "would trivially solve every pair"."""
-    claim = payload.get("contested_claim")
-    if claim is None:
-        return None
-    if not isinstance(claim, dict):
-        raise DecisionError(
-            f"{where}: `contested_claim` must be an object or null")
-    missing = [k for k in _CLAIM_KEYS if k not in claim]
-    if missing:
-        raise DecisionError(
-            f"{where}: `contested_claim` is missing {missing}")
-    svc = claim["service_id"]
-    if not isinstance(svc, str) or not svc.strip():
-        raise DecisionError(
-            f"{where}: `contested_claim.service_id` must name a service")
-    ecar = claim["expected_capacity_at_risk_gbps"]
-    if isinstance(ecar, bool) or not isinstance(ecar, (int, float)):
-        raise DecisionError(
-            f"{where}: `contested_claim.expected_capacity_at_risk_gbps` "
-            f"must be a number")
-    return {"service_id": svc, "expected_capacity_at_risk_gbps": float(ecar)}
-
-
 def _claim_priority(payload: dict, where: str) -> tuple[str, ...]:
     """An ordering over the services shown, most deserving of the depot's
     remaining spares first -- the one way a decision acts on behalf of a
@@ -112,8 +73,7 @@ def _claim_priority(payload: dict, where: str) -> tuple[str, ...]:
     Validated here only against SHAPE (a list of strings); that every named
     id actually appeared in the observation shown to the decider is a
     property of the payload, which `from_dict` never sees -- that check
-    lives in `agent._check_named_services`, same split as
-    `_contested_claim`/`_check_named_services` already draws."""
+    lives in `agent._check_named_services`."""
     items = payload.get("claim_priority", [])
     if not isinstance(items, list) or any(
             not isinstance(item, str) for item in items):
@@ -126,15 +86,12 @@ def _claim_priority(payload: dict, where: str) -> tuple[str, ...]:
 class TimingDecision:
     action: str          # "act" | "wait"
     reasoning: str
-    # The rival claim on the shared depot this decision weighed. No longer
-    # the last field -- `claim_priority` below is now -- but every existing
-    # positional construction in baseline.py, assertions.py, tools/ and
-    # tests/eval/test_episodes.py names at most these two trailing fields
-    # positionally, so both keep working untouched.
-    contested_claim: dict | None = None
     # An ordering over the services shown, most deserving first, for the
-    # harness's post-cut restoration replay to consume (Task 7). Last field
-    # so every positional construction above keeps working untouched.
+    # harness's post-cut restoration replay to consume (Task 7). Every
+    # existing positional construction in baseline.py, assertions.py,
+    # tools/ and tests/eval/test_episodes.py names at most these three
+    # fields positionally, so keeping it last leaves all of them working
+    # untouched.
     claim_priority: tuple[str, ...] = ()
 
     @classmethod
@@ -146,12 +103,10 @@ class TimingDecision:
                 f"timing: `action` must be one of {sorted(_ACTIONS)}, "
                 f"got {action!r}")
         return cls(action=action, reasoning=reasoning,
-                   contested_claim=_contested_claim(payload, "timing"),
                    claim_priority=_claim_priority(payload, "timing"))
 
     def to_dict(self) -> dict[str, Any]:
         return {"action": self.action, "reasoning": self.reasoning,
-                "contested_claim": self.contested_claim,
                 "claim_priority": list(self.claim_priority)}
 
 
@@ -269,25 +224,14 @@ def rank_by_priority(candidates: list[dict],
     return sorted(range(len(candidates)), key=key)
 
 
-CONTESTED_CLAIM_SCHEMA = {
-    "type": ["object", "null"],
-    "additionalProperties": False,
-    "required": ["service_id", "expected_capacity_at_risk_gbps"],
-    "properties": {
-        "service_id": {"type": "string"},
-        "expected_capacity_at_risk_gbps": {"type": "number"},
-    },
-}
-
 TIMING_JSON_SCHEMA = {
     "type": "object", "additionalProperties": False,
-    "required": ["reasoning", "contested_claim", "claim_priority", "action"],
+    "required": ["reasoning", "claim_priority", "action"],
     # Property ORDER is load-bearing: strict tool use emits arguments in
     # schema order, so `action` last means the enum is produced AFTER the
     # reasoning that justifies it (spec 6.1).
     "properties": {
         "reasoning": {"type": "string", "minLength": 1},
-        "contested_claim": CONTESTED_CLAIM_SCHEMA,
         "claim_priority": {"type": "array", "items": {"type": "string"}},
         "action": {"type": "string", "enum": sorted(_ACTIONS)},
     },

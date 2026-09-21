@@ -575,7 +575,7 @@ def test_the_probe_rejects_a_service_outside_the_projected_exposure(
     """Whole-branch final review, Item 4: the runner's `ProbeBinding` used to
     be bound with `service_ids=set(obs.exposure)` -- the full, unprojected
     roster -- rather than the projected subset `_check_named_services`
-    actually validates `claim_priority`/`contested_claim` against. A service
+    actually validates `claim_priority` against. A service
     that is exposed in the raw observation but never shown to the decider
     (e.g. a background demand not eligible for this depot, or below the
     p_cut enumeration threshold) must be rejected by the probe guard exactly
@@ -937,7 +937,7 @@ def test_an_hour_with_no_issuance_of_its_own_is_not_decided(
     skipped = next(h for h in trace.hours if h["hour"] == "t2")
     assert skipped["timing"] == {
         "action": "wait", "reasoning": "skipped: nothing decidable",
-        "contested_claim": None, "claim_priority": [], "skipped": True}
+        "claim_priority": [], "skipped": True}
     assert skipped["projected"] is None
     assert skipped["iterations"] == []
     assert skipped["timing_effective"] == "wait"

@@ -213,19 +213,6 @@ Run it with:
 python -m storm_reoptimizer.eval.suite --include-agent
 ```
 
-**Before running `--include-agent` for a real, paid arm**, run
-`python tools/probe_contested_claim_schema.py` (both branches: a null claim
-and a non-null claim) and confirm ACCEPTED. `contested_claim` is a nullable
-OBJECT field in the tool schema; whether the Anthropic API's strict tool use
-actually accepts that shape has only been reasoned about, not verified
-against a live call, in the environment that built this harness (no
-`ANTHROPIC_API_KEY` was available). If the probe comes back REJECTED,
-`decisions.py`'s `CONTESTED_CLAIM_SCHEMA` needs to switch to the flat
-two-scalar fallback the probe script's own docstring describes
-(`contested_claim_service_id` with a `"none"` sentinel plus
-`contested_claim_ecar_gbps`) before trusting any `contested_claim` field a
-real run produces.
-
 **One further check to make during a run, for W3.3.** Open the constraints
 records for `T3b` at hour `t1` in the audit sidecar and read the
 `reasoning`. The design's acceptance for the unconstrained-menu probe is
@@ -421,12 +408,13 @@ same-length, live example against today's trimmed shape.
 still computes and records it (every trace keeps it), but
 `project_observation` no longer sends it to the model — `restorable_groups`
 is what the prompt describes instead, and it is the field a live capture
-below actually carries. The `contested_claim` field is now on the TIMING
-decision only, not on all three: `{"service_id": ..., "expected_
-capacity_at_risk_gbps": ...}` naming the strongest rival claim it weighed,
-or `null` for "there is none". It is elicited, not scored — see "What to
+below actually carries. A `contested_claim` field used to sit on the TIMING
+decision (an elicited, unscored pointer to the strongest rival claim
+weighed); it was removed entirely (2026-09-17) — `claim_priority` plus the
+exposure table already give a reviewer the same information, and nothing
+ever scored it. See git history for the field it replaced, and "What to
 read afterwards" in `docs/superpowers/2026-08-29-shared-depot-arm-
-predictions.md`.
+predictions.md` for why it was added in the first place.
 
 **1. Timing** (`submit_timing_decision`) — `action: "act"`:
 
@@ -581,9 +569,8 @@ fields; and `restorable_groups` is on the wire in place of `horizon_totals`.
 Two more keys exist on the wire but not in the JSON above, because they
 appear only on the constraints and objective requests, never on timing:
 `decided_this_hour` (the timing decision already made this hour — its
-`action`, `reasoning`, `contested_claim`, `claim_priority`, and any probe
-answers obtained — so the later steps EXECUTE that decision rather than
-re-deciding it) and `attempts_this_hour` (every avoid set already tried
+`action`, `reasoning`, `claim_priority`, and any probe answers obtained —
+so the later steps EXECUTE that decision rather than re-deciding it) and `attempts_this_hour` (every avoid set already tried
 this hour, the menu status and size it produced, and what was answered,
 so a repeated attempt with no new information is visible as such). A
 third, `risk_groups` (the named groups' own asset-level contents, needed to
@@ -621,8 +608,8 @@ traces in `eval/traces/`, and the toy topology into `eval/viewer/index.html`
 — a single self-contained, double-clickable file with no server and no
 network calls needed. Open it in a browser to step hour-by-hour through an
 episode: the exposure map, the candidate menu, and "What it said" (each
-decision's reasoning, alongside its `contested_claim` when the model
-recorded one). The per-hour gold-vs-agent strip reads each hour's
+decision's reasoning, alongside the standing claim ranking it produced).
+The per-hour gold-vs-agent strip reads each hour's
 `gold_spare_action` (`spend` or `conserve`) against whether the committed
 action actually spent a physical spare pair. An hour the decidable-hours
 rule skipped (see "Current wire format" above) renders with its own

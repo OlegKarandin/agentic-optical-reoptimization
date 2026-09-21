@@ -12,7 +12,7 @@ def test_timing_decision_round_trips():
     d = TimingDecision.from_dict({"action": "wait", "reasoning": "cone is wide"})
     assert d.action == "wait"
     assert d.to_dict() == {"action": "wait", "reasoning": "cone is wide",
-                           "contested_claim": None, "claim_priority": []}
+                           "claim_priority": []}
 
 
 def test_timing_rejects_an_unknown_action():
@@ -109,27 +109,8 @@ def test_cost_terms_are_the_seven_the_server_reports():
         "added_latency", "total_margin", "services_at_risk")
 
 
-def test_a_decision_carries_the_rival_claim_it_weighed_or_null():
-    d = TimingDecision.from_dict({
-        "action": "wait", "reasoning": "the cone sharpens next hour",
-        "contested_claim": {"service_id": "d0462",
-                            "expected_capacity_at_risk_gbps": 88.3}})
-    assert d.contested_claim == {"service_id": "d0462",
-                                 "expected_capacity_at_risk_gbps": 88.3}
-
-
-def test_a_decision_with_no_rival_claim_says_so_explicitly():
-    d = TimingDecision.from_dict({
-        "action": "act", "reasoning": "nothing else is exposed",
-        "contested_claim": None})
-    assert d.contested_claim is None
-    assert d.to_dict()["contested_claim"] is None
-    assert d.to_dict()["claim_priority"] == []
-
-
 def test_claim_priority_round_trips_and_validates():
     d = TimingDecision.from_dict({"action": "wait", "reasoning": "hold",
-                                  "contested_claim": None,
                                   "claim_priority": ["c", "s"]})
     assert d.claim_priority == ("c", "s")
     assert d.to_dict()["claim_priority"] == ["c", "s"]
@@ -138,36 +119,14 @@ def test_claim_priority_round_trips_and_validates():
             {"action": "wait", "reasoning": "x", "claim_priority": "c"})
 
 
-def test_an_absent_contested_claim_is_the_same_as_null():
-    # baseline.py and every gold decision construct these positionally with no
-    # claim; they must keep working untouched. `contested_claim` stays on
-    # TimingDecision only -- it left ObjectiveDecision and ConstraintDecision
-    # entirely (spec 6.4/6.5).
-    assert TimingDecision.from_dict(
-        {"action": "act", "reasoning": "x"}).contested_claim is None
-    assert TimingDecision("act", "x").contested_claim is None
-
-
-@pytest.mark.parametrize("bad, match", [
-    ({"service_id": "d0462"}, "expected_capacity_at_risk_gbps"),
-    ({"expected_capacity_at_risk_gbps": 1.0}, "service_id"),
-    ({"service_id": "", "expected_capacity_at_risk_gbps": 1.0},
-     "service_id"),
-    ({"service_id": "d0462", "expected_capacity_at_risk_gbps": "big"},
-     "expected_capacity_at_risk_gbps"),
-    ("d0462", "contested_claim"),
-])
-def test_a_malformed_contested_claim_is_rejected(bad, match):
-    with pytest.raises(DecisionError, match=match):
-        TimingDecision.from_dict(
-            {"action": "act", "reasoning": "x", "contested_claim": bad})
-
-
-def test_timing_decision_requires_the_field():
-    # `contested_claim` stays on TimingDecision only -- it left the
-    # constraint and objective wire schemas entirely (spec 6.4/6.5).
-    assert "contested_claim" in TIMING_JSON_SCHEMA["required"]
-    assert "contested_claim" in TIMING_JSON_SCHEMA["properties"]
+def test_the_timing_schema_no_longer_carries_contested_claim():
+    """contested_claim (the strongest rival claim a decision weighed) was
+    removed entirely, not just hidden from the viewer: it was elicited but
+    never scored, and `claim_priority` plus the exposure table already give
+    a reviewer the same information."""
+    assert "contested_claim" not in TIMING_JSON_SCHEMA["required"]
+    assert "contested_claim" not in TIMING_JSON_SCHEMA["properties"]
+    assert "contested_claim" not in TimingDecision.__dataclass_fields__
 
 
 def test_reasoning_is_the_first_property_in_every_tool_schema():
