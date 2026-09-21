@@ -450,3 +450,78 @@ def test_the_t1a_shape_end_to_end_one_spare_a_mate_pair_cut_both_restored(
     assert by_service["c-rev"]["spares"] == {}
     assert ledger.on_hand == 0
     assert len(actions) == 2
+
+
+ALT_REV_LIGHTPATH = {"lever": "optical_reroute", "reused_lightpaths": [],
+                     "new_lightpaths": [{"oms_sequence": ["oms_rev_alt"], "lam": 7,
+                                         "mode_id": "M", "gsnr_db": 10.0,
+                                         "bitrate_gbps": 300.0}],
+                     "shortfall_gbps": 0.0}
+
+
+class _MatePairChoiceCounting(_MatePairCounting):
+    """c-rev's menu offers TWO workable candidates: a fresh, unrelated
+    lightpath (oms_rev_alt, full price, nellore<->vijayawada) listed
+    FIRST, and the true reverse mate (oms_rev, free once c-fwd is lit)
+    listed SECOND -- proving the cheapest-first sort (replay.py's
+    lit_runs-aware spares_needed, not menu order) is what picks the mate
+    (transponder-pairing spec, 2026-09-21, replay.py:178)."""
+
+    async def call(self, name, arguments=None, **kw):
+        if name == "route_service" and arguments["service_id"] == "c-rev":
+            self.calls.append((name, arguments))
+            return {"status": "solution",
+                    "candidates": [dict(MENU_CANDIDATES[0]),
+                                   dict(ALT_REV_LIGHTPATH), dict(REV_LIGHTPATH)]}
+        if name == "get_topology":
+            layer = (arguments or {}).get("layer")
+            if layer == "optical":
+                return {"oms": [
+                    {"id": "oms_fwd", "src_node_id": "tirupati",
+                     "dst_node_id": "nellore", "elements": ["fiber_fwd"]},
+                    {"id": "oms_rev", "src_node_id": "nellore",
+                     "dst_node_id": "tirupati", "elements": ["fiber_rev"]},
+                    {"id": "oms_rev_alt", "src_node_id": "nellore",
+                     "dst_node_id": "vijayawada", "elements": ["fiber_alt"]}]}
+            if layer == "ip":
+                return {"routers": [
+                    {"site": "tirupati", "id": "router_tirupati"},
+                    {"site": "nellore", "id": "router_nellore"},
+                    {"site": "vijayawada", "id": "router_vijayawada"}],
+                        "ip_links": []}
+            raise AssertionError(f"unexpected layer {layer!r}")
+        return await super().call(name, arguments, **kw)
+
+
+def _mate_pair_choice_geometry():
+    geometry = _mate_pair_geometry()
+    return dataclasses.replace(
+        geometry, oms_nodes={**geometry.oms_nodes,
+                             "oms_rev_alt": ["nellore", "vijayawada"]})
+
+
+def _mate_pair_choice_ledger():
+    return SpareLedger(inventory={"tirupati": 1}, depot_site="tirupati",
+                       oms_nodes={"oms_fwd": ["tirupati", "nellore"],
+                                 "oms_rev": ["nellore", "tirupati"],
+                                 "oms_rev_alt": ["nellore", "vijayawada"]})
+
+
+def test_the_cheapest_first_sort_picks_the_mate_over_menu_order(write_scenario):
+    """replay.py:178 -- the sort must rank by REAL (lit_runs-aware) cost,
+    not by menu order. c-rev's menu lists the expensive, unrelated
+    candidate FIRST and the free reverse mate SECOND; the replay must
+    still pick the free one."""
+    scenario = load_scenario(
+        write_scenario(REPLAY_SCENARIO_YAML, "REPLAY_TEST.yaml"))
+    counting = _MatePairChoiceCounting()
+    ledger = _mate_pair_choice_ledger()
+    actions, records = asyncio.run(restore_after_cuts(
+        counting, scenario=scenario, hour="t1", hour_index=1,
+        affected=["c-fwd", "c-rev"], priority=("c-fwd", "c-rev"),
+        ledger=ledger, geometry=_mate_pair_choice_geometry(), issuance=_issuance(),
+        rg_for_cut_hour=None, index_factory=_index_factory(counting)))
+    by_service = {r["service_id"]: r for r in records}
+    assert by_service["c-rev"]["outcome"] == "restored"
+    assert by_service["c-rev"]["spares"] == {}       # picked the free mate, not the alt
+    assert ledger.on_hand == 0
