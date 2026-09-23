@@ -152,7 +152,7 @@ gold:
     against the live server. A zero-lead-time option would make waiting free
     and silently invert this label -- see "The real mechanics" below for why
     this needed a non-trivial reference_avoid to hold.
-flip_variable: [uncontested, spare, lead]
+flip_variable: [spare, lead]
 metadata:
   # The two REAL named claimants (Task 14, exposure-and-depot plan,
   # 2026-08-30). D1's own doubled spare stock (2 pairs, not 1) is what keeps

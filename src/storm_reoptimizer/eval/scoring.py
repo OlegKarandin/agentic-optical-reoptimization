@@ -301,7 +301,8 @@ def episode_metrics(scenario: ScenarioFile, trace: EpisodeTrace) -> dict:
                              if s.get("inert")),
         "tool_calls": trace.tool_calls,
         "wall_clock_s": trace.wall_clock_s,
-        "cites_flip_variable": cites_flip_variable(trace, scenario.flip_variable),
+        "cites_flip_variable_frac": cites_flip_variable_frac(
+            trace, scenario.flip_variable),
         "gbps_hours_lost": losses,
         "gbps_hours_lost_total": losses_total,
         "regret_gbps_h": regret,
@@ -324,11 +325,26 @@ def _known_service_ids(trace: EpisodeTrace) -> set[str]:
     return seen
 
 
-def cites_flip_variable(trace: EpisodeTrace,
-                        flip_variable: tuple[str, ...]) -> bool:
-    """Does the reasoning reference the fact that actually distinguishes the
-    twin? Cheap entity matching; see the module docstring on why this is a
-    filter and not a verification."""
+def cites_flip_variable_frac(trace: EpisodeTrace,
+                             flip_variable: tuple[str, ...]) -> float:
+    """Fraction of `flip_variable` tokens the reasoning text contains,
+    case-insensitively -- NECESSARY, NOT SUFFICIENT, cheap entity matching,
+    never reasoning verification (module docstring).
+
+    Replaces the old boolean AND, which read 0/6 on the 2026-09-15 T1 run's
+    own six rollouts despite the reasoning BEING the comparison the tokens
+    name: three of T1's four original tokens (`spend`, `hold`, `claimant`)
+    are words `test_the_system_prompt_never_leaks_scoring_internals`
+    forbids the system prompt from ever mentioning, and the fourth
+    (`escape`) never appeared in the payload at all -- the metric was
+    testing spontaneous word choice, not citation, and an AND over that
+    vocabulary filters out every true positive. A fraction degrades
+    gracefully when some tokens are grounded entities (service ids,
+    corridor names, compared scalars) the model's own reasoning has a
+    textual cue to reproduce, and others are pure policy vocabulary it
+    does not."""
+    if not flip_variable:
+        return 1.0
     text = " ".join(
         str(hour.get("timing", {}).get("reasoning", ""))
         + " " + " ".join(
@@ -336,7 +352,8 @@ def cites_flip_variable(trace: EpisodeTrace,
             + " " + str(step.get("objective", {}).get("reasoning", ""))
             for step in hour.get("iterations", []))
         for hour in trace.hours).lower()
-    return all(token.lower() in text for token in flip_variable)
+    matched = sum(1 for token in flip_variable if token.lower() in text)
+    return matched / len(flip_variable)
 
 
 def cross_twin_metrics(a: ScenarioFile, trace_a: EpisodeTrace,

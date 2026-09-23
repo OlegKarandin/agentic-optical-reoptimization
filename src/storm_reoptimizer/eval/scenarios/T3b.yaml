@@ -173,7 +173,6 @@ flip_variable:
 - spend
 - hold
 - claimant
-- escape
 metadata:
   label_rule: spare_action_by_deadline
   exposure_legs: working

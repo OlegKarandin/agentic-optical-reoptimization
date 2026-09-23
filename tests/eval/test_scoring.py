@@ -8,8 +8,8 @@ import pytest
 from storm_reoptimizer.eval.runner import Action, EpisodeTrace
 from storm_reoptimizer.eval.scenario_file import load_scenario
 from storm_reoptimizer.eval.scoring import (
-    cites_flip_variable, cross_twin_metrics, decision_label, episode_metrics,
-    gbps_hours_lost, reexposed,
+    cites_flip_variable_frac, cross_twin_metrics, decision_label,
+    episode_metrics, gbps_hours_lost, reexposed,
 )
 
 BASE = textwrap.dedent("""
@@ -227,11 +227,22 @@ def test_recovered_from_rejection_needs_both_a_rejection_and_a_commit(tmp_path):
         rejections_at=("t1",)))["recovered_from_rejection"]
 
 
-def test_flip_variable_citation_matches_entities_in_the_reasoning(tmp_path):
+def test_flip_variable_citation_is_a_fraction_of_matched_tokens(tmp_path):
     s = _scenario(tmp_path, "Pa", "wait")
-    assert cites_flip_variable(_trace(), s.flip_variable)
-    assert not cites_flip_variable(
-        _trace(reasoning="I flipped a coin"), s.flip_variable)
+    # BASE's own flip_variable is [svc-b, centre]; the default reasoning
+    # ("...centred on svc-b...") contains both as substrings.
+    assert cites_flip_variable_frac(_trace(), s.flip_variable) == 1.0
+    assert cites_flip_variable_frac(
+        _trace(reasoning="I flipped a coin"), s.flip_variable) == 0.0
+
+
+def test_flip_variable_citation_degrades_gracefully_on_a_partial_match(
+    tmp_path,
+):
+    s = _scenario(tmp_path, "Pa", "wait")
+    assert cites_flip_variable_frac(
+        _trace(reasoning="the spare is worth more held for svc-b"),
+        s.flip_variable) == pytest.approx(0.5)
 
 
 def test_first_shot_reads_the_effective_timing(tmp_path):
