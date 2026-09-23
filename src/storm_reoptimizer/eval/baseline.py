@@ -206,6 +206,15 @@ class ScriptedDecider:
 
     async def objective(self, obs: Observation, menu: dict) -> ObjectiveDecision:
         if self._objective_fn is not None:
+            # lit_runs deliberately left at its default (): oracle.
+            # escape_objective (the only objective_fn this decider ever
+            # runs) gates a candidate on `spares_needed` being NON-EMPTY --
+            # "it actually lights something and so actually spends a
+            # transponder pair" -- so a mate-priced candidate rendering
+            # {} here would be wrongly rejected as a free/fake escape.
+            # This decider wants each candidate's INTRINSIC cost, exactly
+            # like assertions.py's own deliberate defaults
+            # (transponder-pairing spec, 2026-09-21).
             return self._objective_fn(
                 obs, menu_for_prompt(menu, self.oms_nodes))
         return self._objective.get(obs.hour, self._default_objective)

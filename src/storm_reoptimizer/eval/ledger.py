@@ -76,11 +76,26 @@ class InsufficientSpares(RuntimeError):
 
 
 def _lightpath_endpoints(lightpath: dict, oms_nodes: dict) -> tuple[str, str]:
-    """The two SITES a lightpath terminates at.
+    """The two SITES a lightpath terminates at, in SCAN order.
 
     Taken as the nodes appearing exactly ONCE across its legs' endpoints, not
     from the first and last leg: leg order is not guaranteed head-to-tail, and
-    an interior junction appears once per adjacent leg."""
+    an interior junction appears once per adjacent leg. The set of two
+    endpoints is therefore always correct regardless of leg order.
+
+    The RETURNED ORDER, however, is the scan order (first-to-appear-with-
+    final-count-1), which equals the run's true source-to-destination
+    traversal direction only when `oms_sequence` happens to already be
+    listed head-to-tail from the source -- the very thing this docstring's
+    own first paragraph says is not guaranteed in general. This matters
+    since the transponder-pairing fix (2026-09-21) uses this function's
+    return order to decide whether a run is co-directional with, or the
+    reverse mate of, an already-lit run (`spares_needed`'s own `pair =
+    tuple(sorted(run))` split). A leg sequence that is a valid simple path
+    but genuinely not head-to-tail would silently flip that classification.
+    Known, recorded limitation -- not verified against a live multi-leg
+    candidate; see docs/superpowers/plans/2026-09-21-transponder-pairing-
+    and-metric-fixes.md's final-review notes for the open follow-up."""
     seen: dict[str, int] = {}
     for oms_id in lightpath.get("oms_sequence") or ():
         for node in oms_nodes.get(oms_id, ()):

@@ -595,6 +595,19 @@ rollouts; it is now `cites_flip_variable_frac`, a fraction, and `escape`/
 lists as tokens the observation never surfaces (§6.2's own audit,
 applied to all six T episodes and D1 alike, not just T1a/T1b).
 
+**One more gap this leaves, stated rather than left implicit.** Dropping
+`escape`/`uncontested` closed the false-negative half of item 4's fix, but
+the six T episodes' `flip_variable` is now `[spend, hold, claimant]` --
+100% policy vocabulary the system prompt is forbidden from ever using, 0%
+grounded entities (service ids, corridor names, compared scalars) the
+observation actually surfaces. `cites_flip_variable_frac` therefore still
+measures spontaneous policy-word choice for these six episodes, with
+partial credit instead of an all-or-nothing gate, not genuine citation of
+the fact that distinguishes the twin. Closing that needs a follow-up that
+authors real grounded tokens per episode -- deliberately not attempted
+here, since inventing one without the original authoring discipline risks
+repeating the exact "escape" mistake this fix corrects elsewhere.
+
 **The known gap this does NOT close.** All six T1 rollouts' decision rule
 is a comparison of raw ECAR (`sut_ecar_gbps` against the largest competing
 claim), while the objective they are graded on is realized Gbps-hours,

@@ -138,13 +138,16 @@ _PLACEHOLDER_GOLD = Gold(
     survived=(), max_spares_wasted=0, decision_at_t0="wait", label="n/a",
     rationale="PROVISIONAL -- run tools/compute_gold.py --write")
 
-# First-cut citation tokens for `scoring.cites_flip_variable` (matches
+# First-cut citation tokens for `scoring.cites_flip_variable_frac` (matches
 # rationale using words for the NEW spend/hold decision this pair grades,
 # analogous in spirit to the older pairs' own `flip_variable` lists) --
 # provisional, like `gold` above: nothing specifies the final vocabulary,
 # and a later task (or a human, alongside the real gold rationale) is free
-# to retune it.
-FLIP_VARIABLE_TOKENS = ("spend", "hold", "claimant", "escape")
+# to retune it. `escape` was dropped from the SHIPPED T1a.yaml/T1b.yaml
+# (transponder-pairing spec, 2026-09-21 -- it never appears anywhere in
+# the observation payload the model reads) but is deliberately left here
+# too, dropped, so re-running this generator does not silently reintroduce it.
+FLIP_VARIABLE_TOKENS = ("spend", "hold", "claimant")
 
 
 def _node_coords(topology_path: str | Path) -> dict[str, tuple[float, float]]:

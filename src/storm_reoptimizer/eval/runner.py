@@ -33,10 +33,11 @@ from __future__ import annotations
 import functools
 import json
 import time
-from typing import Iterable
+
 from dataclasses import asdict, dataclass, field
 from functools import partial
 from pathlib import Path
+from typing import Iterable
 
 from mcp.client import Client
 
@@ -210,13 +211,19 @@ def menu_for_prompt(menu: dict, oms_nodes: dict | None = None, *,
     3.
 
     `lit_runs` (transponder-pairing spec, 2026-09-21) is this rollout's own
-    `SpareLedger.lit_runs` at the moment of this call -- both this
-    function's callers (runner.run_episode's own trace recording, and
-    agent.ClaudeDecider's identical call rendering the wire payload the
-    model reads) MUST pass the SAME `lit_runs`, or the number the trace
-    records and the number the model saw would silently disagree, exactly
-    the failure this docstring's own "one function so the two can never
-    disagree" sentence exists to prevent.
+    `SpareLedger.lit_runs` at the moment of this call. Two of this
+    function's five callers -- runner.run_episode's own trace recording,
+    and agent.ClaudeDecider's identical call rendering the wire payload
+    the model reads -- MUST pass the SAME `lit_runs` for the same hour's
+    same candidate, or the number the trace records and the number the
+    model saw would silently disagree, exactly the failure this
+    docstring's own "one function so the two can never disagree" sentence
+    exists to prevent. The other three callers are legitimately
+    independent and keep the `()` default on purpose:
+    `baseline.ScriptedDecider.objective` (see that call site's own
+    comment for why), `assertions.py`'s own authoring-time checks (no
+    rollout ledger exists there), and `tools/probe_episode.py`'s offline
+    dump tool (same reason).
 
     `oms_nodes` -- see unconstrained_menu_projection above."""
     oms_nodes = oms_nodes or {}

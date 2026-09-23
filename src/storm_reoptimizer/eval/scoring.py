@@ -208,7 +208,7 @@ def reexposed(scenario: ScenarioFile, trace: EpisodeTrace) -> bool:
     sut = scenario.service_under_test
     hours = scenario.hours
     return any(
-        float(entry["p_cut"]) > 0.0
+        float(entry.get("p_cut", 0.0)) > 0.0
         for a in trace.actions
         for h in hours[a.effective_at_index + 1:]
         for entry in (_hour_record(trace, h) or {})

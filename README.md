@@ -476,14 +476,19 @@ the real solver, all restoring the full 300 Gbps at 1 spare pair. Choice:
 held. The loop repeats at `t1` (`hours_remaining=0` now): the model reaffirms
 `act`, the same risk group, and the same `candidate_0`.
 
-**Honest gap.** `D1.yaml`'s gold `flip_variable` is
+**Honest gap (historical; see 2026-09-21 update below).** At the time this
+trace was captured, `D1.yaml`'s gold `flip_variable` was
 `[uncontested, spare, lead]`. The model's reasoning covers all three
 *concepts* (d0361 "doesn't compete meaningfully", the spare pairs, the lead
 time) but never writes the literal word "uncontested" — so
-`scoring.cites_flip_variable`, which is documented as entity matching over
-exact substrings, would likely score this call low despite the decision and
+`scoring.cites_flip_variable` (since renamed `cites_flip_variable_frac`,
+and no longer boolean), documented as entity matching over exact
+substrings, would likely score this call low despite the decision and
 reasoning both being correct. That is the metric working as designed
-(NECESSARY, NOT SUFFICIENT), not a decider defect.
+(NECESSARY, NOT SUFFICIENT), not a decider defect. `uncontested` was later
+dropped from D1's own `flip_variable` for exactly this reason (transponder-
+pairing spec, 2026-09-21) — it never appeared anywhere in the observation
+payload the model reads, so the shipped list is now `[spare, lead]`.
 
 Full traces for all three of `D1`'s rollouts live in `eval/traces/D1-agent_
 claude-sonnet-5-{0,1,2}.json`; the audit sidecar recording exactly what was
