@@ -540,6 +540,75 @@ with more such collisions could exhaust the retry budget. See
 
 ---
 
+### Transponder mate-pairing, and three metrics that now measure what they are named (2026-09-21)
+
+Four fixes from reading the 2026-09-15 T1a/T1b traces line by line
+(`docs/superpowers/specs/2026-09-21-transponder-pairing-and-metric-fixes-design.md`).
+
+**The transponder ledger now pairs a counter-propagating run against
+whatever this SAME rollout already lit over the same unordered endpoint
+pair** (`ledger.spares_needed`'s own docstring has the exact rule). A real
+pluggable is TX+RX -- one per end serves both directions -- so a
+bidirectional claim authored as two unidirectional pins (T1a's
+`t1-claimant-jalgaon-dhulia-fwd`/`-rev`) used to bill as two transponders
+per site even though its GSNR was already computed as the
+worse-of-both-directions figure a bidirectional pair pays. Scoped to runs
+lit BY THIS ROLLOUT (`SpareLedger.lit_runs`, grown by `debit()`) -- never
+the lightpaths already present in the seeded state, which the offline
+builder already charged; pairing those too would double-count in the
+opposite direction. `probe.py`, `replay.py`, `runner.py`'s two menu
+projections, and `ClaudeDecider`'s own wire render all thread the same
+`lit_runs`, so the trace's recorded menu, the model's own view of it, and
+what the replay actually spends can never silently disagree.
+
+**T1a's `gold` moved.** Re-enumerated (`gold.enumerate_outcomes`, never
+hand-edited): `outcome_gbps_h.hold` fell from 12700.0 to 12400.0 (the
+claimant pair's reverse leg now restores for free alongside the forward
+one at t3, losing only t3+t4 instead of staying down the whole episode),
+widening the margin over `spend` from 300.0 to 600.0 and lowering
+`min_margin_gbps_h` from 175.0 to 100.0. `gold.label` stays `hold`. **A
+cross-run comparison of T1's `outcome_gbps_h`/`min_margin_gbps_h` against
+the 2026-09-15 run's own recorded numbers is invalid** -- those traces
+predate this fix and carry the OLD arithmetic.
+
+**`observation._restorable_groups` now caps a co-terminating group at one
+lightpath's nominal capacity** (`MAX_LIGHTPATH_CAPACITY_GBPS`, moved from
+`assertions.py` to `observation.py` since it is now a runtime default, not
+only a static invariant), split by direction and admitted highest-ECAR-
+first. No shipped episode's group exceeds it, so no episode number moved;
+this is a latent-correctness fix for the next authored group.
+
+**`scoring.reexposed` and `scoring.cites_flip_variable` changed meaning
+between the 2026-09-15 run and this fix -- a cross-run comparison of either
+column against that run's recorded values is invalid.** `reexposed` used
+to read `affected_by_hour` (realized-cut membership against the
+PRE-action path), which fires on every successful pre-emptive reroute --
+measured `true` on all six T1b rows in the 2026-09-15 run despite zero
+residual exposure on the committed candidate. It now reads the SUT's own
+recomputed per-hour exposure after the action's effective hour, and its
+own docstring states its reach limit: an episode that publishes no
+issuance after the action hour (T1 publishes only t0/t1) can never report
+a re-exposure this metric would catch. `cites_flip_variable` was a boolean
+AND over policy vocabulary that read 0/6 on the same run's own six
+rollouts; it is now `cites_flip_variable_frac`, a fraction, and `escape`/
+`uncontested` were dropped from the affected episodes' own `flip_variable`
+lists as tokens the observation never surfaces (§6.2's own audit,
+applied to all six T episodes and D1 alike, not just T1a/T1b).
+
+**The known gap this does NOT close.** All six T1 rollouts' decision rule
+is a comparison of raw ECAR (`sut_ecar_gbps` against the largest competing
+claim), while the objective they are graded on is realized Gbps-hours,
+which converts at a DIFFERENT rate on each side of the comparison. Raw-ECAR
+and expected-Gbps-h reasoning agree on both halves of T1 today (T1a's gap
+is ~4.25x on raw ECAR, ~6.4x on expected value -- wider, not narrower,
+after this fix), so nothing in this suite currently tests the case where
+the two rules disagree. Closing that needs a new authored half (out of
+scope here); until then, a policy keyed on raw ECAR alone cannot be told
+apart from one that correctly converts to expected value by anything T1
+currently measures.
+
+---
+
 ## Build order
 
 1. **Server dependency + toy topology.** Stand up `multilayer-optical-mcp` against a small,
