@@ -91,7 +91,7 @@ def load_episode(path: Path) -> dict:
     }
 
 
-_FIBER_ID_RE = re.compile(r"^fiber_(.+)_\d+$")
+_FIBER_ID_RE = re.compile(r"^fiber_(.+)_(\d+)$")
 
 
 def _resolve_realized_cuts(realized: dict, node_ids: set[str],
@@ -105,11 +105,23 @@ def _resolve_realized_cuts(realized: dict, node_ids: set[str],
     first/last-underscore split is wrong on this topology; every split point
     is tried and the first that resolves both halves wins.
 
+    A physical duct gets one fiber id PER DIRECTION, same trailing index
+    (`fiber_dhulia_jalgaon_0` and `fiber_jalgaon_dhulia_0`), and the storm
+    always severs both together -- both land in the same hour's `realized`
+    list. Collapsed here by (unordered node pair, index) so one severed duct
+    is one resolved cut, not two; a genuinely separate parallel duct on the
+    same route (same direction, a DIFFERENT index, e.g.
+    `fiber_jalgaon_khandwa_0` and `_1`) still resolves as two, since that IS
+    two distinct fibers cut. Confirmed against every shipped scenario's own
+    `realized:` block: T1a is the only one carrying a direction pair; every
+    other multi-entry hour (T1b/T2a/T2b/T3a/T3b) is already distinct-index
+    parallel ducts.
+
     Unresolvable ids are dropped with a warning rather than raising: the
     viewer is a reader, and one bad id should not blank the whole overlay."""
     resolved: dict[str, list[list[str]]] = {}
     for hour, fiber_ids in (realized or {}).items():
-        pairs: list[list[str]] = []
+        seen: dict[tuple[frozenset, str], list[str]] = {}
         for fid in fiber_ids:
             m = _FIBER_ID_RE.match(fid)
             if not m:
@@ -117,7 +129,7 @@ def _resolve_realized_cuts(realized: dict, node_ids: set[str],
                       f"cut {fid!r} does not match fiber_<a>_<b>_<n>, "
                       f"skipping", flush=True)
                 continue
-            core = m.group(1)
+            core, index = m.group(1), m.group(2)
             parts = core.split("_")
             found = None
             for i in range(1, len(parts)):
@@ -130,8 +142,8 @@ def _resolve_realized_cuts(realized: dict, node_ids: set[str],
                       f"cut {fid!r}: no split of {core!r} matches two known "
                       f"node ids, skipping", flush=True)
                 continue
-            pairs.append(found)
-        resolved[hour] = pairs
+            seen.setdefault((frozenset(found), index), found)
+        resolved[hour] = list(seen.values())
     return resolved
 
 
@@ -325,29 +337,31 @@ _HTML_TEMPLATE = """<!doctype html>
       <input type="checkbox" id="projected-risk" checked> projected risk
     </label>
     <button id="reset-view" type="button">reset view</button>
-    <span id="gold"></span>
   </div>
-  <div id="legend">
-    <span class="hint">dotted = aerial (applies to any line below)</span>
-    <div class="legend-group">
-      <div class="legend-title">service</div>
-      <span><span class="swatch" style="background:#1f8a4c"></span>SUT</span>
-      <span><span class="swatch" style="background:#1a1a1a"></span>working</span>
-      <span><span class="swatch" style="background:#888"></span>protection</span>
+  <div id="legend-row">
+    <div id="legend">
+      <span class="hint">dotted = aerial</span>
+      <div class="legend-group">
+        <div class="legend-title">service</div>
+        <span><span class="swatch" style="background:#1f8a4c"></span>SUT</span>
+        <span><span class="swatch" style="background:#1a1a1a"></span>working</span>
+        <span><span class="swatch" style="background:#888"></span>protection</span>
+      </div>
+      <div class="legend-group">
+        <div class="legend-title">hazard</div>
+        <span><span class="circle-swatch"></span>storm exposure
+          (fades with distance)</span>
+        <span><span class="ring-swatch"></span>hazard footprint
+          (decides what's cut)</span>
+        <span><span class="cross-swatch">&#10005;</span>at-risk aerial span</span>
+      </div>
+      <div class="legend-group">
+        <div class="legend-title">outcome</div>
+        <span><span class="swatch" style="background:#cc0000"></span>realized cut</span>
+        <span><span class="swatch" style="background:#cc6633"></span>candidate route</span>
+      </div>
     </div>
-    <div class="legend-group">
-      <div class="legend-title">hazard</div>
-      <span><span class="circle-swatch"></span>storm exposure
-        (fades with distance)</span>
-      <span><span class="ring-swatch"></span>hazard footprint
-        (decides what's cut)</span>
-      <span><span class="cross-swatch">&#10005;</span>at-risk aerial span</span>
-    </div>
-    <div class="legend-group">
-      <div class="legend-title">outcome</div>
-      <span><span class="swatch" style="background:#cc0000"></span>realized cut</span>
-      <span><span class="swatch" style="background:#cc6633"></span>candidate route</span>
-    </div>
+    <section id="scoreboard"></section>
   </div>
 </header>
 <main>
@@ -365,7 +379,6 @@ _HTML_TEMPLATE = """<!doctype html>
   </svg>
   <div id="divider" title="drag to resize"></div>
   <aside id="panels">
-    <section id="scoreboard"></section>
     <section id="saw"></section>
     <section id="said"></section>
     <section id="happened"></section>
@@ -387,7 +400,6 @@ body { margin: 0; font-family: ui-monospace, "Cascadia Code", Consolas,
 #controls { flex: 0 0 auto; padding: 8px 12px; border-bottom: 1px solid #ccc; }
 #controls-row { display: flex; align-items: center; gap: 10px; }
 #controls select, #controls label { font: inherit; }
-#gold { margin-left: auto; font-weight: bold; }
 #reset-view { font: inherit; cursor: pointer; }
 /* A checkbox styled to look pressed rather than merely checked, so the one
    control that changes what's ON THE MAP (as against episode/run, which
@@ -397,9 +409,26 @@ body { margin: 0; font-family: ui-monospace, "Cascadia Code", Consolas,
               cursor: pointer; user-select: none; color: #8a5c00; }
 .toggle-btn input { margin: 0; }
 .toggle-btn.on { background: rgba(217,140,0,0.16); font-weight: bold; }
+/* nowrap (the default): #legend and #scoreboard are SIBLINGS here, not both
+   items in one wrapping flex list -- #legend can wrap ITS OWN three groups
+   internally under space pressure without ever bumping #scoreboard down to
+   a second row, which is what a shared wrap list used to do the moment the
+   row got a little tight even with plenty of width still free overall. */
+#legend-row { display: flex; align-items: flex-start; gap: 20px;
+              margin-top: 6px; }
 #legend { display: flex; flex-wrap: wrap; gap: 4px 20px; font-size: 11px;
-          color: #555; align-items: flex-start; margin-top: 6px; }
+          color: #555; align-items: flex-start; flex: 1 1 auto; min-width: 0; }
 #legend > .hint { align-self: center; }
+/* flex: 0 0 auto with no fixed width, not the 260px this used to carry --
+   sized to its own content instead of a guessed column width, so it doesn't
+   force its table into a cramped, horizontally-scrolling box when the
+   header has real room to spare. */
+#scoreboard { display: flex; flex-direction: column; gap: 3px;
+              flex: 0 0 auto; font-size: 11px; color: #1a1a1a; }
+/* margin: 0, overriding .gate-ok/.rejection's own 2px vertical margin --
+   #scoreboard already spaces its rows with the flex gap above, so the two
+   together would double the row spacing the legend groups next to it use. */
+#scoreboard .gate-ok, #scoreboard .rejection { margin: 0; }
 .legend-group { display: flex; flex-direction: column; gap: 3px;
                 padding-right: 20px; border-right: 1px solid #e2e2e2; }
 .legend-group:last-child { padding-right: 0; border-right: none; }
@@ -480,17 +509,14 @@ footer { flex: 0 0 auto; border-top: 1px solid #ccc; padding: 6px 12px; }
          border: 1px solid #ddd; background: #f5f5f3; }
 .hcell.current { background: #3366cc; color: #fff; }
 .hcell.decision { border-color: #cc6633; border-width: 2px; }
-.hcell .strip { height: 4px; margin-top: 2px; }
-.hcell .strip.match { background: #2e8b2e; }
-.hcell .strip.mismatch { background: #cc3333; }
-.hcell .strip.unknown { background: #ccc; }
-/* Distinct from .unknown: "the decider was never called this hour" is a
-   different fact from "it was called but there's nothing to grade" -- a
-   hatch reads as "no decision happened" at a glance, not just "ungraded". */
-.hcell .strip.skipped {
-    background: repeating-linear-gradient(
-        45deg, #ccc, #ccc 3px, #eee 3px, #eee 6px);
-}
+/* Not hidden -- these hours are still real (cuts land, the replay plays
+   out) and still clickable, just guaranteed by is_decidable (runner.py) to
+   never have held a decision. Dimmed so the LAST hour that could matter
+   (.decision, above) reads as a boundary at a glance, not just on hover. */
+.hcell.past-decision { opacity: 0.55; }
+.hcell-events { font-size: 9px; color: #777; margin-top: 2px;
+                white-space: nowrap; }
+.hcell.current .hcell-events { color: #dbe6ff; }
 .aerial { stroke-dasharray: 4 3; }
 .gap-marker { stroke: #cc3333; stroke-width: 2; }
 pre.reasoning { white-space: pre-wrap; background: #f7f7f5; padding: 6px;
@@ -2168,60 +2194,84 @@ function renderScrubber(episode, run) {
     const el = document.getElementById('scrubber');
     el.innerHTML = '';
     if (!episode || !run) return;
-    const gold = episode.gold || {};
+    const forecast = episode.forecast || {};
+    const cutsByHour = episode.realized_cuts || {};
     // Actions live on the run, each tagged with the hour it landed in --
     // hour records carry no `actions` key of their own.
     const actionsByHour = {};
     for (const a of run.actions || []) {
         (actionsByHour[a.hour] = actionsByHour[a.hour] || []).push(a);
     }
-    run.hours.forEach((h, i) => {
+    // is_decidable (runner.py) requires an ISSUANCE hour, and every
+    // episode's deadline is itself an issuance hour by construction -- so
+    // decision_hour, marked below with the orange border, is also
+    // guaranteed the LAST hour that could ever hold a decision. Everything
+    // strictly after it is dimmed: real hours (cuts land, the replay plays
+    // out) the decider was simply never called for again, not missing data.
+    const decisionIdx = run.hours.findIndex(h => h.hour === episode.decision_hour);
+    // The scrubber shows a REPLAY horizon, not scenario.hours verbatim --
+    // scenario.hours (and so gbps_hours_lost's own outage-duration ceiling,
+    // scoring.py) stays whatever the scenario declares regardless of what's
+    // drawn here. What's drawn stops at the last hour THIS run gives any
+    // reason to look at: a forecast issuance, a realized cut, or an
+    // action's own effective_at_index (a harness restoration or decider
+    // reroute can take effect several hours after it's decided -- T1a's own
+    // trace: decided at t3, effective_at_index 5). Computed per RUN, not a
+    // fixed hour -- T1b's own runs never go past index 3, T1a/T2*/T3*'s go
+    // to 5, and a future run whose action lands even later would push this
+    // further right on its own.
+    const hourIdx = hh => run.hours.findIndex(x => x.hour === hh);
+    const relevantIdxs = [
+        decisionIdx,
+        ...Object.keys(forecast).map(hourIdx),
+        ...Object.entries(cutsByHour)
+            .filter(([, pairs]) => (pairs || []).length)
+            .map(([hh]) => hourIdx(hh)),
+        ...(run.actions || []).map(a => a.effective_at_index),
+    ].filter(i => i !== undefined && i !== null && i !== -1);
+    const lastRelevantIdx = relevantIdxs.length
+        ? Math.max(...relevantIdxs) : run.hours.length - 1;
+    run.hours.slice(0, lastRelevantIdx + 1).forEach((h, i) => {
         const cell = document.createElement('div');
         cell.className = 'hcell' +
             (i === state.hourIndex ? ' current' : '') +
-            (h.hour === episode.decision_hour ? ' decision' : '');
+            (h.hour === episode.decision_hour ? ' decision' : '') +
+            (decisionIdx !== -1 && i > decisionIdx ? ' past-decision' : '');
         const label = document.createElement('div');
         label.textContent = h.hour;
         cell.appendChild(label);
 
-        const strip = document.createElement('div');
         const acted = actionsByHour[h.hour] || [];
-        // gold_spare_action judges the DECIDER's own timing choice, not what
-        // the hour ended up doing overall: replay.restore_after_cuts mints
-        // origin="harness" Actions (runner.py's actions.extend(restore_
-        // actions)) that land in this SAME per-hour list whenever a cut this
-        // hour is restored -- e.g. a harness restoration of some OTHER
-        // affected service, in the same hour the decider itself chose to
-        // conserve. Without this filter that harness spend renders as the
-        // decider's own "spend", a false positive. scoring.py filters the
-        // identical way (`a.origin == "decider"`) for the equivalent
-        // judgment -- same convention, same field (Task 16 fix-report).
-        const decided = acted.filter(a => a.origin === 'decider');
         const skipped = !!(h.timing && h.timing.skipped);
-        let cls = skipped ? 'skipped' : 'unknown';
-        if (!skipped && gold.gold_spare_action && decided.length) {
-            // Any site charged (a non-empty, non-zero `spares` dict) spends
-            // a physical spare (optical_reroute); an empty dict does not
-            // (ip_reroute / rate-reduce) -- that split is what
-            // gold_spare_action ("conserve" vs "spend") is judging.
-            // Action.spares (site -> count) replaced the old scalar
-            // `pairs: int` (exposure-and-depot design, §4.1); reading
-            // `a.pairs` here always evaluated to `(undefined || 0) > 0` ->
-            // false, silently misreporting every action as "conserve"
-            // (whole-branch final review, finding 2).
-            const spent = decided.some(
-                a => Object.values(a.spares || {}).some(n => n > 0));
-            const agentAction = spent ? 'spend' : 'conserve';
-            cls = agentAction === gold.gold_spare_action ? 'match' : 'mismatch';
-        }
-        strip.className = 'strip ' + cls;
-        strip.title = acted.length
-            ? `agent action(s): ${JSON.stringify(acted)}`
-            : skipped
-                ? 'skipped: nothing decidable this hour, the decider was ' +
-                  'never called'
-                : 'no action this hour';
-        cell.appendChild(strip);
+        const revised = Object.prototype.hasOwnProperty.call(forecast, h.hour);
+        const cuts = cutsByHour[h.hour] || [];
+
+        // Text, not a match/mismatch color strip: the old strip judged the
+        // decider's action against gold.gold_spare_action, which is only
+        // ever set for the spare_action_by_deadline episodes and mostly flat
+        // ("unknown") everywhere else -- it didn't vary hour to hour the way
+        // the events that actually DRIVE a decision (a forecast revision, a
+        // realized cut) do. Those events apply to every episode.
+        const events = document.createElement('div');
+        events.className = 'hcell-events';
+        const parts = [];
+        if (revised) parts.push('forecast');
+        if (cuts.length) parts.push('cut');
+        events.textContent = parts.join(' / ') || ' ';
+        cell.appendChild(events);
+
+        cell.title = [
+            acted.length
+                ? `agent action(s): ${JSON.stringify(acted)}`
+                : skipped
+                    ? 'skipped: nothing decidable this hour, the decider ' +
+                      'was never called'
+                    : 'no action this hour',
+            revised ? 'forecast revised this hour' : null,
+            cuts.length
+                ? `realized cut(s): ${cuts.map(c => c.join('-')).join(', ')}`
+                : null,
+        ].filter(Boolean).join(' -- ');
 
         cell.addEventListener('click', () => {
             state.hourIndex = i;
@@ -2554,11 +2604,11 @@ function probeSplit(run) {
 
 function renderScoreboard(episode, run) {
     const el = document.getElementById('scoreboard');
-    el.innerHTML = '<h3>Scoreboard (this run)</h3>';
+    el.innerHTML = '';
     if (!episode || !run) return;
     const m = run.metrics;
     if (!m) {
-        const note = document.createElement('div');
+        const note = document.createElement('span');
         note.className = 'rejection';
         note.textContent = 'no metrics sidecar beside this trace -- ' +
             'suite.run_suite writes one per rollout; a trace produced ' +
@@ -2566,9 +2616,13 @@ function renderScoreboard(episode, run) {
         el.appendChild(note);
         return;
     }
-    const goldLabel = (episode.gold || {}).label;
+    const gold = episode.gold || {};
+    // No gold_spare_action parenthetical here -- assert_gold_spare_action_is_
+    // grounded (assertions.py) enforces hold<->conserve and spend<->spend as
+    // one fact under two vocabularies, not two independent signals, so it
+    // never tells this row anything gold.label didn't already say.
     const rows = [
-        ['decision_label', `${m.decision_label} vs gold ${goldLabel}`,
+        ['decision_label', `${m.decision_label} vs gold ${gold.label}`,
          m.label_correct],
         ['regret_gbps_h',
          m.regret_gbps_h === null || m.regret_gbps_h === undefined
@@ -2581,16 +2635,17 @@ function renderScoreboard(episode, run) {
         ['no-op commits', String(m.inert_commits), m.inert_commits === 0],
         ['probes', probeSplit(run), null],
     ];
-    const table = document.createElement('table');
-    table.innerHTML = '<tr><th>metric</th><th>value</th></tr>';
+    // Plain flex-column spans, not a bordered <table> -- this sits beside the
+    // legend now (see #legend-row), and a table's own header row + cell
+    // padding/borders made it noticeably taller than the legend groups it's
+    // lined up against for no informational gain.
     for (const [name, value, ok] of rows) {
-        const tr = document.createElement('tr');
-        if (ok === true) tr.className = 'gate-ok';
-        if (ok === false) tr.className = 'rejection';
-        tr.innerHTML = `<td>${esc(name)}</td><td>${esc(value)}</td>`;
-        table.appendChild(tr);
+        const span = document.createElement('span');
+        if (ok === true) span.className = 'gate-ok';
+        if (ok === false) span.className = 'rejection';
+        span.textContent = `${name}: ${value}`;
+        el.appendChild(span);
     }
-    el.appendChild(table);
 }
 
 function renderProbeLedger(episode, run) {
@@ -2626,15 +2681,6 @@ function renderProbeLedger(episode, run) {
     el.appendChild(probeTable(rows));
 }
 
-function renderGold() {
-    const episode = currentEpisode();
-    const el = document.getElementById('gold');
-    if (!episode) { el.textContent = ''; return; }
-    const gold = episode.gold || {};
-    el.textContent = `SUT: ${episode.actionable_service || '?'} -- ` +
-        `gold: ${gold.label || ''} (${gold.gold_spare_action || ''})`;
-}
-
 function renderAll() {
     const episode = currentEpisode();
     const run = currentRun();
@@ -2646,7 +2692,6 @@ function renderAll() {
     renderHappened(episode, run, hour);
     renderProbeLedger(episode, run);
     renderScrubber(episode, run);
-    renderGold();
 }
 
 function populateDropdowns() {
