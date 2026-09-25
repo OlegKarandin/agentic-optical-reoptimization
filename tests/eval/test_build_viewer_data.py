@@ -373,3 +373,15 @@ def test_a_run_with_no_sidecar_says_so_rather_than_showing_zeros(folded):
     """"Trace predates this field" is not "field is empty" -- the viewer's own
     standing lesson (harness explainer, §13). `None`, not `{}`."""
     assert folded["episodes"]["T3b"]["runs"][0]["metrics"] is None
+
+
+def test_the_land_backdrop_is_folded_in_as_lat_lon_rings(folded):
+    # Decorative, but it must cover the plant: every node of the toy
+    # topology sits inside the clip box the coastline was cut to.
+    rings = folded["land"]
+    assert rings and all(len(r) >= 4 for r in rings)
+    lats = [p[0] for r in rings for p in r]
+    lons = [p[1] for r in rings for p in r]
+    for lat, lon in folded["topology"]["nodes"].values():
+        assert min(lats) <= lat <= max(lats)
+        assert min(lons) <= lon <= max(lons)

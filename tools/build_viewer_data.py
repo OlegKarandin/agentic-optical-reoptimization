@@ -33,6 +33,9 @@ SCENARIOS_DIR = (REPO_ROOT / "src" / "storm_reoptimizer" / "eval"
                  / "scenarios")
 TOPOLOGY_PATH = (REPO_ROOT / "src" / "storm_reoptimizer" / "data"
                  / "toy_india_topology.json")
+# Land/sea backdrop only -- built offline by tools/build_coastline.py.
+LAND_PATH = (REPO_ROOT / "src" / "storm_reoptimizer" / "data"
+             / "viewer_land.json")
 DEFAULT_OUT = REPO_ROOT / "eval" / "viewer" / "index.html"
 
 
@@ -282,7 +285,14 @@ def _dedup_traces(traces_dir: Path, episodes: dict) -> list[tuple[Path, dict]]:
     return [(path, trace) for path, trace in by_key.values()]
 
 
-def fold(traces_dir: Path, scenarios_dir: Path, topology_path: Path) -> dict:
+def load_land(path: Path) -> list[list[list[float]]]:
+    """Coastline rings as [lat, lon], drawn under everything as a backdrop.
+    Decorative: nothing in the viewer's reading depends on it."""
+    return json.loads(path.read_text(encoding="utf-8"))["rings"]
+
+
+def fold(traces_dir: Path, scenarios_dir: Path, topology_path: Path,
+         land_path: Path = LAND_PATH) -> dict:
     episodes = {}
     for path in sorted(scenarios_dir.glob("*.yaml")):
         episode = load_episode(path)
@@ -298,7 +308,8 @@ def fold(traces_dir: Path, scenarios_dir: Path, topology_path: Path) -> dict:
     for episode in episodes.values():
         episode["realized_cuts"] = _resolve_realized_cuts(
             episode.pop("realized"), node_ids, episode_id=episode["id"])
-    return {"topology": topology, "episodes": episodes}
+    return {"topology": topology, "episodes": episodes,
+            "land": load_land(land_path)}
 
 
 _HTML_TEMPLATE = """<!doctype html>
@@ -317,22 +328,40 @@ _HTML_TEMPLATE = """<!doctype html>
     <span id="gold"></span>
   </div>
   <div id="legend">
-    <span class="hint">dotted = aerial</span>
-    <span><span class="swatch" style="background:#1f8a4c"></span>SUT</span>
-    <span><span class="swatch" style="background:#1a1a1a"></span>working</span>
-    <span><span class="swatch" style="background:#888"></span>protection</span>
-    <span><span class="swatch" style="background:#1a4fcc"></span>working (spotlit)</span>
-    <span><span class="swatch" style="background:#a626cc"></span>protection (spotlit)</span>
-    <span><span class="cross-swatch">&#10005;</span>at-risk aerial span</span>
-    <span><span class="swatch" style="background:#cc6633"></span>committed route</span>
-    <span><span class="swatch" style="background:#cc0000"></span>realized cut</span>
+    <span class="hint">dotted = aerial (applies to any line below)</span>
+    <div class="legend-group">
+      <div class="legend-title">service</div>
+      <span><span class="swatch" style="background:#1f8a4c"></span>SUT</span>
+      <span><span class="swatch" style="background:#1a1a1a"></span>working</span>
+      <span><span class="swatch" style="background:#888"></span>protection</span>
+    </div>
+    <div class="legend-group">
+      <div class="legend-title">hazard</div>
+      <span><span class="circle-swatch"></span>storm exposure
+        (fades with distance)</span>
+      <span><span class="ring-swatch"></span>hazard footprint
+        (decides what's cut)</span>
+      <span><span class="cross-swatch">&#10005;</span>at-risk aerial span</span>
+    </div>
+    <div class="legend-group">
+      <div class="legend-title">outcome</div>
+      <span><span class="swatch" style="background:#cc0000"></span>realized cut</span>
+      <span><span class="swatch" style="background:#cc6633"></span>candidate route</span>
+    </div>
   </div>
 </header>
 <main>
   <svg id="map" viewBox="0 0 800 800" preserveAspectRatio="xMidYMid meet">
+    <!-- No static gradient def here: drawCones() builds one radialGradient
+         per cone, its stops traced from the real p_cut_point curve -- the
+         shape depends on damageRadiusKm/sigma, which differs per episode,
+         so a single fixed def can't fit all of them. -->
+    <g id="layer-base"></g>
     <g id="layer-plant"></g><g id="layer-cones"></g>
-    <g id="layer-at-risk"></g><g id="layer-cuts"></g>
+    <g id="layer-at-risk"></g>
     <g id="layer-paths"></g><g id="layer-candidate"></g>
+    <g id="layer-cuts"></g>
+    <g id="layer-cities"></g><g id="layer-city-label"></g>
   </svg>
   <div id="divider" title="drag to resize"></div>
   <aside id="panels">
@@ -368,10 +397,24 @@ body { margin: 0; font-family: ui-monospace, "Cascadia Code", Consolas,
               cursor: pointer; user-select: none; color: #8a5c00; }
 .toggle-btn input { margin: 0; }
 .toggle-btn.on { background: rgba(217,140,0,0.16); font-weight: bold; }
-#legend { display: flex; flex-wrap: wrap; gap: 5px 14px; font-size: 11px;
-          color: #555; align-items: center; margin-top: 6px; }
+#legend { display: flex; flex-wrap: wrap; gap: 4px 20px; font-size: 11px;
+          color: #555; align-items: flex-start; margin-top: 6px; }
+#legend > .hint { align-self: center; }
+.legend-group { display: flex; flex-direction: column; gap: 3px;
+                padding-right: 20px; border-right: 1px solid #e2e2e2; }
+.legend-group:last-child { padding-right: 0; border-right: none; }
+.legend-title { font-size: 9px; font-weight: 600; text-transform: uppercase;
+                letter-spacing: 0.04em; color: #999; margin-bottom: 1px; }
 .swatch { display: inline-block; width: 14px; height: 3px;
           margin-right: 3px; vertical-align: middle; }
+.circle-swatch { display: inline-block; width: 12px; height: 12px;
+                  border-radius: 50%; margin-right: 3px; vertical-align: middle;
+                  background: radial-gradient(circle,
+                      rgba(217,140,0,0.75) 0%, rgba(217,140,0,0.28) 55%,
+                      rgba(217,140,0,0) 100%); }
+.ring-swatch { display: inline-block; width: 12px; height: 12px;
+                border-radius: 50%; margin-right: 3px; vertical-align: middle;
+                box-sizing: border-box; border: 1.4px solid #c77a00; }
 .hint { font-style: italic; }
 .cross-swatch { display: inline-block; margin-right: 3px; color: #d98c00;
                 font-weight: bold; }
@@ -384,7 +427,18 @@ body { margin: 0; font-family: ui-monospace, "Cascadia Code", Consolas,
    template itself, only the one number it depends on. */
 main { flex: 1 1 auto; min-height: 0; display: grid;
        grid-template-columns: 1fr 6px var(--panel-width, 380px); gap: 0; }
-#map { width: 100%; height: 100%; background: #f7f7f5; cursor: grab; }
+/* The sea is the SVG's own background, not a drawn rect: panning past the
+   drawn land (or a wide pane letterboxing the 800x800 box) still shows sea. */
+#map { width: 100%; height: 100%; background: #dce5e6; cursor: grab; }
+/* Backdrop is decoration: it must never catch a hover or click meant for
+   the plant, the paths or a city dot. */
+#layer-base { pointer-events: none; }
+.city-dot { fill: #3d3528; stroke: #f2ead6; }
+.city-hit { fill: transparent; stroke: none; cursor: default; }
+.city.hover .city-dot { fill: #1a1a1a; }
+#layer-city-label text { font-family: Georgia, "Times New Roman", serif;
+    font-style: italic; fill: #2b241a; stroke: #f2ead6;
+    paint-order: stroke; stroke-linejoin: round; pointer-events: none; }
 #map.dragging { cursor: grabbing; }
 #divider { background: #ddd; cursor: col-resize; }
 #divider:hover, #divider.dragging { background: #999; }
@@ -541,9 +595,35 @@ function clearLayer(name) {
 const FULL_VIEW = {x: 0, y: 0, w: 800, h: 800};
 let view = {x: 0, y: 0, w: 800, h: 800};
 
+// The edge of the world: pan stops where the drawn land data does. Kept a
+// degree inside tools/build_coastline.py's CLIP box, so the straight cut
+// where the coastline was clipped never scrolls into view.
+const WORLD = {latMin: -11, latMax: 49, lonMin: 46, lonMax: 119};
+
+// Clamps what is actually VISIBLE, not the viewBox itself: with
+// preserveAspectRatio="meet" a pane wider (or taller) than the viewBox's
+// own aspect shows extra map on either side of it, and that extra is what
+// would otherwise run off the world first.
+function clampView() {
+    const rect = document.getElementById('map').getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const upp = Math.max(view.w / rect.width, view.h / rect.height);
+    const [x0, y0] = project(WORLD.latMax, WORLD.lonMin);
+    const [x1, y1] = project(WORLD.latMin, WORLD.lonMax);
+    const clampAxis = (centre, visible, lo, hi) => visible >= hi - lo
+        ? (lo + hi) / 2
+        : Math.min(hi - visible / 2, Math.max(lo + visible / 2, centre));
+    const cx = clampAxis(view.x + view.w / 2, rect.width * upp, x0, x1);
+    const cy = clampAxis(view.y + view.h / 2, rect.height * upp, y0, y1);
+    view.x = cx - view.w / 2;
+    view.y = cy - view.h / 2;
+}
+
 function applyView() {
+    clampView();
     document.getElementById('map').setAttribute(
         'viewBox', `${view.x} ${view.y} ${view.w} ${view.h}`);
+    rescaleCities();
 }
 
 function resetView() {
@@ -632,6 +712,372 @@ document.getElementById('reset-view').addEventListener('click', resetView);
     });
 })();
 
+// ---- backdrop: land, sea, waves, monsters -------------------------------
+// Pure decoration, drawn once at load and never cleared. Everything here is
+// ink/sepia/blue-grey on purpose: orange, red, green and blue already carry
+// meaning on this map, and nothing decorative may borrow them.
+
+const INK = '#4a3f30';
+const PARCHMENT = '#f2ead6';
+const SEA = '#dce5e6';
+const WAVE_INK = '#7d9296';
+
+const LAND_RINGS = (P.land || []).map(
+    ring => ring.map(([lat, lon]) => project(lat, lon)));
+
+function landPathD() {
+    return LAND_RINGS.map(r => 'M' + r.map(
+        ([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join('L') + 'Z')
+        .join('');
+}
+
+// Ray-casting, with a per-ring bbox reject first -- the wave scatter below
+// tests a few thousand candidate points against ~2000 coast vertices.
+const LAND_BOXES = LAND_RINGS.map(r => {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const [x, y] of r) {
+        x0 = Math.min(x0, x); x1 = Math.max(x1, x);
+        y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+    }
+    return [x0, y0, x1, y1];
+});
+
+function onLand(x, y) {
+    for (let k = 0; k < LAND_RINGS.length; k++) {
+        const b = LAND_BOXES[k];
+        if (x < b[0] || x > b[2] || y < b[1] || y > b[3]) continue;
+        const r = LAND_RINGS[k];
+        let inside = false;
+        for (let i = 0, j = r.length - 1; i < r.length; j = i++) {
+            const [xi, yi] = r[i], [xj, yj] = r[j];
+            if ((yi > y) !== (yj > y)
+                    && x < (xj - xi) * (y - yi) / (yj - yi) + xi) {
+                inside = !inside;
+            }
+        }
+        if (inside) return true;
+    }
+    return false;
+}
+
+// Seeded, so the waves sit in the same places on every load.
+function mulberry32(seed) {
+    return function () {
+        seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+        let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+        t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+        return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+}
+
+// Monster placements, in lat/lon so they pan and zoom with the map. The
+// lat/lon pins each drawing's local origin (its waterline at the neck or
+// head); `mid` is the drawing's own visual centre in local units, and
+// waves keep `clear` viewBox units away from it.
+const MONSTERS = [
+    {kind: 'serpent', lat: 12.6, lon: 69.4, scale: 0.75, mid: [55, -12],
+     clear: 62},
+    {kind: 'whale', lat: 14.6, lon: 87.4, scale: 0.8, mid: [27, -16],
+     clear: 62},
+];
+
+function monsterCentre(m) {
+    const [x, y] = project(m.lat, m.lon);
+    return [x + m.mid[0] * m.scale, y + m.mid[1] * m.scale];
+}
+
+function drawBase() {
+    const g = layer('base');
+    const d = landPathD();
+    // Engraved "water-lining": concentric ripples echoing the coast out to
+    // sea, as on old copperplate charts. Each pair is a wide ink stroke with
+    // a slightly narrower sea stroke on top, leaving a thin ring; the land
+    // fill drawn last covers the inland half of every stroke.
+    for (const [w, colour] of [[15, '#c3d0d2'], [13.6, SEA],
+                               [8, '#b7c6c9'], [6.8, SEA],
+                               [3.4, '#a9bbbe'], [2.4, SEA]]) {
+        g.appendChild(svgEl('path', {
+            d, fill: 'none', stroke: colour, 'stroke-width': w,
+            'stroke-linejoin': 'round'}));
+    }
+    g.appendChild(svgEl('path', {
+        d, fill: PARCHMENT, stroke: '#8a7a5c', 'stroke-width': 0.8,
+        'stroke-linejoin': 'round'}));
+    drawWaves(g);
+    for (const m of MONSTERS) {
+        const [x, y] = project(m.lat, m.lon);
+        const mg = svgEl('g', {
+            transform: `translate(${x.toFixed(1)},${y.toFixed(1)}) ` +
+                       `scale(${m.scale})`,
+            opacity: 0.9});
+        (m.kind === 'serpent' ? drawSerpent : drawWhale)(mg);
+        g.appendChild(mg);
+    }
+}
+
+function drawWaves(g) {
+    const rand = mulberry32(17);
+    const monsterXY = MONSTERS.map(m => [...monsterCentre(m), m.clear]);
+    const STEP = 36;
+    const COAST_CLEAR = 16;
+    let d = '';
+    for (let gy = -420; gy < 1380; gy += STEP) {
+        for (let gx = -620; gx < 1420; gx += STEP) {
+            if (rand() > 0.5) continue;
+            const x = gx + (rand() - 0.5) * STEP * 0.8;
+            const y = gy + (rand() - 0.5) * STEP * 0.8;
+            if (onLand(x, y) || onLand(x + COAST_CLEAR, y)
+                    || onLand(x - COAST_CLEAR, y)
+                    || onLand(x, y + COAST_CLEAR)
+                    || onLand(x, y - COAST_CLEAR)) continue;
+            if (monsterXY.some(([mx, my, r]) =>
+                    Math.hypot(x - mx, y - my) < r)) continue;
+            // Two engraved crests over a shorter trough stroke.
+            d += `M${(x - 7).toFixed(1)},${y.toFixed(1)}` +
+                 'c2.5,-3 4.5,-3 7,0c2.5,-3 4.5,-3 7,0' +
+                 `M${(x - 3).toFixed(1)},${(y + 2.8).toFixed(1)}` +
+                 'c2,-2 4,-2 6,0';
+        }
+    }
+    g.appendChild(svgEl('path', {
+        d, fill: 'none', stroke: WAVE_INK, 'stroke-width': 0.7,
+        'stroke-linecap': 'round', opacity: 0.6}));
+}
+
+// Point and inward direction on a cubic Bezier, for the procedural hatching.
+function bez(p0, p1, p2, p3, t) {
+    const u = 1 - t;
+    return [u*u*u*p0[0] + 3*u*u*t*p1[0] + 3*u*t*t*p2[0] + t*t*t*p3[0],
+            u*u*u*p0[1] + 3*u*u*t*p1[1] + 3*u*t*t*p2[1] + t*t*t*p3[1]];
+}
+
+// One serpent coil breaking the surface: a tube arch from x=a to x=b,
+// shaded on its far (right) flank with engraved hatch strokes and crested
+// with dorsal spikes.
+function coil(g, a, b, h, t) {
+    const k = 1.33;
+    const o = [[a, 0], [a, -h*k], [b, -h*k], [b, 0]];
+    const i = [[a + t, 0], [a + t, -(h - t)*k], [b - t, -(h - t)*k],
+               [b - t, 0]];
+    const f = p => `${p[0].toFixed(1)},${p[1].toFixed(1)}`;
+    g.appendChild(svgEl('path', {
+        d: `M${f(o[0])}C${f(o[1])} ${f(o[2])} ${f(o[3])}` +
+           `L${f(i[3])}C${f(i[2])} ${f(i[1])} ${f(i[0])}Z`,
+        fill: '#efe6cf', stroke: INK, 'stroke-width': 0.9}));
+    let hatch = '';
+    for (let s = 0.56; s < 0.97; s += 0.05) {
+        const po = bez(...o, s), pi = bez(...i, s);
+        const q = 0.12, r = 0.62;
+        hatch += `M${f([po[0] + (pi[0] - po[0])*q, po[1] + (pi[1] - po[1])*q])}` +
+                 `L${f([po[0] + (pi[0] - po[0])*r, po[1] + (pi[1] - po[1])*r])}`;
+    }
+    let spikes = '';
+    for (let s = 0.22; s < 0.8; s += 0.14) {
+        const po = bez(...o, s), pi = bez(...i, s);
+        const nx = po[0] - pi[0], ny = po[1] - pi[1];
+        const n = Math.hypot(nx, ny), ux = nx / n, uy = ny / n;
+        // Tangent points along the arch, spike leans back toward the tail.
+        const tx = -uy, ty = ux;
+        spikes += `M${f([po[0] + tx*2, po[1] + ty*2])}` +
+                  `L${f([po[0] + ux*5 - tx*1.5, po[1] + uy*5 - ty*1.5])}` +
+                  `L${f([po[0] - tx*2, po[1] - ty*2])}`;
+    }
+    g.appendChild(svgEl('path', {d: hatch, fill: 'none', stroke: INK,
+                                  'stroke-width': 0.45}));
+    g.appendChild(svgEl('path', {d: spikes, fill: '#d9ccab', stroke: INK,
+                                  'stroke-width': 0.6,
+                                  'stroke-linejoin': 'round'}));
+}
+
+// Surface ripples where a body breaks the water, plus faint reflection
+// strokes underneath -- this is what sells "rising out of the sea".
+function splash(g, xs) {
+    let d = '';
+    for (const x of xs) {
+        d += `M${x - 9},1.2c3,-1.6 6,-1.6 9,0c3,-1.6 6,-1.6 9,0` +
+             `M${x - 6},4.2l12,0M${x - 3.5},6.8l7,0`;
+    }
+    g.appendChild(svgEl('path', {d, fill: 'none', stroke: INK,
+                                  'stroke-width': 0.5,
+                                  'stroke-linecap': 'round'}));
+}
+
+function drawSerpent(g) {
+    // Local frame: waterline at y=0, head at left facing west, ~140 wide.
+    // Neck and head, jaws agape.
+    g.appendChild(svgEl('path', {
+        d: 'M24,0C26,-14 22,-26 14,-32C8,-36 0,-35 -12,-29L-3,-27.5' +
+           'L4,-25.5L-9,-22.5C-3,-19 2,-20 6,-22C12,-18 15,-10 14,0Z',
+        fill: '#efe6cf', stroke: INK, 'stroke-width': 0.9,
+        'stroke-linejoin': 'round'}));
+    // Forked tongue, teeth, eye, nostril.
+    g.appendChild(svgEl('path', {
+        d: 'M-4,-25.2L-15,-25.8l-3.2,-1.8M-15,-25.8l-3,1.6' +
+           'M-8,-28.5l0.6,1.6M-5,-28l0.5,1.6M-6,-23.4l0.5,-1.5' +
+           'M-2.5,-23.8l0.4,-1.5M-9.5,-30.2l1,-0.3',
+        fill: 'none', stroke: INK, 'stroke-width': 0.6,
+        'stroke-linecap': 'round'}));
+    g.appendChild(svgEl('circle', {cx: 6.5, cy: -30.5, r: 1.3, fill: INK}));
+    g.appendChild(svgEl('path', {
+        d: 'M3.5,-32.5c1.5,-1.4 4.5,-1.8 6.5,-0.6',
+        fill: 'none', stroke: INK, 'stroke-width': 0.6}));
+    // Neck hatching (shadowed back flank) and throat scales.
+    g.appendChild(svgEl('path', {
+        d: 'M19.5,-3l4,-0.8M20,-7l4,-1M20,-11l3.8,-1.2M19,-15l3.6,-1.3' +
+           'M17.5,-19l3.4,-1.6M15.5,-23l3,-2M12.5,-27l2.6,-2.2' +
+           'M15,-5c1.2,1 2.4,1 3.4,0M15,-10c1.2,1 2.4,1 3.4,0' +
+           'M14.5,-15c1.2,1 2.2,1 3.2,0',
+        fill: 'none', stroke: INK, 'stroke-width': 0.45}));
+    // Frilled crest down the back of the neck.
+    g.appendChild(svgEl('path', {
+        d: 'M24.8,-4l6,-3.2l-5.8,-2.6M25,-11l6,-4l-6.2,-1.6' +
+           'M23.4,-18l5,-5.2l-6,-0.6M19.6,-25l3,-6.2l-5.4,1.4',
+        fill: '#d9ccab', stroke: INK, 'stroke-width': 0.6,
+        'stroke-linejoin': 'round'}));
+    coil(g, 36, 64, 21, 6.5);
+    coil(g, 74, 98, 16, 6);
+    // Tail curling up out of the water.
+    g.appendChild(svgEl('path', {
+        d: 'M106,0C108,-12 118,-20 125,-13C128,-9 124,-4 120,-7' +
+           'C122,-9 121,-12 117.5,-11C113,-9 111,-4 112,0Z',
+        fill: '#efe6cf', stroke: INK, 'stroke-width': 0.9,
+        'stroke-linejoin': 'round'}));
+    g.appendChild(svgEl('path', {
+        d: 'M110,-3l-2.4,-0.4M111,-6.5l-2.6,-0.8M113,-10l-2.4,-1.4',
+        fill: 'none', stroke: INK, 'stroke-width': 0.45}));
+    splash(g, [19, 39.5, 60.5, 77, 95, 109]);
+}
+
+function drawWhale(g) {
+    // Local frame: waterline at y=0, blunt head at right facing east.
+    // Flukes breaking the water behind.
+    g.appendChild(svgEl('path', {
+        d: 'M-26,0C-26,-8 -24,-14 -20,-18C-26,-21 -32,-22 -37,-27' +
+           'C-30,-29 -24,-27 -19.5,-22.5C-18,-29 -12,-33 -5,-33' +
+           'C-10,-29 -14,-24 -16.5,-18C-16.5,-10 -16,-4 -16,0Z',
+        fill: '#efe6cf', stroke: INK, 'stroke-width': 0.9,
+        'stroke-linejoin': 'round'}));
+    g.appendChild(svgEl('path', {
+        d: 'M-23,-4l4,0M-22.5,-8l4,-0.2M-22,-12l3.8,-0.4' +
+           'M-30,-25l3,-1M-25,-24.5l2.4,-1.4M-12,-30l1.4,-2M-9.5,-30.5l1.2,-1.8',
+        fill: 'none', stroke: INK, 'stroke-width': 0.45}));
+    // Back and great blunt head.
+    g.appendChild(svgEl('path', {
+        d: 'M0,0C6,-12 22,-20 42,-22C60,-24 78,-22 86,-16' +
+           'C90,-12 91,-6 90,0Z',
+        fill: '#efe6cf', stroke: INK, 'stroke-width': 0.9,
+        'stroke-linejoin': 'round'}));
+    // Contour hatching along the flank, heavier toward the waterline.
+    g.appendChild(svgEl('path', {
+        d: 'M8,-3C24,-9 46,-11 66,-9M14,-1.5C30,-5.5 50,-6.5 72,-4' +
+           'M22,-0.6C38,-2.6 56,-3 76,-1.4' +
+           'M30,-18.5c2,-1 4,-1 6,0M40,-19.5c2,-1 4,-1 6,0M50,-20c2,-1 4,-1 6,0',
+        fill: 'none', stroke: INK, 'stroke-width': 0.45}));
+    // Engraver's shadow: short vertical strokes packed along the lower
+    // flank, their tops following the hull so the belly reads as rounded.
+    let shade = '';
+    for (let x = 6; x <= 86; x += 2.2) {
+        const top = -Math.min(7.5, 3 + 4.5 * Math.sin(Math.PI * x / 92));
+        shade += `M${x.toFixed(1)},-0.4L${x.toFixed(1)},${top.toFixed(1)}`;
+    }
+    g.appendChild(svgEl('path', {d: shade, fill: 'none', stroke: INK,
+                                  'stroke-width': 0.35, opacity: 0.8}));
+    // Grinning jaw with teeth, eye with heavy brow.
+    g.appendChild(svgEl('path', {
+        d: 'M90,-4C84,-2.6 76,-3 69,-7' +
+           'M86.5,-3.4l-0.3,-1.8M82.5,-3.1l-0.2,-1.8M78.5,-3.4l-0.1,-1.8' +
+           'M74.6,-4.4l0.1,-1.8M71.2,-5.8l0.3,-1.6' +
+           'M74,-12.5c2,-1.8 5,-2 7,-0.6',
+        fill: 'none', stroke: INK, 'stroke-width': 0.7,
+        'stroke-linecap': 'round'}));
+    g.appendChild(svgEl('circle', {cx: 77.5, cy: -10, r: 1.4, fill: INK}));
+    // Twin spout from the blowhole, droplets falling from each plume.
+    g.appendChild(svgEl('path', {
+        d: 'M72,-23C70,-34 64,-40 56,-42M73,-23C75,-34 81,-40 89,-41' +
+           'M72.5,-23L72.5,-39M71,-24C68,-31 63,-35 58,-36' +
+           'M74,-24C77,-31 82,-35 87,-35',
+        fill: 'none', stroke: INK, 'stroke-width': 0.6,
+        'stroke-linecap': 'round'}));
+    for (const [cx, cy] of [[54, -39], [52, -35], [55, -33], [91, -38],
+                            [93, -34], [89, -33], [72.5, -42]]) {
+        g.appendChild(svgEl('circle', {cx, cy, r: 0.7, fill: INK}));
+    }
+    splash(g, [-21, 5, 88]);
+}
+
+// ---- cities -------------------------------------------------------------
+// Every topology node as a small dot; its name appears only on hover. Dots
+// and labels are resized on every view change so they hold a constant
+// on-screen size -- a zoomed-in cluster stays readable instead of the dots
+// swelling into each other.
+
+const CITY_DOT_PX = 1.9;
+const CITY_HIT_PX = 6;
+const CITY_LABEL_PX = 12;
+let hoveredCity = null;
+
+function unitsPerPixel() {
+    const rect = document.getElementById('map').getBoundingClientRect();
+    if (!rect.width || !rect.height) return view.w / 800;
+    // preserveAspectRatio="meet": the tighter axis sets the scale.
+    return Math.max(view.w / rect.width, view.h / rect.height);
+}
+
+function drawCities() {
+    const g = layer('cities');
+    for (const [id, [lat, lon]] of Object.entries(P.topology.nodes)) {
+        const [x, y] = project(lat, lon);
+        const city = svgEl('g', {class: 'city', 'data-id': id});
+        city.appendChild(svgEl('circle', {cx: x, cy: y, class: 'city-dot'}));
+        city.appendChild(svgEl('circle', {cx: x, cy: y, class: 'city-hit'}));
+        city.addEventListener('mouseenter', () => showCityLabel(city, id, x, y));
+        city.addEventListener('mouseleave', hideCityLabel);
+        g.appendChild(city);
+    }
+    rescaleCities();
+    // applyView, not just rescaleCities: resizing the pane (window or the
+    // panel divider) changes how much map is visible, so re-clamp too.
+    new ResizeObserver(applyView).observe(document.getElementById('map'));
+}
+
+function showCityLabel(city, id, x, y) {
+    hideCityLabel();
+    hoveredCity = {city, id, x, y};
+    city.classList.add('hover');
+    const text = svgEl('text', {});
+    // Display only -- the panels keep printing the raw id (`kot_kapura`).
+    text.textContent = id.split('_')
+        .map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+    layer('city-label').appendChild(text);
+    rescaleCities();
+}
+
+function hideCityLabel() {
+    if (hoveredCity) hoveredCity.city.classList.remove('hover');
+    hoveredCity = null;
+    clearLayer('city-label');
+}
+
+function rescaleCities() {
+    const g = layer('cities');
+    if (!g) return;
+    const u = unitsPerPixel();
+    for (const city of g.children) {
+        const hover = hoveredCity && hoveredCity.city === city;
+        const [dot, hit] = city.children;
+        dot.setAttribute('r', (hover ? CITY_DOT_PX * 1.7 : CITY_DOT_PX) * u);
+        dot.setAttribute('stroke-width', 0.7 * u);
+        hit.setAttribute('r', CITY_HIT_PX * u);
+    }
+    const text = layer('city-label').firstChild;
+    if (text && hoveredCity) {
+        text.setAttribute('x', hoveredCity.x + 6 * u);
+        text.setAttribute('y', hoveredCity.y - 5 * u);
+        text.setAttribute('font-size', CITY_LABEL_PX * u);
+        text.setAttribute('stroke-width', 3 * u);
+    }
+}
+
 // ---- plant ------------------------------------------------------------
 
 function drawPlant() {
@@ -647,7 +1093,7 @@ function drawPlant() {
         const aerial = e.mount_type === 'aerial';
         const path = svgEl('path', {
             d: `M${x1},${y1}L${x2},${y2}`,
-            stroke: '#ccc', 'stroke-width': 1, fill: 'none',
+            stroke: '#c4b99f', 'stroke-width': 1, fill: 'none',
             class: aerial ? 'aerial' : '',
         });
         g.appendChild(path);
@@ -719,6 +1165,52 @@ function damageFootprintRadiusKm(widthKm, damageRadiusKm) {
     return widthKm / 2.0 + damageRadiusKm;
 }
 
+// ---- the probability field, for the glow only ------------------------
+// Mirrors eval.cone exactly (CONTAINMENT_P, the Rayleigh calibration,
+// NEGLIGIBLE_SIGMAS, p_cut_point) -- NOT what damageFootprintRadiusKm above
+// answers. The published cone is only a CONTAINMENT_P=66% band on the
+// storm's TRACK, not a hard bound, so real P(cut) stays non-negligible well
+// past that radius; this is what the agent actually has to hedge against.
+// Used ONLY to shape the visual glow below -- damageFootprintRadiusKm
+// remains the sole radius anything scored (at-risk edges, risk groups)
+// is tested against; this function never feeds that test.
+const CONTAINMENT_P = 0.66;
+const RAYLEIGH_DIVISOR = Math.sqrt(-2.0 * Math.log(1.0 - CONTAINMENT_P));
+const NEGLIGIBLE_SIGMAS = 6.0;
+
+function crossTrackSigmaKm(widthKm) {
+    return (widthKm / 2.0) / RAYLEIGH_DIVISOR;
+}
+
+// P(the storm centre lands within damageRadiusKm of a point offsetKm away)
+// -- cone.p_cut_point's exact value (a noncentral chi-square CDF, df=2),
+// computed via the elementary identity F(x;2,nc) = sum_j Poisson(j; nc/2) *
+// [1 - e^-(x/2) * sum_{i<=j} (x/2)^i/i!] -- every even-df CENTRAL chi-square
+// CDF is closed-form, so this needs no Bessel-function dependency for what
+// is, here, a decorative gradient rather than a scored quantity. Verified
+// against scipy.stats.ncx2.cdf directly (max abs diff ~8e-16) before
+// porting. Iterated well past the Poisson(nc/2) mode rather than an
+// early-exit threshold, since the term sequence rises before it falls.
+function pCutAtOffsetKm(offsetKm, widthKm, damageRadiusKm) {
+    const sigma = crossTrackSigmaKm(widthKm);
+    const halfLambda = 0.5 * (offsetKm / sigma) ** 2;
+    const halfX = 0.5 * (damageRadiusKm / sigma) ** 2;
+    const ex = Math.exp(-halfX);
+    const maxJ = Math.max(
+        40, Math.ceil(halfLambda + 10 * Math.sqrt(halfLambda + 1) + 20));
+    let poisson = Math.exp(-halfLambda);
+    let chiTerm = 1;
+    let chiSum = 1;
+    let total = poisson * (1 - ex * chiSum);
+    for (let j = 1; j <= maxJ; j++) {
+        poisson *= halfLambda / j;
+        chiTerm *= halfX / j;
+        chiSum += chiTerm;
+        total += poisson * (1 - ex * chiSum);
+    }
+    return total;
+}
+
 // Mirrors events.geo.circle_polygon's own per-point formula, so a point
 // segmentDistanceKm (below) scores as inside `radiusKm` is exactly a point
 // this ring encloses -- the two are inverses of the same metric.
@@ -763,33 +1255,78 @@ function drawCones(episode, hour) {
     clearLayer('cones');
     const g = layer('cones');
     const forecast = episode.forecast || {};
-    const {issuances, inForce} = inForceIssuance(forecast, hour);
+    const {inForce} = inForceIssuance(forecast, hour);
     const damageRadiusKm = episode.damage_radius_km;
-    // Only the damage footprint is drawn -- the danger zone. The published
-    // track cone (radius width_km/2, storm-CENTRE uncertainty) used to be
-    // drawn alongside it as a second ring; dropped by request, it was one
-    // more thing to read for a question ("which links are in danger")
-    // the footprint alone already answers.
-    for (const issued of issuances) {
-        const horizons = forecast[issued];
-        const graded = issued === inForce;
-        for (const horizonKey in horizons) {
-            const cone = horizons[horizonKey];
-            if (damageRadiusKm == null || !cone.center) continue;
-            const footR = damageFootprintRadiusKm(cone.width_km, damageRadiusKm);
-            const ring = circleRingLatLon(
-                cone.center.lat, cone.center.lon, footR);
-            const fpts = ring.map(([lat, lon]) => project(lat, lon));
-            g.appendChild(svgEl('path', {
-                d: 'M' + fpts.map(p => p.join(',')).join('L') + 'Z',
-                fill: graded ? 'rgba(217,140,0,0.12)' : 'rgba(150,150,150,0.04)',
-                stroke: graded ? '#d98c00' : '#bbb',
-                'stroke-width': graded ? 1.5 : 1,
-                'stroke-dasharray': graded ? '' : '2 2',
-                'data-issued': issued, 'data-horizon': horizonKey,
-                'data-kind': 'footprint',
+    // Only the IN-FORCE issuance is drawn -- the danger zone as currently
+    // forecast. A superseded issuance used to be drawn alongside it, ghosted
+    // and dashed; dropped: it told you nothing about what the agent is
+    // acting on now (decided_this_hour and the observation panel already
+    // carry the actual revision history in text), it doubled up the
+    // "dashed = aerial" convention the legend already uses for plant/path
+    // lines, and scrubbing the hour selector already shows a forecast
+    // revision as the circle itself moving -- a second overlaid circle was
+    // solving a problem the scrubber already solves.
+    if (inForce === null) return;
+    const horizons = forecast[inForce] || {};
+    let gradIdx = 0;
+    for (const horizonKey in horizons) {
+        const cone = horizons[horizonKey];
+        if (damageRadiusKm == null || !cone.center) continue;
+        const widthKm = cone.width_km;
+        const footR = damageFootprintRadiusKm(widthKm, damageRadiusKm);
+        const sigma = crossTrackSigmaKm(widthKm);
+        const reachKm = damageRadiusKm + NEGLIGIBLE_SIGMAS * sigma;
+        const peakP = pCutAtOffsetKm(0, widthKm, damageRadiusKm);
+
+        // The glow: stops traced from the REAL p_cut_point curve out to
+        // reachKm (where it goes negligible), not a cosmetic fade -- built
+        // per-cone since the curve's shape (damageRadiusKm/sigma) differs
+        // by episode, so one static gradient def can't fit all of them.
+        // Peak normalized to MAX_OPACITY so episodes read at a consistent
+        // intensity regardless of their own peakP.
+        const gradId = `cone-glow-${gradIdx++}`;
+        const grad = svgEl('radialGradient',
+            {id: gradId, cx: '50%', cy: '50%', r: '50%'});
+        const N_STOPS = 10, MAX_OPACITY = 0.38;
+        for (let i = 0; i < N_STOPS; i++) {
+            const frac = i / (N_STOPS - 1);
+            const p = pCutAtOffsetKm(reachKm * frac, widthKm, damageRadiusKm);
+            const opacity = peakP > 0 ? MAX_OPACITY * (p / peakP) : 0;
+            grad.appendChild(svgEl('stop', {
+                offset: `${(frac * 100).toFixed(1)}%`,
+                'stop-color': '#d98c00', 'stop-opacity': opacity.toFixed(3),
             }));
         }
+        g.appendChild(grad);
+
+        const glowPts = circleRingLatLon(cone.center.lat, cone.center.lon, reachKm)
+            .map(([lat, lon]) => project(lat, lon));
+        g.appendChild(svgEl('path', {
+            d: 'M' + glowPts.map(p => p.join(',')).join('L') + 'Z',
+            fill: `url(#${gradId})`, stroke: 'none',
+            'data-issued': inForce, 'data-horizon': horizonKey,
+            'data-kind': 'exposure-glow',
+        }));
+
+        // The deterministic boundary -- exactly damageFootprintRadiusKm,
+        // the SAME radius map_geo_event_to_assets/risk-group construction
+        // actually test membership against -- drawn as a crisp ring so the
+        // one radius anything is really SCORED against stays visually
+        // distinct from the illustrative probability field around it.
+        const footPts = circleRingLatLon(cone.center.lat, cone.center.lon, footR)
+            .map(([lat, lon]) => project(lat, lon));
+        g.appendChild(svgEl('path', {
+            d: 'M' + footPts.map(p => p.join(',')).join('L') + 'Z',
+            fill: 'none', stroke: '#c77a00', 'stroke-width': 1.4,
+            'data-issued': inForce, 'data-horizon': horizonKey,
+            'data-kind': 'footprint',
+        }));
+
+        const [cx, cy] = project(cone.center.lat, cone.center.lon);
+        g.appendChild(svgEl('circle', {
+            cx, cy, r: 3.5, fill: '#d98c00', stroke: '#8a5c00',
+            'stroke-width': 1, 'data-kind': 'footprint-center',
+        }));
     }
 }
 
@@ -891,20 +1428,22 @@ function drawService(id, hour, opts) {
     // drawRealizedCuts) are DIFFERENT channels and must never share a hue --
     // red is reserved exclusively for "this link is cut" (drawRealizedCuts),
     // so the SUT gets its own colour, green, used nowhere else on the map.
+    // Spotlighting a service changes WEIGHT and z-order (drawn last, thicker)
+    // but never hue -- it stays whatever colour it already was (green if the
+    // SUT, black/grey otherwise), so spotlighting never invents a third
+    // colour meaning on top of identity and physical state.
     const paths = (hour.service_paths || {})[id];
     if (paths) {
         if (paths.working) {
             drawPolyline(paths.working, {
                 weight: spot ? 4 : (dim ? 1 : (opts.emphasis ? 3.5 : 2.5)),
-                colour: spot ? '#1a4fcc'
-                    : (dim ? '#ddd' : (opts.emphasis ? '#1f8a4c' : '#1a1a1a')),
+                colour: dim ? '#ddd' : (opts.emphasis ? '#1f8a4c' : '#1a1a1a'),
                 layer: 'paths'});
         }
         if (paths.protection) {
             drawPolyline(paths.protection, {
                 weight: spot ? 3 : (dim ? 1 : (opts.emphasis ? 2 : 1.2)),
-                colour: spot ? '#a626cc'
-                    : (dim ? '#ddd' : (opts.emphasis ? '#7fc7a3' : '#888')),
+                colour: dim ? '#ddd' : (opts.emphasis ? '#7fc7a3' : '#888'),
                 layer: 'paths'});
         }
     }
@@ -1490,7 +2029,14 @@ function renderSaid(hour) {
         return;
     }
     const probeCursor = {i: 0};
-    const allProbes = hour.probes || [];
+    // hour.probes entries carry no `hour` field of their own (the trace
+    // schema leaves it implicit -- they're already scoped to this hour
+    // record); episodeProbes() synthesizes one for the whole-run ledger, but
+    // probeTable()'s `hour` column and probeCarriedForward()'s lookup into
+    // run.hours both need it too, or the former shows "undefined" and the
+    // latter's hours.findIndex() misses, falling through to the same message
+    // a genuine last-hour probe gets ("n/a (last hour)") for the wrong reason.
+    const allProbes = (hour.probes || []).map(p => ({...p, hour: hour.hour}));
     // hour.rejections is populated in the SAME order the iterations loop
     // executes (runner.py: every failing continue appends exactly one
     // entry; held/committed append none) -- a cursor, the same pattern
@@ -1721,7 +2267,9 @@ function renderMap() {
     }
     // Drawn last, in its own pass, so it sits on top of every dimmed path.
     if (spotlightId) {
-        drawService(spotlightId, hour, {spotlight: true});
+        const spotEmphasis = spotlightId ===
+            (hour.actionable_service || episode.actionable_service);
+        drawService(spotlightId, hour, {spotlight: true, emphasis: spotEmphasis});
     }
     if (state.selectedCandidate) {
         const candidate = findCandidate(
@@ -1961,20 +2509,29 @@ function episodeProbes(run) {
 // on any LATER hour -- the one place a carried-forward answer would have
 // to appear (runner.py: decided_this_hour is rebuilt fresh every hour from
 // THAT hour's own probe.records, never a prior hour's -- agent.py's
-// _decide also opens a fresh `messages` list each hour). 'unknown (older
-// trace)' when decided_this_hour is never recorded anywhere in this run
-// -- the question genuinely cannot be answered from such a trace, and a
-// bare "no" there would assert a fact this trace never actually confirmed.
+// _decide also opens a fresh `messages` list each hour).
+//
+// No 'unknown (older trace)' fallback: this function is only ever called
+// with a `probe` that came from hour.probes, and the probes field and
+// decided_this_hour landed in the SAME commit pair (4df9053/9b3fd71) -- a
+// trace old enough to lack decided_this_hour never has hour.probes either,
+// so it never produces a `probe` to call this with in the first place.
+// decided_this_hour is ALSO, separately and legitimately, absent on any
+// later hour that never ran a constraints/objective iteration (a skipped
+// hour, or a hold reached at the timing step alone) -- agent.py: it is only
+// attached "on the constraints and menu requests". Checked directly against
+// every current trace: T1a/T2b/T3a/T3b rollouts routinely carry probes with
+// zero decided_this_hour anywhere in the whole file, simply because no
+// later hour ever reached that step -- not because the trace predates the
+// field. That is a real "no", not an unanswerable question.
 function probeCarriedForward(run, probeHour, probe) {
     const hours = (run && run.hours) || [];
     const hourIdx = hours.findIndex(h => h.hour === probeHour);
     if (hourIdx === -1 || hourIdx === hours.length - 1) return 'n/a (last hour)';
-    let sawField = false;
     for (let i = hourIdx + 1; i < hours.length; i++) {
         for (const it of hours[i].iterations || []) {
             const decided = (it.projected || {}).decided_this_hour;
             if (!decided) continue;
-            sawField = true;
             const answers = decided.probe_answers || [];
             if (answers.some(a => a.service_id === probe.service_id &&
                                   a.risk_group_id === probe.risk_group_id)) {
@@ -1982,7 +2539,7 @@ function probeCarriedForward(run, probeHour, probe) {
             }
         }
     }
-    return sawField ? 'no' : 'unknown (older trace)';
+    return 'no';
 }
 
 function probeSplit(run) {
@@ -2162,6 +2719,8 @@ document.addEventListener('keydown', (ev) => {
     }
 });
 
+drawBase();
+drawCities();
 populateDropdowns();
 renderAll();
 """
