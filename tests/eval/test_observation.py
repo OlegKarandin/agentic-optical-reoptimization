@@ -96,7 +96,7 @@ def test_observation_at_t0_leaks_no_later_issuance(scenario):
 def test_observation_never_leaks_the_realized_cuts(scenario):
     obs = build_observation(scenario, "t0", service_spans=SPANS,
                             services=SERVICES, spares_on_hand=1)
-    assert "fiber_004" not in json.dumps(obs.to_dict())
+    assert "fiber_rewa_satna_0" not in json.dumps(obs.to_dict())
 
 
 def test_exposure_is_reported_per_service_per_horizon_with_a_cut_probability(

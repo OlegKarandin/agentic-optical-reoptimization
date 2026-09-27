@@ -3,8 +3,37 @@ Fixture-driven: no server, no state file."""
 import pytest
 
 from storm_reoptimizer.eval.scenario_file import (
-    ScenarioFileError, dump_scenario, load_all_scenarios, load_scenario,
+    ScenarioFileError, dump_scenario, expand_realized_spans, load_all_scenarios,
+    load_scenario, span_mate,
 )
+
+
+# Task 1 (2026-09-27 plan): realized cuts denote whole SPANS -- the storm
+# damage model (cone.py) always cuts both directions of a physical span, so
+# a `realized` block naming only one direction is authoring a cut the
+# forecast gives probability 0 of happening alone (spec §3.4, §4.1).
+def test_a_fibre_expands_to_its_reverse_direction_mate():
+    assert span_mate("fiber_a_b_0") == "fiber_b_a_0"
+    assert expand_realized_spans(["fiber_a_b_0"]) == ("fiber_a_b_0", "fiber_b_a_0")
+
+
+def test_expansion_is_idempotent_and_deduplicated():
+    assert expand_realized_spans(["fiber_a_b_1", "fiber_b_a_1"]) == \
+        ("fiber_a_b_1", "fiber_b_a_1")
+
+
+def test_an_underscored_node_name_is_split_on_the_topology():
+    # kot_kapura is a real toy-topology node; its actual neighbours are
+    # amritsar and talwandi_bahi (bathinda is not a node in this topology at
+    # all) -- confirmed directly against toy_india_topology.json. Only the
+    # kot_kapura/talwandi_bahi split names two real nodes.
+    mate = span_mate("fiber_kot_kapura_talwandi_bahi_0")
+    assert mate == "fiber_talwandi_bahi_kot_kapura_0"
+
+
+def test_a_non_span_id_is_an_authoring_error():
+    with pytest.raises(ScenarioFileError):
+        span_mate("fiber_004")
 
 
 def test_loads_every_field(write_scenario, example_scenario_yaml):
@@ -17,7 +46,7 @@ def test_loads_every_field(write_scenario, example_scenario_yaml):
     assert s.reference_avoid == {"risk_groups": ["rg_ref"]}
     assert s.gold.decision_at_t0 == "wait"
     assert s.gold.label == "wait"
-    assert s.realized["t3"] == ("fiber_004", "fiber_005")
+    assert s.realized["t3"] == ("fiber_rewa_satna_0", "fiber_satna_rewa_0")
     assert s.metadata["cone_width_km"] == 90
 
 

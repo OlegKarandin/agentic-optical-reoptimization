@@ -148,6 +148,7 @@ forecast:
         lat: 20.395055672417662
         lon: 75.67032091711899
 realized:
+  # ids denote SPANS: load_scenario adds each fibre's reverse-direction mate
   t3:
   - fiber_jalgaon_buldhana_0
   - fiber_jalgaon_dhulia_0
@@ -163,11 +164,11 @@ gold:
     t3-svc-jalgaon-nagpur               0.000      600.000
     t3-claimant-jalgaon-khandwa         0.000        0.000
     t3-claimant-jalgaon-buldhana     1000.000     1000.000
-    TOTAL                            7500.000     8100.000
+    TOTAL                           14000.000    14600.000
     gold: spend (argmin total Gbps-hours lost, margin 600.000 over 'hold')
   outcome_gbps_h:
-    spend: 7500.0
-    hold: 8100.0
+    spend: 14000.0
+    hold: 14600.0
   min_margin_gbps_h: 250.0
 flip_variable:
 - spend

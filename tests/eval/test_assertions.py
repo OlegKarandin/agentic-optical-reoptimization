@@ -64,7 +64,8 @@ TWIN = textwrap.dedent("""
       t1:
         t3: {{cone: {{type: Polygon, coordinates: []}}, width_km: 90, center: {{lat: {t1_lat}, lon: 81.0}}}}
     realized:
-      t3: [fiber_004]
+      # ids denote SPANS: load_scenario adds each fibre's reverse-direction mate
+      t3: [fiber_fatehpur_allahabad_0]
     gold:
       survived: [storm-svc-1]
       max_spares_wasted: 0
@@ -164,7 +165,8 @@ _SPARE_TWIN = textwrap.dedent("""
       t1:
         t3: {{cone: {{type: Polygon, coordinates: []}}, width_km: 90, center: {{lat: 25.6, lon: 81.0}}}}
     realized:
-      t3: [fiber_004]
+      # ids denote SPANS: load_scenario adds each fibre's reverse-direction mate
+      t3: [fiber_fatehpur_allahabad_0]
     gold:
       survived: [storm-svc-1]
       max_spares_wasted: 0
@@ -517,16 +519,21 @@ def test_claimant_service_ids_rejects_an_id_not_in_the_rationale():
 # is exactly the defect this invariant exists to catch; Task 14 fixed T1a's
 # own episode data (it now realizes a cut on the real, aerial
 # satna<->jabalpur claimant span instead), so this test uses the TWIN
-# fixture's own synthetic `realized: {{t3: [fiber_004]}}` against a
-# hand-built BURIED oms_by_id instead of depending on a real episode's
-# (now-fixed) content. T1b's realized cut (fiber_satna_rewa_0, checked
-# below) is aerial and correct.
+# fixture's own synthetic `realized: {{t3: [fiber_fatehpur_allahabad_0]}}`
+# against a hand-built BURIED oms_by_id instead of depending on a real
+# episode's (now-fixed) content. T1b's realized cut (fiber_satna_rewa_0,
+# checked below) is aerial and correct. The filter check raises on the
+# FIRST realized asset it names -- `load_scenario` expands the fixture's one
+# named id to include its reverse-direction mate too (Task 1, 2026-09-27:
+# realized cuts denote whole spans), but that mate is never reached here
+# because the original direction alone already fails the filter.
 def test_a_realized_cut_on_buried_fibre_fails_the_build(tmp_path):
-    scenario = _half(tmp_path, "Pa", label="wait")   # realized: {t3: [fiber_004]}
+    # realized: {t3: [fiber_fatehpur_allahabad_0]}
+    scenario = _half(tmp_path, "Pa", label="wait")
     oms_by_id = {
         "oms_fatehpur_allahabad": {
             "id": "oms_fatehpur_allahabad", "src_node_id": "fatehpur",
-            "dst_node_id": "allahabad", "elements": ["fiber_004"]},
+            "dst_node_id": "allahabad", "elements": ["fiber_fatehpur_allahabad_0"]},
     }
     with pytest.raises(PairInvalid, match="buried"):
         assert_realized_cuts_pass_the_event_filter(
@@ -536,16 +543,22 @@ def test_a_realized_cut_on_buried_fibre_fails_the_build(tmp_path):
 def test_a_realized_cut_on_aerial_fibre_passes():
     # T1b's own realized cut, since Task 15 rebuilt the pair on the
     # jalgaon-homed SUT: the two AERIAL spans its working and protection
-    # legs leave the depot on.
+    # legs leave the depot on. `load_scenario` now expands each named fibre
+    # to include its reverse-direction mate (Task 1, 2026-09-27), so
+    # oms_by_id's elements carry both directions of each physical span --
+    # exactly how a real OMS bundles them.
     scenario = load_scenario(SCENARIOS_DIR / "T1b.yaml")
     oms_by_id = {
         "oms_jalgaon_buldhana": {
             "id": "oms_jalgaon_buldhana", "src_node_id": "jalgaon",
-            "dst_node_id": "buldhana", "elements": ["fiber_jalgaon_buldhana_0"]},
+            "dst_node_id": "buldhana", "elements": ["fiber_jalgaon_buldhana_0",
+                                                     "fiber_buldhana_jalgaon_0"]},
         "oms_jalgaon_khandwa": {
             "id": "oms_jalgaon_khandwa", "src_node_id": "jalgaon",
             "dst_node_id": "khandwa", "elements": ["fiber_jalgaon_khandwa_0",
-                                                   "fiber_jalgaon_khandwa_1"]},
+                                                   "fiber_jalgaon_khandwa_1",
+                                                   "fiber_khandwa_jalgaon_0",
+                                                   "fiber_khandwa_jalgaon_1"]},
     }
     assert_realized_cuts_pass_the_event_filter(
         scenario, topology_path=TOPOLOGY_PATH, oms_by_id=oms_by_id)

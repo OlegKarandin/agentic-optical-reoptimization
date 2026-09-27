@@ -19,9 +19,12 @@ three pairs' gold answers are drawn from three different vocabularies)."""
 from __future__ import annotations
 
 import dataclasses
+import functools
+import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import yaml
 
@@ -50,6 +53,50 @@ _HORIZON_KEYS = {"cone", "width_km", "center"}
 
 class ScenarioFileError(ValueError):
     """A scenario file that is malformed, incomplete, or self-inconsistent."""
+
+
+_FIBER_RE = re.compile(r"^fiber_(?P<rest>.+)_(?P<k>\d+)$")
+
+
+@functools.cache
+def _topology_node_ids() -> frozenset[str]:
+    path = Path(__file__).parent.parent / "data" / "toy_india_topology.json"
+    graph = json.loads(path.read_text(encoding="utf-8"))["graph"]
+    return frozenset(n["id"] for n in graph["nodes"])
+
+
+def span_mate(asset_id: str) -> str:
+    """The reverse-direction fibre of the same physical span. The storm model
+    (cone.p_cut_service) cuts SPANS, so a realized cut naming one direction
+    only is an outcome the forecast gives probability 0 (spec §3.4)."""
+    m = _FIBER_RE.match(asset_id)
+    if m is None or "_" not in m["rest"]:
+        raise ScenarioFileError(
+            f"realized asset {asset_id!r} is not fiber_<a>_<b>_<k>")
+    rest = m["rest"]
+    splits = [(rest[:i], rest[i + 1:]) for i, ch in enumerate(rest) if ch == "_"]
+    if len(splits) > 1:
+        nodes = _topology_node_ids()
+        splits = [(a, b) for a, b in splits if a in nodes and b in nodes]
+    if len(splits) != 1:
+        raise ScenarioFileError(
+            f"realized asset {asset_id!r}: cannot split into two node ids")
+    a, b = splits[0]
+    return f"fiber_{b}_{a}_{m['k']}"
+
+
+def expand_realized_spans(assets: Iterable[str]) -> tuple[str, ...]:
+    """Every realized asset id, plus its reverse-direction mate -- a storm's
+    damage model always cuts a whole physical span (both directions), so a
+    `realized` block naming only one direction is authoring a cut the
+    forecast gives probability 0 of happening alone (spec §3.4, §4.1).
+    Idempotent and order-preserving-deduplicated: expanding an already-
+    expanded list (or dumping and reloading one) yields the same tuple."""
+    out: dict[str, None] = {}
+    for asset in assets:
+        out[asset] = None
+        out[span_mate(asset)] = None
+    return tuple(out)
 
 
 @dataclass(frozen=True)
@@ -194,7 +241,10 @@ def load_scenario(path: str | Path) -> ScenarioFile:
         if hour not in hours:
             raise ScenarioFileError(
                 f"{path}: realized hour {hour!r} not in hours {hours}")
-        realized[hour] = tuple(assets)
+        try:
+            realized[hour] = expand_realized_spans(assets)
+        except ScenarioFileError as e:
+            raise ScenarioFileError(f"{path}: {e}") from e
 
     _require_keys(f"{path}:gold", raw["gold"], _GOLD_KEYS,
                   optional=_OPTIONAL_GOLD_KEYS)

@@ -51,6 +51,7 @@ forecast:
          # corrected exposure model, and the real claimant identity now
          # sharing this exact pivot node).
 realized:
+  # ids denote SPANS: load_scenario adds each fibre's reverse-direction mate
   t1: [fiber_satna_rewa_0]     # storm-svc-1's own WORKING-path fiber --
                                 # confirmed against the real server:
                                 # get_affected_services(fiber_satna_rewa_0)

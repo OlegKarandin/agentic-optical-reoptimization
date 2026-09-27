@@ -148,6 +148,7 @@ forecast:
         lat: 20.475048834050817
         lon: 74.74099229966424
 realized:
+  # ids denote SPANS: load_scenario adds each fibre's reverse-direction mate
   t3:
   - fiber_dhulia_jalgaon_0
   - fiber_jalgaon_dhulia_0

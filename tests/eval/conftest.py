@@ -49,7 +49,8 @@ EXAMPLE_SCENARIO_YAML = textwrap.dedent("""
       t1:
         t3: {cone: {type: Polygon, coordinates: [[[81.0, 25.0], [81.1, 25.0], [81.1, 25.1], [81.0, 25.0]]]}, width_km: 90, center: {lat: 25.2, lon: 81.0}}
     realized:
-      t3: [fiber_004, fiber_005]
+      # ids denote SPANS: load_scenario adds each fibre's reverse-direction mate
+      t3: [fiber_rewa_satna_0]
     gold:
       survived: [storm-svc-1, svc-b]
       max_spares_wasted: 1

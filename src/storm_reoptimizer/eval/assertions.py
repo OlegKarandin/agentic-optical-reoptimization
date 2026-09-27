@@ -1126,8 +1126,9 @@ def assert_realized_cuts_pass_the_event_filter(
             if oms is None:
                 raise PairInvalid(
                     f"{scenario.id}: realized cut {asset_id!r} at hour "
-                    f"{hour!r} names no fiber in any OMS's `elements` -- "
-                    f"cannot check it against the event filter")
+                    f"{hour!r} names no fiber in any OMS's elements (ids in "
+                    f"realized are expanded to both directions of the span "
+                    f"-- a missing mate is an authoring error)")
             edge = edge_mount.get((oms["src_node_id"], oms["dst_node_id"]))
             if edge is None:
                 raise PairInvalid(
