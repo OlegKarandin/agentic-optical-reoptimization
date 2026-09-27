@@ -437,12 +437,16 @@ site is stocked well enough that only `depot_site` ever binds. This \
 inventory is invisible to the routing tools: they will happily propose a \
 candidate the depot cannot fulfil, and the harness will reject that choice.
 \n\
-  That depot is SHARED with the other services that terminate at the same \
-site. After a cut, the harness gives whatever spares remain to the services \
+  That depot is SHARED -- with the other services that terminate at the same \
+site. A transponder used there is not available to them. Order matters: \
+a service cut in an EARLIER hour reaches the depot before one cut later, and \
+among services cut in the same hour the larger demand has the stronger \
+claim. After a cut, the harness gives whatever spares remain to the services \
 the cut dropped: first the ones you ranked in `claim_priority`, in that \
 order, skipping any that were not cut or that no route can restore; then \
 every other service shown to you in this episode, largest demand first. A \
-service never shown to you in this episode is not restored.
+service never shown to you in this episode is not restored, and their claim \
+on this site's inventory is real.
 \n\
   Services that do not terminate at `depot_site` are summarized under \
 `omitted_services.ineligible_for_depot`. They may be badly exposed; they are \
