@@ -268,10 +268,15 @@ def test_decision_facts_reproduce_the_spec_tables_for_t2(connect_for):
 # RENAMED from `_t1_gold_replay` (2026-09-06 plan, Task 10): the body reads
 # everything off the scenario object, not off anything T1-specific, so T2's
 # halves reuse it unchanged once they share the same `label_rule`.
-def _spend_or_hold_gold_replay(scenario):
+def _spend_or_hold_gold_replay(scenario, hold_ranking):
     """`(gold_decisions, gold_by_hour, objective_fn)` reproducing whichever
     of `oracle.spend_decider`/`oracle.hold_decider` this half's own
-    `gold.label` names."""
+    `gold.label` names.
+
+    `hold_ranking` is the `claim_priority` gold's hold rollout ran under --
+    `spare_value.best_hold_ranking` of the live decision-hour facts (2026-09-27
+    spec 4.6, what `gold.enumerate_outcomes` computes), NOT the old
+    claimants-then-SUT order. Read only when the label is `hold`."""
     d = scenario.decision_hour
     sut = scenario.service_under_test
     claimants = tuple(scenario.metadata.get("claimant_services", ()))
@@ -290,7 +295,7 @@ def _spend_or_hold_gold_replay(scenario):
                 "act", "gold: spend the depot's spare at the decision hour",
                 claim_priority=priority)}},
             oracle.escape_objective)
-    priority = (*claimants, sut)
+    priority = tuple(hold_ranking)
     return (
         {"timing": TimingDecision(
             "wait", "gold: hold the depot's spare for the claimants",
@@ -304,8 +309,18 @@ def _spend_or_hold_gold_replay(scenario):
 
 @pytest.mark.parametrize("half", ("T1a", "T1b", "T2a", "T2b", "T3a", "T3b"))
 def test_half_non_flip_decisions_are_non_binding(half, connect_for):
+    from storm_reoptimizer.eval.spare_value import best_hold_ranking, decision_facts
+
     scenario = load_all_scenarios()[half]
-    gold_decisions, gold_by_hour, objective_fn = _spend_or_hold_gold_replay(scenario)
+
+    async def _hold_ranking():
+        async with connect_for(scenario.state_file)() as client:
+            return best_hold_ranking(await decision_facts(
+                client, scenario, topology_path=TOPOLOGY_PATH))
+
+    hold_ranking = asyncio.run(_hold_ranking())
+    gold_decisions, gold_by_hour, objective_fn = _spend_or_hold_gold_replay(
+        scenario, hold_ranking)
 
     async def _run():
         await assert_non_flip_decisions_non_binding(

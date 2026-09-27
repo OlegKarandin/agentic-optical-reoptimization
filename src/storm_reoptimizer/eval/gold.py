@@ -22,6 +22,7 @@ from .oracle import hold_decider, spend_decider
 from .runner import run_episode
 from .scenario_file import Gold, ScenarioFile
 from .scoring import decision_label, gbps_hours_lost
+from .spare_value import best_hold_ranking, decision_facts
 
 # The two scripted policies T1's `spare_action_by_deadline` label rule
 # distinguishes. A plain tuple, not a dict, so iteration order (and so
@@ -37,6 +38,7 @@ _DECIDERS: dict[str, Callable[[ScenarioFile], Any]] = {
 async def enumerate_outcomes(
     connect: Callable[[], Any], scenario: ScenarioFile, *,
     topology_path: str | Path,
+    hold_ranking: tuple[str, ...] | None = None,
 ) -> dict[str, dict]:
     """Run `scenario` once per choice in `CHOICES`, each against a FRESH
     server connection, and report the real outcome.
@@ -57,10 +59,29 @@ async def enumerate_outcomes(
     by the deadline reads "hold" like any other non-spend rollout would;
     that is a real, not a defect -- an infeasible escape spends nothing, so
     scoring correctly reads it as "hold" regardless of which decider was
-    running)."""
+    running).
+
+    The hold rollout runs under `hold_ranking` as its `claim_priority`
+    (2026-09-27 spec 4.6: hold judged at its best). `None` computes it:
+    `spare_value.best_hold_ranking` of `spare_value.decision_facts`, read on
+    ONE EXTRA fresh `connect()` of its own -- `decision_facts` replays
+    pre-decision cuts and defines a risk group on the server it reads, so it
+    never shares a connection with either rollout. `outcomes["hold"]` then
+    carries the ranking it ran under as `"claim_priority"` (a tuple), which
+    `gold_from_outcomes` states in the rationale. The spend rollout is
+    unchanged (`oracle.spend_decider`, SUT first)."""
+    if hold_ranking is None:
+        async with connect() as client:
+            hold_ranking = best_hold_ranking(await decision_facts(
+                client, scenario, topology_path=topology_path))
+    hold_ranking = tuple(hold_ranking)
+
     outcomes: dict[str, dict] = {}
     for choice in CHOICES:
-        decider = _DECIDERS[choice](scenario)
+        if choice == "hold":
+            decider = hold_decider(scenario, claim_priority=hold_ranking)
+        else:
+            decider = _DECIDERS[choice](scenario)
         async with connect() as client:
             trace = await run_episode(
                 client, scenario, decider, topology_path=topology_path)
@@ -70,6 +91,7 @@ async def enumerate_outcomes(
             "total": sum(losses.values()),
             "label": decision_label(scenario, trace),
         }
+    outcomes["hold"]["claim_priority"] = hold_ranking
     return outcomes
 
 
@@ -84,17 +106,36 @@ def _scope(scenario: ScenarioFile) -> tuple[str, ...]:
     return (scenario.service_under_test, *claimants)
 
 
+def _differing(outcomes: dict[str, dict], scope: tuple[str, ...]
+               ) -> tuple[str, ...]:
+    """Every service outside `scope` whose Gbps-hours lost is not the same
+    under every choice, sorted by id. Since the replay restores every SHOWN
+    service (2026-09-27 spec 4.5), a non-claimant can carry part of the
+    spend/hold difference; a service whose loss is identical under both
+    choices carries none of it and is left out."""
+    ids = set().union(*(data["gbps_hours_lost"] for data in outcomes.values()))
+    return tuple(sorted(
+        sid for sid in ids - set(scope)
+        if len({data["gbps_hours_lost"].get(sid, 0.0)
+                for data in outcomes.values()}) > 1))
+
+
 def _rationale_table(scenario: ScenarioFile, outcomes: dict[str, dict],
                      scope: tuple[str, ...], label: str,
                      totals: dict[str, float]) -> str:
-    """A fixed-width table: one row per service in `scope`, one column per
-    choice, its Gbps-hours lost under that choice -- plus a TOTAL row and a
-    one-line verdict. Every `scope` entry (the SUT and every declared
-    claimant) appears as a literal row label, which is what satisfies
-    `assertions.claimant_service_ids`'s requirement that every
-    `metadata.claimant_services` id appear literally in `gold.rationale`."""
+    """A fixed-width table: one row per service in `scope`, then one row per
+    service outside it whose loss DIFFERS between the choices (`_differing`,
+    sorted), one column per choice, its Gbps-hours lost under that choice
+    -- plus a TOTAL row, a one-line verdict, and, when the hold rollout
+    recorded one (`enumerate_outcomes` always does), a `hold ranking: a > b
+    > ...` line naming the `claim_priority` it ran under. Every `scope`
+    entry (the SUT and every declared claimant) appears as a literal row
+    label, which is what satisfies `assertions.claimant_service_ids`'s
+    requirement that every `metadata.claimant_services` id appear literally
+    in `gold.rationale`."""
     choices = list(outcomes)
-    name_w = max([len("service"), len("TOTAL")] + [len(s) for s in scope])
+    rows = (*scope, *_differing(outcomes, scope))
+    name_w = max([len("service"), len("TOTAL")] + [len(s) for s in rows])
     col_w = max([len(c) for c in choices] + [12])
 
     def row(name: str, values: dict[str, float]) -> str:
@@ -103,7 +144,7 @@ def _rationale_table(scenario: ScenarioFile, outcomes: dict[str, dict],
 
     lines = [f"{'service':<{name_w}} "
             + " ".join(f"{c:>{col_w}}" for c in choices)]
-    for sid in scope:
+    for sid in rows:
         lines.append(row(sid, {c: outcomes[c]["gbps_hours_lost"].get(sid, 0.0)
                                for c in choices}))
     lines.append(row("TOTAL", totals))
@@ -114,6 +155,9 @@ def _rationale_table(scenario: ScenarioFile, outcomes: dict[str, dict],
     lines.append(
         f"gold: {label} (argmin total Gbps-hours lost"
         + (f", margin {margin:.3f} over {other!r}" if other else "") + ")")
+    ranking = outcomes.get("hold", {}).get("claim_priority")
+    if ranking:
+        lines.append("hold ranking: " + " > ".join(ranking))
     return "\n".join(lines) + "\n"
 
 
@@ -145,6 +189,13 @@ def gold_from_outcomes(
     difference whose entire scale is hundreds, which no geometry can meet;
     scaling it off the scope total asks exactly what the spec asks, of
     exactly the services the decision moves.
+
+    The denominator stays `_scope` even though the rationale table now also
+    lists every other service whose loss differs between the choices
+    (2026-09-27 spec 4.5/4.6): the table reports where the difference
+    landed; the floor is still "25% of the SUT and claimants' own optimal
+    loss". Widening it to the table's rows would put T2b's floor above its
+    own projected 600 Gbps-h margin (2026-09-27 plan, Task 5).
 
     `label` is deliberately still the argmin of the NETWORK-WIDE `totals`
     (unchanged): the gold answer is which choice costs the network less, and

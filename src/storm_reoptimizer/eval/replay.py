@@ -8,7 +8,8 @@ simply recorded that fact. "Hold the spare for a claimant" therefore had no
 simulated consequence, and the timing decision's `claim_priority` field
 (decisions.py) was purely decorative. This module is the consequence: after
 every hour's realized cuts are injected, the harness -- not the decider --
-spends whatever spares remain to restore actually-dropped services, in
+spends whatever spares remain to restore actually-dropped services -- any
+service shown to the decider this episode (2026-09-27 spec 4.5) -- in
 EXACTLY the order the decider itself stated via `claim_priority` (falling
 back to largest-demand-first for anyone it left unranked).
 
@@ -26,7 +27,7 @@ cut block, and a module-level import back here would be a cycle. By the time
 lazy import always succeeds."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Iterable
 
 from .ledger import spares_needed
 from .observation import lead_time_hours_for
@@ -38,11 +39,14 @@ def _ordered_scope(scope: set[str], priority: tuple[str, ...],
     it names them, first; then every other scope member, largest
     `demand_gbps` first (ties broken by service id, for determinism).
 
-    A `priority` id outside `scope` is not this episode's to restore (it
-    names some OTHER service the decider was shown) and is silently
-    ignored -- `decisions._claim_priority`'s own validation is only that the
-    id was SHOWN to the decider, not that it is in this episode's claimant
-    roster.
+    `priority` may name the service under test like any other id; it is
+    placed exactly where the ranking puts it (2026-09-27 spec 4.5).
+
+    A `priority` id outside `scope` is not this episode's to restore and is
+    silently ignored. With `scope` now the set of services shown this
+    episode, that is an id a scripted decider names without it ever being
+    shown (a real `ClaudeDecider`'s `claim_priority` is already guarded to
+    shown ids by `agent._check_named_services`).
 
     `priority` itself is deduplicated first-occurrence-wins:
     `decisions._claim_priority` only validates SHAPE (a list of strings),
@@ -66,20 +70,34 @@ def _empty_record(hour: str, service: str, outcome: str) -> dict[str, Any]:
 
 async def restore_after_cuts(
     counting, *, scenario, hour: str, hour_index: int, affected: list[str],
-    priority: tuple[str, ...], ledger, geometry, issuance, rg_for_cut_hour,
-    index_factory,
+    priority: tuple[str, ...], scope: Iterable[str], ledger, geometry,
+    issuance, rg_for_cut_hour, index_factory,
 ) -> tuple[list["Action"], list[dict]]:
-    """Restore whichever of `{scenario.service_under_test} ∪
-    metadata.claimant_services` this hour's realized cut actually dropped
-    (`affected`, the runner's `dropped_after_cut` for this hour), spending
-    `ledger`'s remaining spares in `priority` order.
+    """Restore whichever services in `scope` this hour's realized cut
+    actually dropped (`affected`, the runner's `dropped_after_cut` for this
+    hour), spending `ledger`'s remaining spares in `priority` order.
 
-    `priority` is the STANDING claim-priority ranking (spec 7.4) minus the
-    actionable service -- run_episode's own last-stated `claim_priority`
-    across hours, not necessarily this cut hour's own decision, since a cut
-    hour may have no decision of its own under the decidable-hours rule.
+    `scope` is every service SHOWN to the decider this episode, up to and
+    including this cut hour (2026-09-27 T2 correlated-claims spec, 4.5):
+    `run_episode` accumulates each hour's projected `exposure` keys and
+    passes that union plus the service under test. It replaced a
+    hard-coded `{service_under_test} | metadata.claimant_services` roster
+    that silently dropped any service the decider was shown -- and told
+    was a real competing claim -- but that the scenario's author had not
+    listed. `metadata.claimant_services` remains authoring metadata
+    (assertions read it); it no longer bounds restoration. A dropped
+    service never shown this episode is not restored.
+
+    `priority` is the STANDING claim-priority ranking (spec 7.4), passed
+    UNSTRIPPED -- run_episode's own last-stated `claim_priority` across
+    hours, not necessarily this cut hour's own decision, since a cut hour
+    may have no decision of its own under the decidable-hours rule. It
+    includes the service under test wherever the decider ranked it
+    (2026-09-27 spec 4.5, "standing ranking first"): before scope widened,
+    the SUT was stripped from it and placed by demand among the unranked,
+    which a shown 300 G service whose id sorts first would now overtake.
     `_ordered_scope` below still ignores any id outside `scope` and still
-    dedupes.
+    dedupes; every unranked scope member follows, largest demand first.
 
     Only a service actually IN `affected` is attempted -- one whose scope
     membership is real but which the cut left untouched (protection absorbed
@@ -126,8 +144,7 @@ async def restore_after_cuts(
     dict per attempted service, in attempt order."""
     from .runner import Action, menu_with_path_facts, try_commit
 
-    scope = {scenario.service_under_test,
-             *scenario.metadata.get("claimant_services", [])}
+    scope = set(scope)
     dropped = set(affected)
     index = await index_factory()
 

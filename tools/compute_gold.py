@@ -75,9 +75,10 @@ async def run(args: argparse.Namespace) -> None:
     @asynccontextmanager
     async def _connect():
         # A FRESH connection per call -- enumerate_outcomes calls this once
-        # per choice, since run_episode mutates server state and the two
-        # rollouts must each start from the scenario's own state file
-        # untouched by the other.
+        # per choice, plus once more for the hold ranking's decision-hour
+        # facts, since run_episode mutates server state and each rollout
+        # must start from the scenario's own state file untouched by the
+        # others.
         async with connect_server(
             args.topology, server_command=server_command, env=env,
             extra_args=["--state", scenario.state_file],

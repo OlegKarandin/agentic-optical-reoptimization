@@ -164,6 +164,7 @@ gold:
     t2-claimant-jalgaon-khandwa     1000.000      400.000
     TOTAL                          33500.000    32900.000
     gold: hold (argmin total Gbps-hours lost, margin 600.000 over 'spend')
+    hold ranking: t1-svc-jalgaon-indore > t2-svc-jalgaon-nagpur > t2-claimant-jalgaon-khandwa > d0346 > d0422 > t1-claimant-jalgaon-dhulia-fwd > t1-claimant-jalgaon-dhulia-rev
   outcome_gbps_h:
     spend: 33500.0
     hold: 32900.0

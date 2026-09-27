@@ -162,10 +162,12 @@ gold:
   label: spend
   rationale: |
     service                            spend         hold
-    t2-svc-jalgaon-nagpur              0.000      600.000
+    t2-svc-jalgaon-nagpur              0.000     1500.000
     t2-claimant-jalgaon-khandwa     1000.000     1000.000
+    t1-svc-jalgaon-indore           1500.000      600.000
     TOTAL                          37000.000    37600.000
     gold: spend (argmin total Gbps-hours lost, margin 600.000 over 'hold')
+    hold ranking: t1-svc-jalgaon-indore > t2-svc-jalgaon-nagpur > d0346 > d0422 > t1-claimant-jalgaon-dhulia-fwd > t1-claimant-jalgaon-dhulia-rev
   outcome_gbps_h:
     spend: 37000.0
     hold: 37600.0

@@ -70,6 +70,44 @@ def test_gold_from_outcomes_margin_floor_is_at_least_one_gbps_hour(
     assert gold.min_margin_gbps_h == 1.0
 
 
+def test_rationale_lists_every_service_whose_loss_differs_and_the_hold_ranking(
+        write_scenario, example_scenario_yaml):
+    """2026-09-27 spec 4.5/4.6: the replay now restores every SHOWN service,
+    so a non-claimant can carry part of the spend/hold difference -- the
+    rationale must show it as a row (after the SUT and claimants), and it
+    must state the ranking gold's hold rollout ran under. The margin floor's
+    denominator stays SUT + claimants only (`_scope`)."""
+    ok = example_scenario_yaml.replace(
+        "claimant_services: []",
+        "claimant_services: [claim-a]\n"
+        "  claimed_competing_ecar_gbps: 50.0\n"
+        "  claimed_competing_ecar_at: t3")
+    scenario = load_scenario(write_scenario(ok))
+
+    outcomes = {
+        "spend": {"gbps_hours_lost": {"claim-a": 100.0, "shown-z": 900.0,
+                                      "shown-b": 400.0, "same": 50.0},
+                  "total": 1450.0, "label": "spend"},
+        "hold": {"gbps_hours_lost": {"storm-svc-1": 30.0, "shown-z": 300.0,
+                                     "shown-b": 400.0, "same": 50.0},
+                 "total": 780.0, "label": "hold",
+                 "claim_priority": ("shown-z", "claim-a", "storm-svc-1")},
+    }
+    gold = gold_from_outcomes(scenario, outcomes)
+    names = [line.split()[0] for line in gold.rationale.splitlines()]
+
+    # `_scope` first, in its own order; then only the services whose loss
+    # DIFFERS between the choices, sorted -- "shown-b" and "same" lose the
+    # same under both and are not rows.
+    assert names[:4] == ["service", "storm-svc-1", "claim-a", "shown-z"]
+    assert "shown-b" not in names and "same" not in names
+    assert "hold ranking: shown-z > claim-a > storm-svc-1" in gold.rationale
+    # Denominator: SUT + claimant only. spend 100, hold 30 -> 0.25 * 30.
+    # Widening it to "shown-z" would give 0.25 * 330 instead.
+    assert gold.min_margin_gbps_h == pytest.approx(0.25 * 30.0)
+    assert gold.label == "hold"
+
+
 # -- enumerate_outcomes (live) ---------------------------------------------
 
 def test_enumerate_outcomes_runs_both_rollouts_end_to_end(
@@ -110,8 +148,14 @@ def test_enumerate_outcomes_runs_both_rollouts_end_to_end(
     # deadline rule always reads "hold" for it, regardless of what the
     # storm actually did this rollout.
     assert outcomes["hold"]["label"] == "hold"
+    # Spec 4.6: hold ran under spare_value.best_hold_ranking, which always
+    # names the SUT (appended last if it is not itself restorable).
+    ranking = outcomes["hold"]["claim_priority"]
+    assert isinstance(ranking, tuple)
+    assert scenario.service_under_test in ranking
 
     gold = gold_from_outcomes(scenario, outcomes)
+    assert "hold ranking: " + " > ".join(ranking) in gold.rationale
     assert gold.label in outcomes
     assert gold.outcome_gbps_h == {c: d["total"] for c, d in outcomes.items()}
     for claimant in scenario.metadata["claimant_services"]:

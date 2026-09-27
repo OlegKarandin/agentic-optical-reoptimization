@@ -157,14 +157,20 @@ def _ledger():
                        oms_nodes={"oms_new": ["tirupati", "nellore"]})
 
 
-def _run(write_scenario, *, affected, priority):
+# The pre-2026-09-27 hard-coded roster, `{SUT} | claimant_services`, as the
+# default: every test written before the replay's scope became "services
+# shown" keeps exercising exactly the scope it was written against.
+DEFAULT_SCOPE = frozenset({"s", "c-fwd", "c-rev"})
+
+
+def _run(write_scenario, *, affected, priority, scope=DEFAULT_SCOPE):
     scenario = load_scenario(
         write_scenario(REPLAY_SCENARIO_YAML, "REPLAY_TEST.yaml"))
     counting = _FakeCounting()
     ledger = _ledger()
     return asyncio.run(restore_after_cuts(
         counting, scenario=scenario, hour="t1", hour_index=1,
-        affected=affected, priority=priority, ledger=ledger,
+        affected=affected, priority=priority, scope=scope, ledger=ledger,
         geometry=_geometry(), issuance=_issuance(), rg_for_cut_hour=None,
         index_factory=_index_factory(counting)))
 
@@ -196,6 +202,96 @@ def test_a_service_not_actually_dropped_gets_no_record(write_scenario):
     _actions, records = _run(write_scenario, affected=["s"], priority=())
     assert {r["service_id"] for r in records} == {"s"}
     assert records[0]["outcome"] == "restored"
+
+
+# -- scope = services shown (2026-09-27 spec, 4.5) --------------------------
+
+def test_scope_not_the_claimant_roster_bounds_restoration(write_scenario):
+    # c-fwd IS a roster claimant and IS dropped, but is not in `scope` (never
+    # shown this episode), so the replay must not touch it.
+    _a, records = _run(write_scenario, affected=["c-fwd", "s"], priority=(),
+                       scope={"s"})
+    assert {r["service_id"] for r in records} == {"s"}
+
+
+def test_a_shown_non_roster_service_is_restored(write_scenario):
+    # REPLAY yaml's claimant_services is [c-fwd, c-rev]; drop them from scope
+    # and add s only via scope -- s is restored from scope alone.
+    _a, records = _run(write_scenario, affected=["s"], priority=(), scope={"s"})
+    assert records[0]["outcome"] == "restored"
+
+
+# A depot service that is neither the SUT nor any claimant_services entry --
+# one the decider was merely SHOWN. 300 G, the SUT's own demand, and an id
+# that sorts BEFORE "s": exactly T2's indore-vs-SUT shape (plan Task 5, "Why
+# the priority is no longer stripped").
+SHOWN_ONLY = "a-shown"
+
+
+class _ShownOnlyCounting(_FakeCounting):
+    async def call(self, name, arguments=None, **kw):
+        result = await super().call(name, arguments, **kw)
+        if name == "get_services":
+            result = {"services": [*result["services"], {
+                "id": SHOWN_ONLY, "demand_gbps": 300.0,
+                "src_router": "router_tirupati",
+                "dst_router": "router_nellore"}]}
+        return result
+
+
+def _run_with_shown_only(write_scenario, *, affected, priority, scope):
+    scenario = load_scenario(
+        write_scenario(REPLAY_SCENARIO_YAML, "REPLAY_TEST.yaml"))
+    counting = _ShownOnlyCounting()
+    geometry = _geometry()
+    geometry = dataclasses.replace(
+        geometry,
+        endpoint_sites={**geometry.endpoint_sites,
+                        SHOWN_ONLY: ("tirupati", "nellore")},
+        path_oms={**geometry.path_oms,
+                  SHOWN_ONLY: {"working": (), "protection": ()}})
+    return asyncio.run(restore_after_cuts(
+        counting, scenario=scenario, hour="t1", hour_index=1,
+        affected=affected, priority=priority, scope=scope, ledger=_ledger(),
+        geometry=geometry, issuance=_issuance(), rg_for_cut_hour=None,
+        index_factory=_index_factory(counting)))
+
+
+def test_a_shown_dropped_non_roster_service_is_restored(write_scenario):
+    """Spec 8: 'a shown, dropped, restorable non-roster service is
+    restored' -- the old `{SUT} | claimant_services` roster would never
+    have attempted it at all."""
+    _a, records = _run_with_shown_only(
+        write_scenario, affected=[SHOWN_ONLY], priority=(),
+        scope={"s", "c-fwd", "c-rev", SHOWN_ONLY})
+    assert [(r["service_id"], r["outcome"]) for r in records] == [
+        (SHOWN_ONLY, "restored")]
+
+
+def test_a_never_shown_dropped_service_is_ignored(write_scenario):
+    """Spec 8: 'a never-shown dropped depot service is ignored'."""
+    _a, records = _run_with_shown_only(
+        write_scenario, affected=[SHOWN_ONLY, "s"], priority=(), scope={"s"})
+    assert [r["service_id"] for r in records] == ["s"]
+
+
+def test_a_ranked_sut_keeps_its_place_over_an_equal_demand_shown_service(
+        write_scenario):
+    """The ranking reaches the replay UNSTRIPPED (spec 4.5: 'standing
+    ranking first'): a SUT the decider ranked keeps first call on the spare
+    even though an unranked shown service of equal demand, whose id sorts
+    first, is dropped in the same cut."""
+    _a, records = _run_with_shown_only(
+        write_scenario, affected=[SHOWN_ONLY, "s"], priority=("s",),
+        scope={"s", SHOWN_ONLY})
+    assert [(r["service_id"], r["outcome"]) for r in records] == [
+        ("s", "restored"), (SHOWN_ONLY, "unaffordable")]
+    # And unranked, equal demand falls back to id order -- the case the
+    # stripped priority used to hit.
+    _a, records = _run_with_shown_only(
+        write_scenario, affected=[SHOWN_ONLY, "s"], priority=(),
+        scope={"s", SHOWN_ONLY})
+    assert [r["service_id"] for r in records] == [SHOWN_ONLY, "s"]
 
 
 class _TransientOutageCounting(_FakeCounting):
@@ -238,7 +334,8 @@ def test_a_transiently_dropped_service_is_restored_by_splitting_the_plan(
     counting = _TransientOutageCounting()
     actions, records = asyncio.run(restore_after_cuts(
         counting, scenario=scenario, hour="t1", hour_index=1,
-        affected=["c-fwd"], priority=("c-fwd",), ledger=_ledger(),
+        affected=["c-fwd"], priority=("c-fwd",), scope=DEFAULT_SCOPE,
+        ledger=_ledger(),
         geometry=_geometry(), issuance=_issuance(), rg_for_cut_hour=None,
         index_factory=_index_factory(counting)))
 
@@ -267,7 +364,8 @@ def test_a_non_transient_violation_is_still_a_rejection(write_scenario):
     counting = _RealViolation()
     actions, records = asyncio.run(restore_after_cuts(
         counting, scenario=scenario, hour="t1", hour_index=1,
-        affected=["c-fwd"], priority=("c-fwd",), ledger=_ledger(),
+        affected=["c-fwd"], priority=("c-fwd",), scope=DEFAULT_SCOPE,
+        ledger=_ledger(),
         geometry=_geometry(), issuance=_issuance(), rg_for_cut_hour=None,
         index_factory=_index_factory(counting)))
 
@@ -356,7 +454,7 @@ def test_the_replay_prefers_the_cheapest_workable_candidate(write_scenario):
                    "oms_alt": ["tirupati", "nellore"]})
     actions, records = asyncio.run(restore_after_cuts(
         counting, scenario=scenario, hour="t1", hour_index=1,
-        affected=["c-fwd"], priority=(), ledger=ledger,
+        affected=["c-fwd"], priority=(), scope=DEFAULT_SCOPE, ledger=ledger,
         geometry=_groom_geometry(), issuance=_issuance(), rg_for_cut_hour=None,
         index_factory=_index_factory(counting)))
     [record] = records
@@ -441,6 +539,7 @@ def test_the_t1a_shape_end_to_end_one_spare_a_mate_pair_cut_both_restored(
     actions, records = asyncio.run(restore_after_cuts(
         counting, scenario=scenario, hour="t1", hour_index=1,
         affected=["c-fwd", "c-rev"], priority=("c-fwd", "c-rev"),
+        scope=DEFAULT_SCOPE,
         ledger=ledger, geometry=_mate_pair_geometry(), issuance=_issuance(),
         rg_for_cut_hour=None, index_factory=_index_factory(counting)))
     by_service = {r["service_id"]: r for r in records}
@@ -519,6 +618,7 @@ def test_the_cheapest_first_sort_picks_the_mate_over_menu_order(write_scenario):
     actions, records = asyncio.run(restore_after_cuts(
         counting, scenario=scenario, hour="t1", hour_index=1,
         affected=["c-fwd", "c-rev"], priority=("c-fwd", "c-rev"),
+        scope=DEFAULT_SCOPE,
         ledger=ledger, geometry=_mate_pair_choice_geometry(), issuance=_issuance(),
         rg_for_cut_hour=None, index_factory=_index_factory(counting)))
     by_service = {r["service_id"]: r for r in records}

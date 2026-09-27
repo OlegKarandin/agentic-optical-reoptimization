@@ -166,6 +166,7 @@ gold:
     t3-claimant-jalgaon-buldhana     1000.000     1000.000
     TOTAL                           14000.000    14600.000
     gold: spend (argmin total Gbps-hours lost, margin 600.000 over 'hold')
+    hold ranking: t1-svc-jalgaon-indore > t3-svc-jalgaon-nagpur > t3-claimant-jalgaon-khandwa > d0346 > d0422 > t1-claimant-jalgaon-dhulia-fwd > t1-claimant-jalgaon-dhulia-rev
   outcome_gbps_h:
     spend: 14000.0
     hold: 14600.0

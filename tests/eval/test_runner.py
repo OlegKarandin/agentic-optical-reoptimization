@@ -864,6 +864,15 @@ def test_a_baseline_rollout_completes_and_records_every_hour(
     assert trace.terminal_status in {"converged", "declared_infeasible"}
     assert trace.tool_calls > 0
     assert all("timing" in h for h in trace.hours)
+    # 2026-09-27 spec 4.5: the replay's scope is every service SHOWN this
+    # episode, accumulated hour over hour and recorded on each hour -- it
+    # always names the SUT, and never shrinks.
+    sut = _scenario(tmp_path).service_under_test
+    shown = [set(h["shown_services"]) for h in trace.hours]
+    assert all(sut in s for s in shown), shown
+    assert all(a <= b for a, b in zip(shown, shown[1:])), shown
+    assert all(h["shown_services"] == sorted(h["shown_services"])
+               for h in trace.hours)
 
 
 def test_committed_steps_and_hours_carry_inert_and_timing_effective(

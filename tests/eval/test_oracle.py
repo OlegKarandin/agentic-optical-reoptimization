@@ -218,6 +218,15 @@ def test_hold_decider_claim_priority_puts_claimants_first(write_scenario):
         assert _run(decider.timing(_dummy_obs(hour))).claim_priority == expected
 
 
+def test_hold_decider_states_the_given_ranking(write_scenario):
+    d = hold_decider(_scenario(write_scenario), claim_priority=("x", "y"))
+    assert d._default_timing.claim_priority == ("x", "y")   # ScriptedDecider stores it privately
+    for hour in ("t0", "t1", "t2", "t3"):
+        timing = _run(d.timing(_dummy_obs(hour)))
+        assert timing.action == "wait"
+        assert timing.claim_priority == ("x", "y")
+
+
 def test_spend_decider_constraints_avoid_the_latest_horizon_risk_group(
         write_scenario):
     decider = spend_decider(_scenario(write_scenario))

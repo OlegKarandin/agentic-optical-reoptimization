@@ -1031,6 +1031,14 @@ async def run_episode(
     # way `actions` is, and for the same reason (observation.py's own comment
     # on the field).
     probe_answers_this_episode: list[dict] = []
+    # Every service SHOWN to the decider so far this episode: the union of
+    # each hour's projected `exposure` keys (2026-09-27 spec 4.5). It is the
+    # post-cut replay's scope -- the agent is told every service shown is a
+    # real competing claim, so every one of them is restored when cut, not
+    # only an authored claimant roster. Accumulated on skipped hours too:
+    # what the replay restores follows what the observation carried, not
+    # whether the decider happened to be consulted that hour.
+    shown_services: set[str] = set()
 
     for hour_index, hour in enumerate(scenario.hours):
         record: dict = {"hour": hour, "iterations": [], "rejections": []}
@@ -1143,6 +1151,8 @@ async def run_episode(
             obs, p_cut_threshold=getattr(
                 decider, "_p_cut_threshold", P_CUT_ENUMERATION_THRESHOLD),
         )["exposure"]
+        shown_services.update(projected_exposure)
+        record["shown_services"] = sorted(shown_services)
         probe = ProbeBinding(
             answer=lambda service_id, risk_group_id: _probe_answer(
                 service_id=service_id, risk_group_id=risk_group_id),
@@ -1408,16 +1418,18 @@ async def run_episode(
             # this hour's own `record["timing"]`: under the decidable-hours
             # rule a cut hour may have no decision of its own at all, and an
             # empty `claim_priority` means "keep the standing one" rather
-            # than "no opinion" even when it does. The actionable service is
-            # removed here because the replay's `scope` handles it
-            # separately -- the ranking now INCLUDES it (spec 6.3), which it
-            # did not when this call site was written.
-            priority = tuple(
-                svc for svc in standing_claim_priority
-                if svc != scenario.service_under_test)
+            # than "no opinion" even when it does. The ranking INCLUDES the
+            # actionable service (spec 6.3) and is passed UNSTRIPPED
+            # (2026-09-27 spec 4.5, "standing ranking first"): stripping it
+            # would place the SUT by demand among the unranked, where a
+            # shown service of equal demand whose id sorts first overtakes
+            # a SUT the decider ranked. The scope is every service shown
+            # this episode through this hour, plus the SUT.
             restore_actions, restore_records = await restore_after_cuts(
                 counting, scenario=scenario, hour=hour, hour_index=hour_index,
-                affected=record["dropped_after_cut"], priority=priority,
+                affected=record["dropped_after_cut"],
+                priority=standing_claim_priority,
+                scope=shown_services | {scenario.service_under_test},
                 ledger=ledger, geometry=geometry, issuance=issuance,
                 rg_for_cut_hour=rg_ids.get(hour),
                 index_factory=lambda: build_topology_index(client))

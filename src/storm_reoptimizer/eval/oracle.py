@@ -179,18 +179,27 @@ def spend_decider(scenario: ScenarioFile) -> ScriptedDecider:
         objective_fn=escape_objective)
 
 
-def hold_decider(scenario: ScenarioFile) -> ScriptedDecider:
+def hold_decider(scenario: ScenarioFile,
+                 claim_priority: tuple[str, ...] | None = None,
+                 ) -> ScriptedDecider:
     """Never act on the service under test -- the HOLD policy. `timing`
     always waits, so `constraints`/`objective` are never consulted by
     `run_episode` (only reached when `timing.action == "act"`); no
     `objective_fn` is wired for the same reason.
 
-    `claim_priority` states the opposite bias from `spend_decider`: the
-    claimants first, in the scenario's own declared order, then the service
-    under test -- hold reasons the claimants' risk outweighs the SUT's, so
-    the harness's post-cut restoration replay spends whatever spare remains
-    on them before it ever reaches the SUT."""
-    claim_priority = (*_claimants(scenario), scenario.service_under_test)
+    `claim_priority` is who the held spare goes to, in order, when the
+    harness's post-cut restoration replay runs. Given, it is stated as-is
+    on every hour's `TimingDecision`: `gold.enumerate_outcomes` passes
+    `spare_value.best_hold_ranking` of the live decision-hour facts
+    (2026-09-27 spec 4.6), so gold's hold branch is judged at its best --
+    every restorable shown service, by Gbps-hours a restore saves, then the
+    SUT -- never by an arbitrary roster order. Omitted (`None`), it is the
+    opposite bias from `spend_decider`: the claimants first, in the
+    scenario's own declared order, then the service under test -- the
+    ranking every caller got before the 2026-09-27 spec."""
+    if claim_priority is None:
+        claim_priority = (*_claimants(scenario), scenario.service_under_test)
+    claim_priority = tuple(claim_priority)
     return ScriptedDecider(
         f"oracle:hold:{scenario.id}",
         default_timing=TimingDecision(
