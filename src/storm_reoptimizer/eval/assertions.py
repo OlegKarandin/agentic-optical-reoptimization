@@ -1958,43 +1958,24 @@ async def claimant_probe_answers(client: Client, scenario: ScenarioFile, *,
     issuance's own latest-horizon risk group, defined EXACTLY as
     `oracle.spend_risk_group` + `runner.horizon_risk_group_asset_ids` define
     it (the same discipline `assert_spend_is_real` follows). Pre-decision
-    realized cuts are replayed first, as `menu_at_decision_hour` does."""
-    import functools
-    from .oracle import spend_risk_group
-    from .probe import answer_probe
+    realized cuts are replayed first, as `menu_at_decision_hour` does.
 
-    edges = load_edges(topology_path)
-    d = scenario.decision_hour
-    for hour in scenario.hours[:scenario.hours.index(d)]:
-        cuts = scenario.realized.get(hour, ())
-        if cuts:
-            await call_tool_json(client, "inject_failure",
-                                 {"asset_ids": list(cuts)})
+    A thin wrapper (2026-09-27 plan, Task 4) over `spare_value.
+    probe_answers_under_decision_group`, which holds the actual body -- one
+    probing code path, not two -- called here with `scenario.metadata[
+    "claimant_services"]` as `service_ids`. That function raises a plain
+    `ValueError` when `oracle.spend_risk_group` cannot compute a risk group
+    (it does not import this module's `PairInvalid`); this wrapper is what
+    turns that into the `PairInvalid` every other pre-flight failure in this
+    module raises."""
+    from .spare_value import probe_answers_under_decision_group
+
     try:
-        horizon, rg_id = spend_risk_group(scenario)
+        return await probe_answers_under_decision_group(
+            client, scenario, scenario.metadata.get("claimant_services", ()),
+            topology_path=topology_path)
     except ValueError as e:
         raise PairInvalid(str(e)) from e
-    issuance = scenario.forecast[d]
-    geometry = await service_geometry(client, topology_path, edges=edges)
-    topo = await call_tool_json(client, "get_topology", {"layer": "optical"})
-    await call_tool_json(client, "define_risk_group", {
-        "rg_id": rg_id,
-        "asset_ids": horizon_risk_group_asset_ids(
-            issuance.horizons[horizon], scenario.damage_radius_km,
-            edges=edges, oms=topo["oms"], filter_fn=get_filter(EVENT_TYPE)),
-        "metadata": {"event_type": EVENT_TYPE, "scenario": scenario.id,
-                     "issued_at": d, "horizon": horizon}})
-    services = (await call_tool_json(client, "get_services"))["services"]
-    demands = {s["id"]: float(s["demand_gbps"]) for s in services}
-    call = functools.partial(call_tool_json, client)
-    answers = {}
-    for claimant in scenario.metadata.get("claimant_services", ()):
-        answer = await answer_probe(
-            call, service_id=claimant, risk_group_id=rg_id, geometry=geometry,
-            issuance=issuance, damage_radius_km=scenario.damage_radius_km,
-            demands=demands)
-        answers[claimant] = answer.to_dict()
-    return answers
 
 
 async def assert_probe_flips(client_a: Client, client_b: Client,

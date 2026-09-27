@@ -174,6 +174,77 @@ def test_pair_probe_flips(pair, connect_for):
     asyncio.run(_run())
 
 
+def test_decision_facts_reproduce_the_spec_tables_for_t2(connect_for):
+    """Live smoke test for `spare_value.decision_facts` (2026-09-27 plan,
+    Task 4). §3.3 of the T2-correlated-claims design hand-computes T2a's
+    and T2b's joint cut-outcome tables at the decision hour's own latest
+    horizon; this checks the live-gathered `DecisionFacts.rows` reproduce
+    those same (down-set, p) pairs within `abs=1e-3` (this project's
+    standard pair-equality tolerance -- `derived.DERIVED_TOLERANCE`), and
+    that khandwa's restorability flips True (T2a) / False (T2b) exactly as
+    the spec's own narrative says it does."""
+    from storm_reoptimizer.eval.spare_value import decision_facts
+
+    sut = "t2-svc-jalgaon-nagpur"
+    indore = "t1-svc-jalgaon-indore"
+    khandwa = "t2-claimant-jalgaon-khandwa"
+    dfwd = "t1-claimant-jalgaon-dhulia-fwd"
+    drev = "t1-claimant-jalgaon-dhulia-rev"
+    all_seven = frozenset(
+        {sut, indore, khandwa, dfwd, drev, "d0346", "d0422"})
+
+    expected_rows = {
+        "T2a": {
+            frozenset(): 0.426,
+            frozenset({khandwa}): 0.279,
+            frozenset({indore, khandwa}): 0.151,
+            all_seven: 0.145,
+        },
+        "T2b": {
+            frozenset({khandwa}): 0.820,
+            all_seven: 0.145,
+            frozenset({indore, khandwa}): 0.021,
+            frozenset(): 0.015,
+        },
+    }
+
+    async def _facts(half):
+        scenario = load_all_scenarios()[half]
+        async with connect_for(scenario.state_file)() as client:
+            return await decision_facts(client, scenario,
+                                        topology_path=TOPOLOGY_PATH)
+
+    facts = {half: asyncio.run(_facts(half)) for half in ("T2a", "T2b")}
+
+    for half, expected in expected_rows.items():
+        actual = dict(facts[half].rows)
+        # Every row §3.3 names must be present with a matching probability
+        # within tolerance.
+        for down, p in expected.items():
+            assert down in actual, (
+                f"{half}: row {sorted(down)} (p={p}) from spec §3.3 is "
+                f"missing from the live table {sorted((sorted(d), p) for d, p in actual.items())}")
+            assert actual[down] == pytest.approx(p, abs=1e-3), (
+                f"{half}: row {sorted(down)} p={actual[down]} != {p}")
+        # T2b's live table carries two additional rows §3.3's hand table
+        # does not list (a dhulia-bundle-without-khandwa split, from a
+        # boundary correlation nuance the hand computation missed), summing
+        # to ~7.6e-5 -- three orders of magnitude below this check's own
+        # tolerance and recorded rather than hidden: any UNLISTED row must
+        # still be small enough not to matter to the spend/hold arithmetic.
+        extra_mass = sum(p for down, p in actual.items() if down not in expected)
+        assert extra_mass < 1e-3, (
+            f"{half}: {extra_mass} of unlisted-row probability mass is too "
+            f"large to be a boundary-correlation artifact: "
+            f"{sorted((sorted(d), p) for d, p in actual.items() if d not in expected)}")
+        assert sum(p for _, p in facts[half].rows) == pytest.approx(1.0, abs=1e-6)
+
+    assert facts["T2a"].restorable[khandwa] is True, (
+        "T2a: khandwa must be restorable under its own decision-hour group")
+    assert facts["T2b"].restorable[khandwa] is False, (
+        "T2b: khandwa must NOT be restorable under its own decision-hour group")
+
+
 # T1/T2's flip variable (2026-09-05 redesign, extended to T2 by the 2026-09-06
 # probe redesign) is the SPEND/HOLD decision, which the harness expresses as
 # the timing decision plus a real, spare-consuming objective pick --
