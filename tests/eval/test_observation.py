@@ -500,7 +500,21 @@ def test_probe_answers_carry_across_the_episode_on_the_observation(scenario):
                             services=SERVICES, spares_on_hand=1,
                             probe_answers_this_episode=carried)
     assert obs.probe_answers_this_episode == carried
-    assert obs.to_dict()["probe_answers_this_episode"] == list(carried)
+    # No risk_group_ids are passed above, so the carried entry's group is
+    # never current -- the "current" key to_dict() adds is False here.
+    assert obs.to_dict()["probe_answers_this_episode"] == [
+        {**carried[0], "current": False}]
+
+
+def test_a_carried_answer_under_a_superseded_group_is_not_current(scenario):
+    carried = ({"hour": "t0", "decision": "timing", "service_id": "svc-b",
+                "risk_group_id": "rg_X_t0_t3", "status": "solution"},
+               {"hour": "t1", "decision": "timing", "service_id": "svc-b",
+                "risk_group_id": "rg_X_t1_t3", "status": "no_solution"})
+    obs = build_observation(scenario, "t1", service_spans=SPANS, services=SERVICES,
+                            spares_on_hand=1, risk_group_ids={"t3": "rg_X_t1_t3"},
+                            probe_answers_this_episode=carried)
+    assert [e["current"] for e in obs.to_dict()["probe_answers_this_episode"]] == [False, True]
 
 
 def test_the_carried_probe_field_is_always_emitted_even_when_empty(scenario):

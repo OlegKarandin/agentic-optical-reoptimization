@@ -366,6 +366,11 @@ class Observation:
     # Distinct from `decided_this_hour.probe_answers`, which is THIS hour's,
     # rebuilt per iteration: one says "what I have asked in this decision",
     # this one "what I have ever asked".
+    #
+    # Stored here WITHOUT a `current` flag -- `to_dict` adds it per entry at
+    # serialization time, since "current" is a fact about THIS hour's own
+    # `risk_group_ids`, not about the stored answer, and would go stale the
+    # moment it was cached on the tuple instead (spec 4.4).
     probe_answers_this_episode: tuple[dict, ...] = ()
     # service_id -> horizon hour -> the per-sample boolean cut mask
     # (cone.service_cut_mask) `p_cut` at that (service, horizon) already
@@ -427,8 +432,17 @@ class Observation:
             "deadline_hour": self.deadline_hour,
             "next_issuance": self.next_issuance,
             "standing_claim_priority": list(self.standing_claim_priority),
+            # "current": whether the entry's risk_group_id is one of THIS
+            # hour's own group ids (spec 4.4). Group ids embed issuance and
+            # horizon (`rg_{id}_{issued}_{h}`), so a reissued cone -- even one
+            # that barely moved -- mints a new id, and simple membership is
+            # the correct staleness test: a superseded answer was correct for
+            # the group it names, but that group is not this hour's.
             "probe_answers_this_episode": [
-                dict(entry) for entry in self.probe_answers_this_episode],
+                {**dict(entry),
+                 "current": entry["risk_group_id"] in set(
+                     self.risk_group_ids.values())}
+                for entry in self.probe_answers_this_episode],
             "hours_down_if_cut": self.hours_down_if_cut,
         }
         # Present only where the harness actually supplied them, so the

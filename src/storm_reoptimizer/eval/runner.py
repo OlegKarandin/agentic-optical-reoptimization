@@ -51,7 +51,7 @@ from .decisions import (ConstraintDecision, Decider, HOLD_CHOICE,
 from .ledger import SpareLedger, spares_needed
 from .observation import build_observation, latest_issuance, lead_time_hours_for
 from .plans import PlanTranslationError, build_topology_index, plan_from_candidate
-from .probe import ProbeBinding, answer_probe
+from .probe import ProbeBinding, answer_probe, unrestorable_under
 from .replay import restore_after_cuts
 from .risk_assets import fiber_span_index, path_edges, risk_group_rows
 from .scenario_file import ConeAtHorizon, Issuance, ScenarioFile
@@ -372,10 +372,21 @@ def menu_with_path_facts(menu: dict, geometry: ServiceGeometry,
 
 
 def ranking_conflict(candidate: dict, *, standing: tuple[str, ...],
-                     actionable: str, spares_on_hand: int, ledger
+                     actionable: str, spares_on_hand: int, ledger,
+                     unrestorable: frozenset[str] = frozenset(),
                      ) -> dict | None:
     """The typed rejection for "you ranked someone else ahead of the service
     you are about to spend the depot's last spare on", or None.
+
+    `unrestorable` (spec §4.7) names ids the funded prefix SKIPS over rather
+    than counting against `spares_on_hand`: an id the agent's OWN probe, under
+    THIS hour's current risk group, answered `no_solution` for. A never-
+    probed or stale-probed id is not skipped -- it still counts, and can still
+    block the actionable service. This harness deliberately never computes
+    restorability on the agent's behalf here: doing so would make this gate's
+    accept/reject decision itself reveal which way a T2-shaped pair (an
+    otherwise-identical claimant that either can or cannot be restored) is
+    meant to flip, for a claimant the agent never asked about.
 
     `claim_priority` and `action` were inverted in the 2026-09-09 run: T3a
     at t1 ranked the actionable service FOURTH and then spent the spare on
@@ -410,7 +421,7 @@ def ranking_conflict(candidate: dict, *, standing: tuple[str, ...],
     if not spares_needed(candidate, ledger.oms_nodes,
                          lit_runs=ledger.lit_runs).get(ledger.depot_site):
         return None
-    funded = list(standing[:spares_on_hand])
+    funded = [s for s in standing if s not in unrestorable][:spares_on_hand]
     if actionable in funded:
         return None
     return {
@@ -1298,7 +1309,11 @@ async def run_episode(
                 conflict = ranking_conflict(
                     candidate, standing=standing_claim_priority,
                     actionable=scenario.service_under_test,
-                    spares_on_hand=ledger.on_hand, ledger=ledger)
+                    spares_on_hand=ledger.on_hand, ledger=ledger,
+                    unrestorable=unrestorable_under(
+                        probe_answers_this_episode
+                        + probe_answers(probe.records, hour=hour),
+                        set(rg_ids.values())))
                 if conflict is not None:
                     last_rejection = conflict
                     record["rejections"].append(last_rejection)

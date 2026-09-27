@@ -78,6 +78,28 @@ def _spare_cost(needed: dict[str, int]) -> tuple[int, list[tuple[str, int]]]:
     return sum(needed.values()), sorted(needed.items())
 
 
+def unrestorable_under(answers: Iterable[dict],
+                       current_group_ids: Iterable[str]) -> frozenset[str]:
+    """Services whose LATEST answer under a CURRENT group is `no_solution`
+    (spec §4.7). `answers` is typically the episode's carried
+    `probe_answers_this_episode` plus this hour's own new answers; only
+    entries whose `risk_group_id` is in `current_group_ids` are considered --
+    a stale answer, from a superseded group, never enters the result, so the
+    "superseded group -> rejected" case is handled by this filter alone, with
+    no separate staleness check needed.
+
+    Only the agent's OWN probes count: a harness-side restorability check
+    here would make `ranking_conflict`'s accept/reject decision itself reveal
+    which way a T2-shaped pair flips, for a claimant the agent never asked
+    about."""
+    current = set(current_group_ids)
+    latest: dict[str, str | None] = {}
+    for a in answers:
+        if a["risk_group_id"] in current:
+            latest[a["service_id"]] = a.get("status")
+    return frozenset(s for s, status in latest.items() if status == "no_solution")
+
+
 async def answer_probe(call, *, service_id: str, risk_group_id: str,
                        geometry, issuance, damage_radius_km: float,
                        demands: dict[str, float],

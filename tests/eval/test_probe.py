@@ -10,7 +10,7 @@ import pytest
 from storm_reoptimizer.eval import oracle
 from storm_reoptimizer.eval.probe import (
     MAX_PROBES_PER_DECISION, ProbeAnswer, ProbeBinding, ProbeError, answer_probe,
-    probe_scope,
+    probe_scope, unrestorable_under,
 )
 from storm_reoptimizer.eval.runner import (
     EVENT_TYPE, ServiceGeometry, horizon_risk_group_asset_ids, run_episode,
@@ -208,6 +208,14 @@ def test_probe_scope_is_the_one_phrasing_both_sides_use():
         status="solution", full_restore_candidates=0,
         min_spares_needed_by_site=None, levers=(),
         scope=probe_scope("rg_z")).to_dict()["scope"]
+
+
+def test_only_a_current_no_solution_marks_a_service_unrestorable():
+    answers = [{"service_id": "k", "risk_group_id": "rg_t0", "status": "no_solution"},
+               {"service_id": "i", "risk_group_id": "rg_t1", "status": "no_solution"},
+               {"service_id": "j", "risk_group_id": "rg_t1", "status": "no_solution"},
+               {"service_id": "j", "risk_group_id": "rg_t1", "status": "solution"}]
+    assert unrestorable_under(answers, {"rg_t1"}) == frozenset({"i"})   # latest current answer wins
 
 
 def test_the_probe_answers_what_the_replay_then_does_on_t1a(

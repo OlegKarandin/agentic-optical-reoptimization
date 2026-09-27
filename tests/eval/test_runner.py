@@ -2080,6 +2080,23 @@ def test_a_candidate_charging_the_depot_nothing_still_never_conflicts():
         spares_on_hand=1, ledger=ledger) is None
 
 
+STANDING = ("t2-claimant-jalgaon-khandwa", "storm-svc-1")
+
+
+def test_a_current_no_solution_claimant_is_skipped_by_the_funded_prefix():
+    assert runner.ranking_conflict(
+        _DEPOT_CANDIDATE, standing=STANDING,
+        actionable="storm-svc-1", spares_on_hand=1, ledger=_LEDGER,
+        unrestorable=frozenset({"t2-claimant-jalgaon-khandwa"})) is None
+
+
+def test_an_unprobed_claimant_still_blocks_the_spend():
+    assert runner.ranking_conflict(
+        _DEPOT_CANDIDATE, standing=STANDING,
+        actionable="storm-svc-1", spares_on_hand=1,
+        ledger=_LEDGER)["type"] == "ranking_conflict"
+
+
 def test_probe_answers_stamps_the_hour_and_decision_only_when_asked():
     records = [
         {"decision": "timing", "service_id": "svc-b",
