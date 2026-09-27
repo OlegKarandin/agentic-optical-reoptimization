@@ -422,6 +422,13 @@ service would show if the next issuance moved the cone centre by \
 `revision_radius_km` in any direction. `p_cut` says how likely the cut is \
 if this issuance is right; the band says how much that number can change \
 when the issuance is revised.
+- `cut_outcomes` -- per horizon, rows of shown services that go down TOGETHER \
+in one storm outcome; rows are mutually exclusive and sum to 1; a service's \
+`p_cut` is the sum of the rows containing it; rare outcomes are folded into \
+one `other` row.
+- `hours_down_if_cut` -- per horizon, the hours a service cut there stays \
+down if never restored (`unrestored`) and if restored by a new lightpath \
+after the cut (`restored_after_cut`).
 - `spares_on_hand` -- spare transponders held at `depot_site`, the one site \
 whose inventory (the scenario's own `spare_inventory`, held per site) is \
 scarce in this episode. Lighting a new lightpath consumes one transponder at \
@@ -430,29 +437,34 @@ site is stocked well enough that only `depot_site` ever binds. This \
 inventory is invisible to the routing tools: they will happily propose a \
 candidate the depot cannot fulfil, and the harness will reject that choice.
 \n\
-  That depot is SHARED -- with the other services that terminate at the same \
-site. A transponder used there is not available to them. Order matters: \
-a service cut in an EARLIER hour reaches the depot before one cut later, and \
-among services cut in the same hour the larger demand has the stronger \
-claim. You are not asked to restore them and their restoration is not \
-simulated, but their claim on this site's inventory is real.
+  That depot is SHARED with the other services that terminate at the same \
+site. After a cut, the harness gives whatever spares remain to the services \
+the cut dropped: first the ones you ranked in `claim_priority`, in that \
+order, skipping any that were not cut or that no route can restore; then \
+every other service shown to you in this episode, largest demand first. A \
+service never shown to you in this episode is not restored.
 \n\
   Services that do not terminate at `depot_site` are summarized under \
 `omitted_services.ineligible_for_depot`. They may be badly exposed; they are \
 not competing for this inventory, because restoring them draws on their own \
 sites' depots.
-- `claim_priority` -- an ordering of the services shown, most deserving of \
-this depot's spares first, INCLUDING the actionable service. A cut, if the \
-storm makes one, happens at a horizon hour. At that hour you give a timing \
-decision first; the cut is injected after it; the harness then restores \
-the services the cut dropped, in the ranking in force at that moment, with \
-whatever spares REMAIN, each restoration effective after its lever's lead \
-time. The ranking in force is the last one you stated, and \
-`standing_claim_priority` shows it. State a `claim_priority` at EVERY timing \
-decision -- restate the standing one unchanged if it is still your ordering; \
-an empty list is rejected. Ranking another service above the actionable one \
-and then committing the depot's last spare to the actionable one is a \
-contradiction, and the harness rejects that commit.
+- `claim_priority` -- who a HELD spare is FOR: the order in which the harness \
+offers the remaining spares after a cut. It is not a ranking of who is most \
+exposed. An ordering of the services shown, most deserving of this depot's \
+spares first, INCLUDING the actionable service. A cut, if the storm makes \
+one, happens at a horizon hour. At that hour you give a timing decision \
+first; the cut is injected after it; the harness then restores the services \
+the cut dropped, in the ranking in force at that moment, with whatever spares \
+REMAIN, each restoration effective after its lever's lead time. The ranking \
+in force is the last one you stated, and `standing_claim_priority` shows it. \
+State a `claim_priority` at EVERY timing decision -- restate the standing one \
+unchanged if it is still your ordering; an empty list is rejected. Committing \
+a spare at `depot_site` to the actionable service is rejected unless it is \
+among the first `spares_on_hand` entries of the standing ranking, not \
+counting any service whose latest `current` probe answer is `no_solution`. \
+Ranking another service above the actionable one and then committing the \
+depot's last spare to the actionable one is a contradiction, and the harness \
+rejects that commit.
 - `actions_taken` and `spares_spent` -- what YOU have already committed \
 earlier in this episode: per action its hour, its lever, the spare pairs it \
 cost, the `avoid` set it was routed under, and `effective_at_hour` -- the \
@@ -464,9 +476,12 @@ the `exposure` above describes its CURRENT path, not the path it had when \
 you acted.
 - `probe_answers_this_episode` -- every answer `probe_restorability` has \
 returned anywhere in this episode so far, oldest first, each stamped with the \
-`hour` and the `decision` it was bought at. Each request is a fresh \
-conversation, so this list is the only record you have of what you already \
-asked and what came back.
+`hour` and the `decision` it was bought at. Each answer carries `current`: \
+true when the answer was obtained under a risk group that is still in \
+`risk_group_ids`. A superseded answer was correct for the group it names; \
+each issuance issues new group ids even when the cone barely moved. Each \
+request is a fresh conversation, so this list is the only record you have \
+of what you already asked and what came back.
 - `lead_time_hours` -- hours between issuing an action on a lever and it \
 being effective, per lever. An `ip_reroute` is a config change and lands \
 immediately. Lighting a new optical path is provisioning and takes the \
@@ -532,7 +547,9 @@ would offer that service if every asset in that risk group were unusable: \
 `status`, `full_restore_candidates` (how many candidates restore its full \
 demand on a genuinely different path), `min_spares_needed_by_site` (the \
 cheapest such candidate's spare transponders per site, or null if there is \
-none) and `levers`. It computes and changes nothing. You may call it up to \
+none) and `levers` -- lists every lever that has at least one full-restore \
+candidate; a lever absent from it cannot fully restore the service under that \
+group. It computes and changes nothing. You may call it up to \
 """ + str(MAX_PROBES_PER_DECISION) + """ times per decision, before the \
 decision tool; the answer comes back as a tool result. You may call it at \
 any of the three decisions, ahead of that decision's tool call.

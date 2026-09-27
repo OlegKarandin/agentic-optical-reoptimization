@@ -1749,3 +1749,45 @@ def test_the_prompt_bullet_names_the_wire_field():
     # W3.2's measured arm: only the NAME moves. What the bullet asserts about
     # the field must be identical.
     assert "across groups only the MAXIMUM is an honest competing" in SYSTEM_PROMPT
+
+
+def test_the_prompt_states_the_real_replay_scope():
+    """Task 5 made the replay restore every shown service, not a hand-picked
+    roster. Task 6 brings the prompt's text in line with what the harness
+    actually does now."""
+    # Old text that is now FALSE
+    assert "their restoration is not simulated" not in SYSTEM_PROMPT
+    # New text that is now TRUE
+    assert "never shown to you in this episode is not restored" in SYSTEM_PROMPT
+
+
+def test_the_prompt_describes_cut_outcomes_and_hours_down_if_cut():
+    """The new joint cut_outcomes table and hours_down_if_cut field from Task 5."""
+    assert "cut_outcomes" in SYSTEM_PROMPT
+    assert "hours_down_if_cut" in SYSTEM_PROMPT
+
+
+def test_the_prompt_describes_current_flag_on_probe_answers():
+    """Task 2 added a `current` flag to carried probe answers."""
+    assert "`current`" in SYSTEM_PROMPT
+
+
+def test_the_prompt_describes_levers_field():
+    """The `levers` field in probe_restorability response."""
+    assert "a lever absent from it cannot fully restore" in SYSTEM_PROMPT
+
+
+def test_the_prompt_clarifies_claim_priority_is_not_exposure_ranking():
+    """Clarify that claim_priority is not a ranking of exposure."""
+    assert "not a ranking of who is most exposed" in SYSTEM_PROMPT
+
+
+def test_the_system_prompt_never_leaks_scoring_internals_still_passes():
+    """Verify the existing leak test still passes after Task 6 changes."""
+    lowered = SYSTEM_PROMPT.lower()
+    for leak in ("flip_variable", "flip variable", "pair_solved", "gold",
+                 "cites_", "label_correct", "scoring", "spend",
+                 "hold the spare for", "claimant"):
+        assert leak not in lowered, leak
+    for leak in ("T1", "T2", "T3"):
+        assert leak not in SYSTEM_PROMPT, leak
