@@ -19,6 +19,7 @@ from storm_reoptimizer.eval.assertions import (
     assert_no_global_policy_solves_the_suite,
     assert_realized_cuts_pass_the_event_filter, assert_sampling_error_within_margin,
     assert_shared_scalars_equal, assert_spend_is_real, claimant_service_ids,
+    expected_value_mismatch, realized_cut_mismatches,
 )
 from storm_reoptimizer.eval.derived import FlipScalars
 from storm_reoptimizer.eval.scenario_file import (
@@ -1296,3 +1297,54 @@ def test_the_two_halves_must_declare_different_expectations(tmp_path):
         {"kind": "restorable", "claimant": "c1", "expected": "restorable"})
     problems = probe_flip_mismatches(a, {"c1": RESTORABLE}, b, {"c1": RESTORABLE})
     assert any("differ" in p for p in problems)
+
+
+# Checks 4.9(a)/(b) (2026-09-27 T2-correlated-claims spec, Task 7). Pure
+# halves only -- the live async checks (`assert_realized_cut_is_a_forecast_
+# outcome`, `assert_expected_value_agrees_with_gold`) are exercised in
+# tests/eval/test_episodes.py, over the real seven shipped episodes.
+def test_realized_cut_mismatches_accepts_a_positive_probability_row():
+    rows = ((frozenset({"a"}), 0.8), (frozenset(), 0.2))
+    assert realized_cut_mismatches({"a"}, rows) is None
+
+
+def test_realized_cut_mismatches_rejects_a_set_no_row_names():
+    rows = ((frozenset({"a"}), 0.8), (frozenset(), 0.2))
+    problem = realized_cut_mismatches({"a", "b"}, rows)
+    assert problem is not None
+    assert "a" in problem and "b" in problem
+
+
+def test_realized_cut_mismatches_rejects_a_zero_probability_match():
+    rows = ((frozenset({"a"}), 0.0), (frozenset(), 1.0))
+    problem = realized_cut_mismatches({"a"}, rows)
+    assert problem is not None
+
+
+def test_expected_value_mismatch_accepts_agreement_with_a_wide_margin(t1a):
+    scenario = _with_gold(t1a, label="spend")
+    assert expected_value_mismatch(
+        scenario, {"spend": 217.5, "hold": 149.4}) is None
+
+
+def test_expected_value_mismatch_rejects_disagreement_with_the_label(t1a):
+    scenario = _with_gold(t1a, label="hold")
+    problem = expected_value_mismatch(
+        scenario, {"spend": 217.5, "hold": 149.4})
+    assert problem is not None
+
+
+def test_expected_value_mismatch_rejects_a_margin_below_the_floor(t1a):
+    scenario = _with_gold(t1a, label="spend")
+    problem = expected_value_mismatch(scenario, {"spend": 100, "hold": 90})
+    assert problem is not None
+
+
+def test_expected_value_mismatch_skips_a_non_spare_action_label_rule(t1a):
+    scenario = _with_gold(t1a, label="hold")
+    scenario = dataclasses.replace(
+        scenario, metadata={**scenario.metadata,
+                            "label_rule": "timing_at_decision_hour"})
+    # Values that would otherwise disagree with the label AND fall below
+    # the floor -- the check must not fire at all for this label rule.
+    assert expected_value_mismatch(scenario, {"spend": 1.0, "hold": 0.0}) is None

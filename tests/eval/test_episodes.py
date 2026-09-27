@@ -9,13 +9,15 @@ import pytest
 
 from storm_reoptimizer.eval import oracle
 from storm_reoptimizer.eval.assertions import (
-    assert_both_legs_exposed, assert_flip_dominates,
+    assert_both_legs_exposed, assert_expected_value_agrees_with_gold,
+    assert_flip_dominates,
     assert_pair_derived_geometry_is_equal, assert_probe_flips,
     assert_each_baseline_variant_ties, assert_gold_choices_differ,
     assert_gold_matches_outcomes, assert_gold_spare_action_is_grounded,
     assert_issuance_prefix_shared,
     assert_menus_identical, assert_no_global_policy_solves_the_suite,
-    assert_non_flip_decisions_non_binding, assert_revision_band_equal_at_t0,
+    assert_non_flip_decisions_non_binding,
+    assert_realized_cut_is_a_forecast_outcome, assert_revision_band_equal_at_t0,
     assert_risk_group_assets_cover_realized, assert_spend_is_real,
     assert_risk_group_covers_measurable_exposure, assert_shared_scalars_equal,
     assert_wait_gold_has_no_free_escape,
@@ -778,6 +780,42 @@ def test_the_risk_group_assets_cover_every_realized_cut(scenario_id, connect_for
     async def _run():
         async with connect_for(scenario.state_file)() as client:
             await assert_risk_group_assets_cover_realized(
+                client, scenario, topology_path=TOPOLOGY_PATH)
+
+    asyncio.run(_run())
+
+
+# stale_pair (2026-09-27 controller/user decision, Task 7 of the
+# 2026-09-27 t2-correlated-claims plan): D1's own `realized` block cuts
+# only storm-svc-1's WORKING leg, while its `cut_outcomes` table at that
+# same horizon gives probability 1.0 ONLY to the JOINT outcome (storm-svc-1
+# AND both satna-jabalpur claimants down together) -- D1's protection leg
+# reconverges automatically and neither claimant's corridor is touched, so
+# the realized event is an outcome the model itself gives zero probability
+# to in isolation. This is the SAME known-stale joint-exposure gap
+# conftest.py's `stale_pair` reason already names (D1's live invariants
+# were built and frozen against the OLD working-leg-only numbers), now
+# surfacing on this new check rather than being a new problem. Redesign
+# pending; see PAIRS/STALE_PAIRS above.
+@pytest.mark.parametrize("scenario_id", [
+    pytest.param(sid, marks=pytest.mark.stale_pair) if sid == "D1" else sid
+    for sid in sorted(load_all_scenarios())])
+def test_the_realized_cut_is_a_forecast_outcome(scenario_id, connect_for):
+    """Spec 4.9(a)."""
+    scenario = load_all_scenarios()[scenario_id]
+    asyncio.run(assert_realized_cut_is_a_forecast_outcome(
+        connect_for(scenario.state_file), scenario, topology_path=TOPOLOGY_PATH))
+
+
+@pytest.mark.parametrize("scenario_id", sorted(load_all_scenarios()))
+def test_the_expected_value_agrees_with_gold(scenario_id, connect_for):
+    """Spec 4.9(b). A no-op for D1 (label_rule is timing_at_decision_hour,
+    recorded as not covered by this check)."""
+    scenario = load_all_scenarios()[scenario_id]
+
+    async def _run():
+        async with connect_for(scenario.state_file)() as client:
+            await assert_expected_value_agrees_with_gold(
                 client, scenario, topology_path=TOPOLOGY_PATH)
 
     asyncio.run(_run())

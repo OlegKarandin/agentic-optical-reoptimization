@@ -47,7 +47,8 @@ from .derived import (
     derived_geometry,
 )
 from .observation import (
-    MAX_LIGHTPATH_CAPACITY_GBPS, build_observation, latest_issuance,
+    MAX_LIGHTPATH_CAPACITY_GBPS, build_observation, cut_outcome_rows,
+    latest_issuance,
 )
 from .risk_assets import fiber_span_index, risk_group_rows
 from .runner import (
@@ -56,6 +57,7 @@ from .runner import (
 )
 from .scenario_file import ScenarioFile
 from .scoring import decision_label, episode_metrics
+from .spare_value import decision_facts, expected_spare_value
 
 # The scalars a one-line rule could key on. Held EQUAL across the halves, so
 # no surface correlation is left to key on.
@@ -1992,3 +1994,193 @@ async def assert_probe_flips(client_a: Client, client_b: Client,
     if problems:
         raise PairInvalid(f"{a.id}/{b.id}: the probe does not flip as declared:\n  "
                           + "\n  ".join(problems))
+
+
+# --------------------------------------------------------------------------
+# Checks 4.9(a)/(b) (2026-09-27 T2-correlated-claims spec, Task 7): two
+# scenario-validity checks over the machinery Tasks 1-6 of this same branch
+# built (whole-span realized cuts, the joint `cut_outcomes` table, and
+# `spare_value`'s decision-hour facts / expected spare value), run at
+# suite-build time, same as every other check in this module.
+# --------------------------------------------------------------------------
+
+
+def realized_cut_mismatches(
+    dropped_shown: set[str],
+    rows: tuple[tuple[frozenset[str], float], ...],
+) -> str | None:
+    """`None` if `dropped_shown` is exactly the `down` set of some `rows`
+    entry with `p > 0`; otherwise a message naming the mismatch and the
+    nearest (highest-probability) rows, for `assert_realized_cut_is_a_
+    forecast_outcome` to raise as a `PairInvalid`.
+
+    `rows` is `((frozenset[str], float), ...)` -- the same shape `spare_
+    value.DecisionFacts.rows` already builds from `observation.
+    cut_outcome_rows`'s raw dict rows: `[(frozenset(row["down"]), row["p"])
+    for row in ...]`. A `dropped_shown` that matches a row's `down` set
+    exactly, but that row's own `p` is 0.0, is STILL a mismatch: a
+    zero-probability row is something the forecast model's own table
+    considers impossible, so it does not vouch for the realized cut any
+    more than a row that never appears at all."""
+    target = frozenset(dropped_shown)
+    for down, p in rows:
+        if frozenset(down) == target and p > 0:
+            return None
+    ranked = sorted(rows, key=lambda row: -row[1])
+    nearest = ", ".join(
+        f"{sorted(down)!r} (p={p!r})" for down, p in ranked[:5])
+    return (f"realized cut drops {sorted(target)!r} among the services "
+            f"shown, which is not a positive-probability outcome in the "
+            f"forecast model's own cut_outcomes table -- nearest rows: "
+            f"{nearest}")
+
+
+def _issuance_publishing(scenario: ScenarioFile, h: str):
+    """`(issued_at, issuance)` for the most recent forecast issuance at or
+    before `h` whose OWN `horizons` publishes `h` -- NOT `observation.
+    latest_issuance(scenario, h)`, which returns the issuance in force AT
+    `h` regardless of whether `h` is one of ITS horizons (it is usually a
+    horizon of an EARLIER issuance, published hours ahead of the cut it
+    forecasts). Raises `ValueError` if no such issuance exists -- every
+    realized hour in a well-formed episode is forecast by something."""
+    h_index = scenario.hours.index(h)
+    candidates = [
+        (issued_at, issuance) for issued_at, issuance in scenario.forecast.items()
+        if scenario.hours.index(issued_at) <= h_index and h in issuance.horizons]
+    if not candidates:
+        raise ValueError(
+            f"{scenario.id}: realized hour {h!r} has no forecast issuance "
+            f"at or before it that publishes horizon {h!r}")
+    return max(candidates, key=lambda pair: scenario.hours.index(pair[0]))
+
+
+async def assert_realized_cut_is_a_forecast_outcome(
+    connect, scenario: ScenarioFile, *, topology_path: str | Path,
+) -> None:
+    """Spec 4.9(a): for every REALIZED hour, the (span-expanded) cut it
+    actually drops among the services SHOWN at the issuance that forecast it
+    must be exactly the `down` set of some `cut_outcomes` row the forecast
+    model itself gives probability > 0 to. If a scenario's authored
+    `realized` block names a combination the forecast model calls
+    impossible, that is an authoring bug, not a code bug -- catch it here,
+    before any rollout is scored.
+
+    `connect` is the same zero-arg async-context-manager factory `gold.
+    enumerate_outcomes` takes (suite.py's own `connect_for(state_file)`).
+    Each realized hour gets its OWN fresh connection: the pre-cut reads
+    (`service_geometry`/`get_services`/`build_observation`) and the cut
+    replay (`inject_failure`/`simulate_ip_routing`) for one hour must see
+    the SAME untouched-until-then network, which a connection shared across
+    hours -- or with anything else in suite.py's pre-flight batch -- could
+    not guarantee once an earlier hour's `inject_failure` has run.
+
+    For hour `h`: take the most recent issuance at or before `h` that
+    publishes horizon `h` (`_issuance_publishing`), and its own issue hour
+    `i`. Build the observation AT `i` (the same one a decider would have
+    seen when this cut was still a forecast) and read `shown` -- the
+    projected exposure keys (`agent.project_observation`'s own eligibility
+    rule; the service under test is always in it). Read the RAW, unmerged,
+    unrounded `cut_outcomes` row set for `h` over exactly `shown`
+    (`observation.cut_outcome_rows(..., merge_below=0.0, ndigits=None)`).
+    Then replay every realized cut at or before `h` on the SAME connection
+    (`inject_failure` + `simulate_ip_routing`) and intersect the services it
+    actually dropped with `shown` -- the comparison is scoped to `shown`
+    because the forecast model's own table only ever enumerates outcomes
+    over the services it showed a decider; a background service dropped
+    incidentally by the same cut is not part of what this check is
+    verifying."""
+    edges = load_edges(topology_path)
+    for h, realized_cuts in scenario.realized.items():
+        if not realized_cuts:
+            continue
+        i, issuance = _issuance_publishing(scenario, h)
+        h_index = scenario.hours.index(h)
+
+        async with connect() as client:
+            geometry = await service_geometry(client, topology_path, edges=edges)
+            services = tuple(
+                (await call_tool_json(client, "get_services"))["services"])
+            obs = build_observation(
+                scenario, i,
+                service_spans=geometry.cuttable_spans,
+                services=services,
+                spares_on_hand=scenario.spares_on_hand,
+                endpoint_sites=geometry.endpoint_sites,
+                depot_site=scenario.depot_site,
+                protection_spans=geometry.protection_cuttable_spans)
+            shown = frozenset(project_observation(obs)["exposure"])
+            rows = tuple(
+                (frozenset(row["down"]), row["p"])
+                for row in cut_outcome_rows(
+                    obs, shown, merge_below=0.0, ndigits=None)[h])
+
+            for hour in scenario.hours[:h_index + 1]:
+                cuts = scenario.realized.get(hour, ())
+                if cuts:
+                    await call_tool_json(client, "inject_failure",
+                                         {"asset_ids": list(cuts)})
+            routing = await call_tool_json(client, "simulate_ip_routing")
+            dropped = {d["service_id"] for d in routing["dropped"]["services"]}
+            dropped_shown = frozenset(dropped) & shown
+
+        problem = realized_cut_mismatches(dropped_shown, rows)
+        if problem:
+            raise PairInvalid(
+                f"{scenario.id} at hour {h!r} (forecast by issuance "
+                f"{i!r}'s horizon {h!r}): {problem}")
+
+
+def expected_value_mismatch(
+    scenario: ScenarioFile, values: dict[str, float], *, floor: float = 25.0,
+) -> str | None:
+    """`None` if `scenario.metadata.label_rule` is not
+    `"spare_action_by_deadline"` -- this check does not apply (D1 uses
+    `timing_at_decision_hour` and is recorded, spec 4.9(b), as not covered)
+    -- or if `values` (`spare_value.expected_spare_value`'s own `{"spend":
+    ..., "hold": ...}`) agrees with `scenario.gold.label` by at least
+    `floor` Gbps-hours: its argmax must equal the gold label, and that best
+    value must lead the next-best by `floor`.
+
+    Otherwise a message naming the disagreement or the thin margin, for
+    `assert_expected_value_agrees_with_gold` to raise as a `PairInvalid`.
+    The floor guards against an authoring edit that flips the expected
+    answer while gold (one realized storm) stays put -- the calculation is
+    deterministic, so the floor is not about numerical noise (spec 4.9(b))."""
+    if scenario.metadata.get("label_rule") != "spare_action_by_deadline":
+        return None
+    best = max(values, key=values.get)
+    ordered = sorted(values.values(), reverse=True)
+    margin = ordered[0] - ordered[1] if len(ordered) > 1 else float("inf")
+    if best != scenario.gold.label:
+        return (f"{scenario.id}: expected_spare_value {values!r} argmaxes "
+                f"to {best!r}, but gold.label={scenario.gold.label!r}")
+    if margin < floor:
+        return (f"{scenario.id}: expected_spare_value {values!r} separates "
+                f"{best!r} from the next best by only {margin!r} Gbps-h, "
+                f"below the {floor!r} floor")
+    return None
+
+
+async def assert_expected_value_agrees_with_gold(
+    client: Client, scenario: ScenarioFile, *, topology_path: str | Path,
+) -> None:
+    """Spec 4.9(b): for a `spare_action_by_deadline` episode (the six T
+    episodes; D1 is recorded as not covered, spec 4.9(b)), `spare_value.
+    expected_spare_value`'s own spend/hold numbers, computed exactly as
+    `gold.enumerate_outcomes`'s hold-ranking machinery does (`spare_value.
+    decision_facts`), must agree with `scenario.gold.label` by a comfortable
+    margin. If the model that COMPUTES the decision disagrees with the gold
+    that GRADES it, something is wrong -- catch it here, before any rollout
+    is scored.
+
+    No-op for every other label rule (`expected_value_mismatch` returns
+    `None` immediately, before `decision_facts`/`expected_spare_value` are
+    even called -- D1 has no single-spare spend/hold contest for this
+    calculator to evaluate in the first place)."""
+    if scenario.metadata.get("label_rule") != "spare_action_by_deadline":
+        return
+    facts = await decision_facts(client, scenario, topology_path=topology_path)
+    values = expected_spare_value(facts)
+    problem = expected_value_mismatch(scenario, values)
+    if problem:
+        raise PairInvalid(problem)

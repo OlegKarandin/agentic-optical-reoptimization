@@ -27,9 +27,11 @@ from .assertions import (assert_claim_is_one_lightpath,
                          assert_claimants_have_filterable_exposure,
                          assert_depot_is_the_binding_site,
                          assert_escape_route_survives,
+                         assert_expected_value_agrees_with_gold,
                          assert_group_fits_one_lightpath,
                          assert_no_global_policy_solves_the_suite,
                          assert_no_single_variable_rule_solves,
+                         assert_realized_cut_is_a_forecast_outcome,
                          assert_realized_cuts_pass_the_event_filter,
                          assert_risk_group_covers_measurable_exposure,
                          assert_sampling_error_within_margin)
@@ -402,6 +404,36 @@ async def _run_dimensional_coherence_invariants(
 
         assert_claim_is_one_lightpath(scenario, groups)
         assert_group_fits_one_lightpath(scenario, groups)
+
+        # Checks 4.9(a)/(b) (2026-09-27 t2-correlated-claims spec, Task 7),
+        # each on its OWN fresh connection: 4.9(a) mutates server state via
+        # `inject_failure`/`simulate_ip_routing` per realized hour (and
+        # opens one connection per hour internally), so it cannot share the
+        # batch connection above or 4.9(b)'s own connection below.
+        #
+        # 4.9(a) is skipped for D1 under the SAME `stale_invariants` flag
+        # gating `assert_depot_is_the_binding_site`/`assert_escape_route_
+        # survives` above (2026-09-27 controller/user decision, escalated
+        # after a live run): D1's `realized` block cuts only storm-svc-1's
+        # working leg, while its `cut_outcomes` table at that horizon gives
+        # probability 1.0 ONLY to the JOINT (working+protection+claimants)
+        # outcome -- the same known-stale joint-exposure gap this flag
+        # already names, surfacing on this new check rather than being a
+        # new problem. Matches `test_episodes.py`'s own `stale_pair`-marked
+        # parametrization of this same check. Redesign pending; do not
+        # re-author D1 to silence this without that redesign.
+        if not scenario.metadata.get("stale_invariants"):
+            await assert_realized_cut_is_a_forecast_outcome(
+                connect_for(scenario.state_file), scenario,
+                topology_path=topology_path)
+
+        # 4.9(b) is unconditional: it is already a no-op for D1 (whose
+        # `label_rule` is `timing_at_decision_hour`, not `spare_action_by_
+        # deadline` -- `expected_value_mismatch` returns before computing
+        # anything for it).
+        async with connect_for(scenario.state_file)() as client:
+            await assert_expected_value_agrees_with_gold(
+                client, scenario, topology_path=topology_path)
 
 
 def main(argv: list[str] | None = None) -> None:
