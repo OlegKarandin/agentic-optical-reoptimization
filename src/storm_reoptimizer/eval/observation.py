@@ -20,11 +20,13 @@ a truck roll."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Iterable
+
+import numpy as np
 
 from .cone import (
-    Segment, expected_capacity_at_risk_gbps, nearest_span_offset_km,
-    p_cut_service,
+    SAMPLE_COUNT, Segment, expected_capacity_at_risk_gbps,
+    nearest_span_offset_km, service_cut_mask,
 )
 from .revision import revision_band
 from .scenario_file import Issuance, ScenarioFile
@@ -60,6 +62,16 @@ def lead_time_hours_for(lever: str, scenario_lead_time_hours: int) -> int:
 # assertions.py's own static invariant now imports it from here instead of
 # duplicating it.
 MAX_LIGHTPATH_CAPACITY_GBPS: float = 800.0
+
+# The rare-row merge threshold for a `cut_outcomes` table, and the enumeration
+# cut-off `agent.project_observation` already used for a single service's
+# peak p_cut (scenarios/T3a.yaml's own authoring note: its three named
+# claimants "are the only non-SUT services above p_cut 0.005 at this horizon
+# in EITHER half"). Moved here from agent.py (2026-09-27 T2 correlated-claims
+# spec, same precedent as MAX_LIGHTPATH_CAPACITY_GBPS above) because
+# `cut_outcome_rows` is now a second RUNTIME consumer of the same threshold;
+# agent.py re-imports it rather than duplicating the value.
+P_CUT_ENUMERATION_THRESHOLD = 0.005
 
 
 def latest_issuance(scenario: ScenarioFile, hour: str) -> Issuance:
@@ -355,6 +367,28 @@ class Observation:
     # rebuilt per iteration: one says "what I have asked in this decision",
     # this one "what I have ever asked".
     probe_answers_this_episode: tuple[dict, ...] = ()
+    # service_id -> horizon hour -> the per-sample boolean cut mask
+    # (cone.service_cut_mask) `p_cut` at that (service, horizon) already
+    # averages. Stored ONLY where `p_cut > 0` (design note, 2026-09-27 T2
+    # correlated-claims spec §4.2): a missing entry means "never cut at that
+    # horizon", not "cut mask not computed". This is what lets
+    # `outcome_rows_from_masks` reduce several services' masks to a JOINT
+    # table of who goes down TOGETHER, over the SAME sample space each
+    # service's own `p_cut` already draws from -- not a second model.
+    # `compare=False, repr=False` and absent from `to_dict`: a raw
+    # `SAMPLE_COUNT`-length array per (service, horizon) is not
+    # JSON-serializable and not itself the wire payload -- `cut_outcomes`
+    # (agent.project_observation) is the reduction that goes on the wire.
+    cut_masks: dict[str, dict[str, np.ndarray]] = field(
+        default_factory=dict, compare=False, repr=False)
+    # horizon hour -> {"unrestored": hours from this horizon to the last
+    # episode hour inclusive, "restored_after_cut": the optical lead time,
+    # capped at "unrestored"}. Converts the ECAR the agent compares (Gbps)
+    # into what gold scores (Gbps-hours) -- the unit gap CLAUDE.md's
+    # 2026-09-21 section records for T1, now stated on the wire instead of
+    # left for the agent to reconstruct from `lead_time_hours` and
+    # `hours_remaining` by hand.
+    hours_down_if_cut: dict[str, dict[str, int]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-serializable form, for the trace and for step 6's prompt."""
@@ -395,6 +429,7 @@ class Observation:
             "standing_claim_priority": list(self.standing_claim_priority),
             "probe_answers_this_episode": [
                 dict(entry) for entry in self.probe_answers_this_episode],
+            "hours_down_if_cut": self.hours_down_if_cut,
         }
         # Present only where the harness actually supplied them, so the
         # timing payload never carries an empty shell (see the field
@@ -408,6 +443,70 @@ class Observation:
             payload["risk_group_assets"] = [dict(h)
                                             for h in self.risk_group_assets]
         return payload
+
+
+def outcome_rows_from_masks(
+    masks: dict[str, np.ndarray | None], n: int, *,
+    merge_below: float, ndigits: int | None,
+) -> list[dict]:
+    """The joint distribution of `masks` over their shared `n`-sample space,
+    reduced to rows of {"down": [ids...], "p": ...} -- one row per DISTINCT
+    combination that actually occurs, mutually exclusive and summing to 1.0
+    (before any merge). A service absent from a row's `down` list was up in
+    every sample of that row.
+
+    `masks[s] is None` is treated as an all-False array (never cut) rather
+    than excluded: it participates in the partition exactly like a real
+    mask would if that service's own cut probability were 0.0 at this
+    horizon, which is what a missing mask means (`Observation.cut_masks`'s
+    own docstring).
+
+    Rows with `p < merge_below` are folded into a single trailing
+    `{"other": True, "p": <summed p>, "count": <n merged rows>}` row, so a
+    long tail of rare combinations does not blow up the payload -- the same
+    reasoning `agent.project_observation` already applies to a single
+    service's `p_cut` (P_CUT_ENUMERATION_THRESHOLD).
+
+    `ndigits=None` returns unrounded probabilities (the Step-1 tests'
+    exactness proof); production calls (`cut_outcome_rows`) round to 3
+    decimals, the same precision `p_cut` itself is rounded to."""
+    ids = sorted(masks)
+    matrix = np.stack([masks[s] if masks[s] is not None else np.zeros(n, bool)
+                       for s in ids], axis=1)
+    patterns, counts = np.unique(matrix, axis=0, return_counts=True)
+    rnd = (lambda x: round(x, ndigits)) if ndigits is not None else (lambda x: x)
+    rows, other_p, other_n = [], 0.0, 0
+    for pattern, count in zip(patterns, counts):
+        p = count / n
+        if p < merge_below:
+            other_p += p; other_n += 1; continue
+        rows.append({"down": [s for s, bit in zip(ids, pattern) if bit], "p": rnd(p)})
+    rows.sort(key=lambda r: (-r["p"], r["down"]))
+    if other_n:
+        rows.append({"other": True, "p": rnd(other_p), "count": other_n})
+    return rows
+
+
+def cut_outcome_rows(
+    obs: "Observation", service_ids: Iterable[str], *,
+    merge_below: float = P_CUT_ENUMERATION_THRESHOLD,
+    ndigits: int | None = 3,
+) -> dict[str, list[dict]]:
+    """`outcome_rows_from_masks` per horizon of `obs.issuance`, over exactly
+    the `service_ids` that appear in `obs.exposure` -- "shown" is decided by
+    the caller (`agent.project_observation`'s eligibility/threshold filter),
+    not here, so this function never re-derives that rule. `{}` when no
+    named id has exposure data at all: an empty table is not shown on the
+    wire (design spec §4.2, "absent while no service is shown"), and the
+    caller's own emptiness check is what enforces that -- this function just
+    makes the emptiness easy to detect."""
+    ids = [s for s in service_ids if s in obs.exposure]
+    if not ids:
+        return {}
+    return {h: outcome_rows_from_masks(
+                {s: obs.cut_masks.get(s, {}).get(h) for s in ids},
+                SAMPLE_COUNT, merge_below=merge_below, ndigits=ndigits)
+            for h in obs.issuance.horizons}
 
 
 def build_observation(
@@ -480,6 +579,7 @@ def build_observation(
     next_issuance = {"hour": upcoming[0]} if upcoming else None
 
     exposure: dict[str, dict[str, dict[str, float]]] = {}
+    cut_masks: dict[str, dict[str, np.ndarray]] = {}
     for svc in services:
         spans = service_spans.get(svc["id"])
         if not spans:
@@ -494,9 +594,16 @@ def build_observation(
         for horizon, cone in issuance.horizons.items():
             lat, lon = cone.center["lat"], cone.center["lon"]
             offset = nearest_span_offset_km(spans, lat, lon)
-            p_cut = round(p_cut_service(spans, protection_leg, lat, lon,
-                                        cone.width_km,
-                                        scenario.damage_radius_km), 3)
+            mask = service_cut_mask(spans, protection_leg, lat, lon,
+                                    cone.width_km, scenario.damage_radius_km)
+            raw = float(mask.mean()) if mask is not None else 0.0
+            p_cut = round(raw, 3)
+            # Stored only where the service is EVER cut at this horizon
+            # (design note, spec §4.2): a missing entry means "never cut",
+            # not "not computed", and `cut_outcome_rows` relies on exactly
+            # that distinction.
+            if raw > 0.0:
+                cut_masks.setdefault(svc["id"], {})[horizon] = mask
             entry = {
                 "hours_ahead": scenario.hours.index(horizon) - hour_index,
                 # Distance from the cone centre to the NEAREST CUTTABLE SPAN
@@ -558,6 +665,19 @@ def build_observation(
     else:
         deadline_hour = {lever: None for lever in LEAD_TIME_BY_LEVER}
 
+    # unrestored: hours from this horizon to the last episode hour,
+    # INCLUSIVE. restored_after_cut: the optical lead time, capped at
+    # unrestored (a cut in the episode's last hour or two leaves no room for
+    # the full lead time to play out). Global Constraints formula, 2026-09-27
+    # T2 correlated-claims plan.
+    hours_down_if_cut: dict[str, dict[str, int]] = {}
+    for horizon in issuance.horizons:
+        unrestored = len(scenario.hours) - scenario.hours.index(horizon)
+        hours_down_if_cut[horizon] = {
+            "unrestored": unrestored,
+            "restored_after_cut": min(scenario.lead_time_hours, unrestored),
+        }
+
     return Observation(
         scenario_id=scenario.id,
         service_under_test=scenario.service_under_test,
@@ -587,4 +707,6 @@ def build_observation(
         attempts_this_hour=tuple(attempts_this_hour),
         risk_group_assets=tuple(risk_group_assets),
         probe_answers_this_episode=tuple(probe_answers_this_episode),
+        cut_masks=cut_masks,
+        hours_down_if_cut=hours_down_if_cut,
     )

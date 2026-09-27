@@ -4,13 +4,15 @@ issuance. This is the one leak that would silently invalidate every timing
 result, so it is asserted rather than assumed")."""
 import json
 
+import numpy as np
 import pytest
 
 from storm_reoptimizer.eval.cone import p_cut_service
 from storm_reoptimizer.eval.observation import (
-    build_observation, latest_issuance, lead_time_hours_for,
+    build_observation, cut_outcome_rows, latest_issuance,
+    lead_time_hours_for, outcome_rows_from_masks,
 )
-from storm_reoptimizer.eval.scenario_file import load_scenario
+from storm_reoptimizer.eval.scenario_file import SCENARIOS_DIR, load_scenario
 
 SERVICES = (
     {"id": "storm-svc-1", "src_router": "router_satna",
@@ -509,3 +511,133 @@ def test_the_carried_probe_field_is_always_emitted_even_when_empty(scenario):
     obs = build_observation(scenario, "t0", service_spans=SPANS,
                             services=SERVICES, spares_on_hand=1)
     assert obs.to_dict()["probe_answers_this_episode"] == []
+
+
+# --- cut_outcomes / hours_down_if_cut (2026-09-27 T2 correlated-claims spec
+# §4.2/§4.3) -----------------------------------------------------------------
+
+def _wide(scenario):
+    return build_observation(scenario, "t1", service_spans=WIDE_SPANS,
+                             services=WIDE_SERVICES, spares_on_hand=1)
+
+
+def test_cut_outcome_rows_partition_the_samples_and_add_up_to_each_p_cut(scenario):
+    obs = _wide(scenario)
+    ids = ["storm-svc-1", "svc-b", "svc-c"]
+    for horizon, rows in cut_outcome_rows(obs, ids, merge_below=0.0, ndigits=None).items():
+        assert sum(r["p"] for r in rows) == pytest.approx(1.0, abs=1e-12)
+        cone = obs.issuance.horizons[horizon]
+        for sid in ids:
+            exact = p_cut_service(WIDE_SPANS[sid], None, cone.center["lat"],
+                                  cone.center["lon"], cone.width_km, scenario.damage_radius_km)
+            assert sum(r["p"] for r in rows if sid in r["down"]) == pytest.approx(exact, abs=1e-12)
+
+
+def test_rows_are_sorted_and_ids_sorted(scenario):
+    rows = next(iter(cut_outcome_rows(_wide(scenario), ["svc-c", "svc-b"]).values()))
+    ps = [r["p"] for r in rows if not r.get("other")]
+    assert ps == sorted(ps, reverse=True)
+    assert all(r["down"] == sorted(r["down"]) for r in rows if "down" in r)
+
+
+def test_rare_rows_fold_into_one_other_row():
+    a = np.zeros(1000, bool); a[:900] = True
+    b = np.zeros(1000, bool); b[900:903] = True           # p 0.003 < 0.005
+    c = np.zeros(1000, bool); c[903:905] = True           # p 0.002
+    rows = outcome_rows_from_masks({"a": a, "b": b, "c": c}, 1000,
+                                   merge_below=0.005, ndigits=3)
+    assert rows[0] == {"down": ["a"], "p": 0.9}
+    assert {"other": True, "p": 0.005, "count": 2} in rows
+    assert sum(r["p"] for r in rows) == pytest.approx(1.0)
+
+
+def test_an_unshown_service_leaves_no_trace_in_the_table(scenario):
+    rows = cut_outcome_rows(_wide(scenario), ["svc-b"])
+    assert all(set(r.get("down", [])) <= {"svc-b"} for rs in rows.values() for r in rs)
+
+
+def test_no_shown_service_means_no_table(scenario):
+    assert cut_outcome_rows(_wide(scenario), []) == {}
+
+
+def test_hours_down_if_cut_on_t2():
+    t2b = load_scenario(SCENARIOS_DIR / "T2b.yaml")
+    obs = build_observation(t2b, "t1", service_spans={}, services=(), spares_on_hand=1)
+    assert obs.to_dict()["hours_down_if_cut"] == {"t3": {"unrestored": 5, "restored_after_cut": 2}}
+
+
+# --- §8 regression fixtures: T2b/T2a's own joint tables, reproduced from
+# synthetic masks whose sample counts give exactly the recorded row
+# proportions and sets (design spec §3.3). The spare VALUES (217.5/149.4 and
+# 217.5/433.8) are Task 4's job, not this one -- only the sets and
+# probabilities are asserted here.
+
+_T2B_IDS = ("t2-svc-jalgaon-nagpur", "t1-svc-jalgaon-indore",
+           "t2-claimant-jalgaon-khandwa", "t1-claimant-jalgaon-dhulia-fwd",
+           "t1-claimant-jalgaon-dhulia-rev", "d0346", "d0422")
+
+
+def _masks_from_rows(rows, ids, n_total):
+    """Build one boolean mask per id in `ids`, `n_total` samples long, whose
+    layout is a concatenation of blocks -- one block per (down_set, count)
+    row in `rows`, in the given order -- so that stacking the masks and
+    counting distinct rows reproduces exactly those (down_set, count) pairs."""
+    masks = {i: np.zeros(n_total, bool) for i in ids}
+    offset = 0
+    for down_set, count in rows:
+        for i in down_set:
+            masks[i][offset:offset + count] = True
+        offset += count
+    assert offset == n_total
+    return masks
+
+
+def test_outcome_rows_from_masks_reproduces_the_t2b_joint_table():
+    # §3.3's T2b t1 table: khandwa 0.820, the seven-way SUT-down row 0.145,
+    # {indore, khandwa} 0.021, none 0.015. Counts chosen (out of 10000) so
+    # count/10000 rounds to exactly these three-decimal values.
+    rows = [
+        (("t2-claimant-jalgaon-khandwa",), 8199),
+        (("t2-svc-jalgaon-nagpur", "t1-svc-jalgaon-indore",
+          "t2-claimant-jalgaon-khandwa", "t1-claimant-jalgaon-dhulia-fwd",
+          "t1-claimant-jalgaon-dhulia-rev", "d0346", "d0422"), 1449),
+        (("t1-svc-jalgaon-indore", "t2-claimant-jalgaon-khandwa"), 206),
+        ((), 146),
+    ]
+    masks = _masks_from_rows(rows, _T2B_IDS, 10000)
+    got = outcome_rows_from_masks(masks, 10000, merge_below=0.005, ndigits=3)
+    got_by_set = {frozenset(r["down"]): r["p"] for r in got}
+    assert got_by_set == {
+        frozenset(("t2-claimant-jalgaon-khandwa",)): 0.82,
+        frozenset(("t2-svc-jalgaon-nagpur", "t1-svc-jalgaon-indore",
+                   "t2-claimant-jalgaon-khandwa",
+                   "t1-claimant-jalgaon-dhulia-fwd",
+                   "t1-claimant-jalgaon-dhulia-rev", "d0346", "d0422")): 0.145,
+        frozenset(("t1-svc-jalgaon-indore", "t2-claimant-jalgaon-khandwa")): 0.021,
+        frozenset(): 0.015,
+    }
+
+
+def test_outcome_rows_from_masks_reproduces_the_t2a_joint_table():
+    # §3.3's T2a t1 table: none 0.426, khandwa 0.279, {indore, khandwa}
+    # 0.151, the seven-way SUT-down row 0.145.
+    rows = [
+        ((), 4255),
+        (("t2-claimant-jalgaon-khandwa",), 2786),
+        (("t1-svc-jalgaon-indore", "t2-claimant-jalgaon-khandwa"), 1506),
+        (("t2-svc-jalgaon-nagpur", "t1-svc-jalgaon-indore",
+          "t2-claimant-jalgaon-khandwa", "t1-claimant-jalgaon-dhulia-fwd",
+          "t1-claimant-jalgaon-dhulia-rev", "d0346", "d0422"), 1453),
+    ]
+    masks = _masks_from_rows(rows, _T2B_IDS, 10000)
+    got = outcome_rows_from_masks(masks, 10000, merge_below=0.005, ndigits=3)
+    got_by_set = {frozenset(r["down"]): r["p"] for r in got}
+    assert got_by_set == {
+        frozenset(): 0.426,
+        frozenset(("t2-claimant-jalgaon-khandwa",)): 0.279,
+        frozenset(("t1-svc-jalgaon-indore", "t2-claimant-jalgaon-khandwa")): 0.151,
+        frozenset(("t2-svc-jalgaon-nagpur", "t1-svc-jalgaon-indore",
+                   "t2-claimant-jalgaon-khandwa",
+                   "t1-claimant-jalgaon-dhulia-fwd",
+                   "t1-claimant-jalgaon-dhulia-rev", "d0346", "d0422")): 0.145,
+    }

@@ -8,6 +8,7 @@ import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from storm_reoptimizer.eval import agent as agent_module
@@ -189,6 +190,40 @@ def test_a_claimant_above_the_threshold_survives_projection():
     assert set(payload["exposure"]) == {"storm-svc-1", "d0363", "d0462",
                                         "d0212"}
     assert "services" not in payload
+
+
+def test_cut_outcomes_is_carried_over_exactly_the_projected_exposure_keys():
+    # design spec 2026-09-27 §4.2: cut_outcomes is a reduction of the SAME
+    # masks p_cut already averages, over exactly the ids the projection
+    # decided to show -- not the raw observation's full exposure, and not a
+    # second, independent notion of "relevant". d0001 clears no threshold
+    # and is dropped from `exposure`; even though it is given a real cut
+    # mask here too, it must never appear in a cut_outcomes row.
+    from storm_reoptimizer.eval.cone import SAMPLE_COUNT
+    obs = _obs(others=CLAIMANTS + BELOW_THRESHOLD)
+    obs = dataclasses.replace(obs, cut_masks={
+        "storm-svc-1": {HORIZON: np.ones(SAMPLE_COUNT, bool)},
+        "d0363": {HORIZON: np.zeros(SAMPLE_COUNT, bool)},
+        "d0001": {HORIZON: np.ones(SAMPLE_COUNT, bool)},
+    })
+    payload = project_observation(obs)
+    assert "cut_outcomes" in payload
+    assert set(payload["cut_outcomes"]) == set(payload["horizons"])
+    for rows in payload["cut_outcomes"].values():
+        for row in rows:
+            assert set(row.get("down", ())) <= set(payload["exposure"])
+            assert "d0001" not in row.get("down", ())
+
+
+def test_cut_outcomes_is_absent_when_the_projection_shows_no_exposure():
+    # Mirrors observation.cut_outcome_rows' own "no shown service means no
+    # table" rule at the agent.py wire boundary: a payload whose projected
+    # `exposure` is empty must not carry an empty `cut_outcomes` shell.
+    obs = _obs(sut_p_cut=0.0)
+    obs = dataclasses.replace(obs, exposure={})
+    payload = project_observation(obs)
+    assert payload["exposure"] == {}
+    assert "cut_outcomes" not in payload
 
 
 def test_the_service_under_test_survives_even_when_its_own_p_cut_is_zero():

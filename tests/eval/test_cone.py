@@ -2,13 +2,15 @@
 maths -- no server, no state file."""
 import math
 
+import numpy as np
 import pytest
 from scipy.stats import ncx2
 
 from storm_reoptimizer.eval.cone import (
-    CONTAINMENT_P, RAYLEIGH_DIVISOR, cone_polygon, cross_track_sigma_km,
-    expected_capacity_at_risk_gbps, p_cut_point, p_cut_region,
-    p_cut_region_joint, p_cut_service, radial_offset_km,
+    CONTAINMENT_P, RAYLEIGH_DIVISOR, SAMPLE_COUNT, cone_polygon,
+    cross_track_sigma_km, expected_capacity_at_risk_gbps, p_cut_point,
+    p_cut_region, p_cut_region_joint, p_cut_service, radial_offset_km,
+    service_cut_mask,
 )
 
 
@@ -109,3 +111,56 @@ def test_service_p_cut_is_joint_for_protected_and_zero_for_uncuttable_protection
     args = (24.55, 81.0, 90.0, 74.0)
     assert p_cut_service((a,), None, *args) == p_cut_region((a,), *args)
     assert p_cut_service((a,), (), *args) == 0.0
+
+
+def test_sample_count_is_the_standard_normal_points_array_length():
+    # SAMPLE_COUNT is what a caller stacking masks across services (a joint
+    # cut table) uses as the denominator, and it must be the same length
+    # every p_cut_* scalar already divides by.
+    a = ((24.6, 80.8), (24.5, 81.3))
+    mask = service_cut_mask((a,), None, 24.55, 81.0, 90.0, 74.0)
+    assert SAMPLE_COUNT == len(mask)
+
+
+def test_service_cut_mask_means_are_bit_identical_to_the_scalar_p_cut_functions():
+    # The proof of bit-identity for the p_cut_region/p_cut_region_joint/
+    # p_cut_service refactor onto service_cut_mask: the same span sets, run
+    # through the mask path and averaged by hand, must equal the scalar
+    # functions' own answers exactly -- not approximately.
+    a = ((24.6, 80.8), (24.5, 81.3))
+    b = ((24.6, 80.8), (24.9, 80.6))
+    args = (24.6, 80.8, 120.0, 74.0)
+
+    mask_unprotected = service_cut_mask((a,), None, *args)
+    assert float(mask_unprotected.mean()) == p_cut_region((a,), *args)
+
+    mask_joint = service_cut_mask((a,), (b,), *args)
+    assert float(mask_joint.mean()) == p_cut_region_joint((a,), (b,), *args)
+    assert float(mask_joint.mean()) == p_cut_service((a,), (b,), *args)
+
+
+def test_service_cut_mask_is_none_exactly_where_the_scalars_are_zero_by_prefilter():
+    # No cuttable span, the far-field prefilter, and an empty intersection
+    # region all make the scalar functions return 0.0 WITHOUT computing a
+    # mask. service_cut_mask must return None, not an all-False array, at
+    # each of those -- brief: "returns None whenever the existing prefilters
+    # ... return 0.0 today".
+    args = (24.55, 81.0, 90.0, 74.0)
+    assert service_cut_mask((), None, *args) is None
+    assert p_cut_region((), *args) == 0.0
+
+    near = ((24.6, 80.8), (24.5, 81.3))
+    far = ((12.0, 77.0), (12.1, 77.5))
+    assert service_cut_mask((near,), (far,), 24.55, 81.0, 90.0, 74.0) is None
+    assert p_cut_region_joint((near,), (far,), 24.55, 81.0, 90.0, 74.0) == 0.0
+
+    # A protected leg with no cuttable span at all: "not working_spans or
+    # not protection_spans" branch, distinct from the far-field one above.
+    assert service_cut_mask((near,), (), *args) is None
+    assert p_cut_service((near,), (), *args) == 0.0
+
+
+def test_service_cut_mask_dtype_is_boolean():
+    a = ((24.6, 80.8), (24.5, 81.3))
+    mask = service_cut_mask((a,), None, 24.55, 81.0, 90.0, 74.0)
+    assert mask.dtype == np.bool_

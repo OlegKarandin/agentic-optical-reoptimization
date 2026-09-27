@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
 from scipy.stats import ncx2
 
 from ..events.geo import EARTH_RADIUS_KM, circle_polygon
@@ -130,6 +131,12 @@ def _standard_normal_points():
 
 _STANDARD_NORMAL_POINTS = _standard_normal_points()
 
+# The size of the per-sample mask service_cut_mask returns, and the
+# denominator every p_cut_* scalar divides by. Exported so observation.py's
+# cut_outcome_rows can build a same-length all-False stand-in for a service
+# whose mask is None (never cut) without importing the private points array.
+SAMPLE_COUNT = len(_STANDARD_NORMAL_POINTS)
+
 
 def project_to_km(center_lat: float, center_lon: float,
                   lat: float, lon: float) -> tuple[float, float]:
@@ -212,6 +219,65 @@ def _p_cut_region_unfiltered(spans, center_lat: float, center_lon: float,
 NEGLIGIBLE_SIGMAS = 6.0
 
 
+def _working_cut_mask(spans, center_lat: float, center_lon: float,
+                      width_km: float, damage_radius_km: float
+                      ) -> np.ndarray | None:
+    """The per-sample mask `p_cut_region` averages, or `None` at exactly the
+    cases it special-cases to 0.0 (no cuttable span, or the NEGLIGIBLE_SIGMAS
+    far-field prefilter) -- never an all-False array. Kept private: the
+    public entry point for a single span set is `service_cut_mask` with
+    `protection_spans=None`, which calls this."""
+    if not spans:
+        return None
+    sigma = cross_track_sigma_km(width_km)
+    if (nearest_span_offset_km(spans, center_lat, center_lon)
+            > damage_radius_km + NEGLIGIBLE_SIGMAS * sigma):
+        return None
+    region = _region_in_sigmas(spans, center_lat, center_lon,
+                               damage_radius_km, sigma)
+    return contains(region, _STANDARD_NORMAL_POINTS)
+
+
+def service_cut_mask(working_spans, protection_spans, center_lat: float,
+                     center_lon: float, width_km: float,
+                     damage_radius_km: float) -> np.ndarray | None:
+    """The boolean array over `_STANDARD_NORMAL_POINTS` (length `SAMPLE_
+    COUNT`) that `p_cut_service` averages: sample `i` is True iff THIS
+    SERVICE goes down under the storm centre that sample represents.
+    Unprotected (`protection_spans is None`): the working region's own mask.
+    Protected: both legs down under the SAME sample, i.e. the mask of the
+    INTERSECTION of the two buffered regions -- `p_cut_region_joint`'s own
+    construction, kept here so `p_cut_region`/`_joint`/`p_cut_service` all
+    derive their scalar from one array instead of three independent
+    integrals.
+
+    `None` means certainly not cut, returned at exactly the cases
+    `p_cut_region`/`p_cut_region_joint` already special-case to 0.0 (no
+    cuttable span on a leg, the NEGLIGIBLE_SIGMAS far-field prefilter, or an
+    empty intersection region) -- never an all-False array, so a caller
+    checking `is None` sees the same cases the scalar functions already
+    shortcut."""
+    if protection_spans is None:
+        return _working_cut_mask(working_spans, center_lat, center_lon,
+                                 width_km, damage_radius_km)
+    if not working_spans or not protection_spans:
+        return None
+    sigma = cross_track_sigma_km(width_km)
+    reach = damage_radius_km + NEGLIGIBLE_SIGMAS * sigma
+    if (nearest_span_offset_km(working_spans, center_lat, center_lon) > reach
+            or nearest_span_offset_km(protection_spans, center_lat, center_lon)
+            > reach):
+        return None
+    region = _region_in_sigmas(working_spans, center_lat, center_lon,
+                               damage_radius_km, sigma)\
+        .intersection(_region_in_sigmas(protection_spans, center_lat,
+                                        center_lon, damage_radius_km, sigma))
+    if region.is_empty:
+        return None
+    prepare(region)
+    return contains(region, _STANDARD_NORMAL_POINTS)
+
+
 def p_cut_region(spans, center_lat: float, center_lon: float,
                  width_km: float, damage_radius_km: float) -> float:
     """P(at least one of `spans` is cut) for a cone of diameter `width_km`
@@ -232,38 +298,27 @@ def p_cut_region(spans, center_lat: float, center_lon: float,
     conduit contributes nothing to a storm, and a service with none is
     certainly not cut.
 
-    Two pre-filters, in order of cheapness. Neither is an approximation the
-    caller has to reason about: the first is exact (no cuttable span means no
-    cut), and the second is gated by a test that sweeps the boundary."""
-    if not spans:
-        return 0.0
-    sigma = cross_track_sigma_km(width_km)
-    if (nearest_span_offset_km(spans, center_lat, center_lon)
-            > damage_radius_km + NEGLIGIBLE_SIGMAS * sigma):
-        return 0.0
-    return _p_cut_region_unfiltered(spans, center_lat, center_lon, width_km,
-                                    damage_radius_km)
+    Derived from `_working_cut_mask` (`mask.mean()`), which applies the same
+    two pre-filters this docstring used to describe directly. Bit-identical
+    to the pre-refactor form: `_working_cut_mask` is that form's body with
+    the final `.mean()` removed."""
+    mask = _working_cut_mask(spans, center_lat, center_lon, width_km,
+                             damage_radius_km)
+    return float(mask.mean()) if mask is not None else 0.0
 
 
 def p_cut_region_joint(spans_a, spans_b, center_lat: float, center_lon: float,
                        width_km: float, damage_radius_km: float) -> float:
     """P(at least one span of `spans_a` AND at least one of `spans_b` are cut)
     by ONE storm centre: the Gaussian mass in the INTERSECTION of the two
-    buffered regions. For a protected service this is P(service down)."""
-    if not spans_a or not spans_b:
-        return 0.0
-    sigma = cross_track_sigma_km(width_km)
-    reach = damage_radius_km + NEGLIGIBLE_SIGMAS * sigma
-    if (nearest_span_offset_km(spans_a, center_lat, center_lon) > reach
-            or nearest_span_offset_km(spans_b, center_lat, center_lon) > reach):
-        return 0.0
-    region = _region_in_sigmas(spans_a, center_lat, center_lon, damage_radius_km, sigma)\
-        .intersection(_region_in_sigmas(spans_b, center_lat, center_lon,
-                                        damage_radius_km, sigma))
-    if region.is_empty:
-        return 0.0
-    prepare(region)
-    return float(contains(region, _STANDARD_NORMAL_POINTS).mean())
+    buffered regions. For a protected service this is P(service down).
+
+    Derived from `service_cut_mask(spans_a, spans_b, ...)`, which is this
+    function's own former body with the final `.mean()` removed -- so this
+    stays bit-identical to the pre-refactor form."""
+    mask = service_cut_mask(spans_a, spans_b, center_lat, center_lon,
+                            width_km, damage_radius_km)
+    return float(mask.mean()) if mask is not None else 0.0
 
 
 def p_cut_service(working_spans, protection_spans, center_lat: float,
@@ -271,12 +326,14 @@ def p_cut_service(working_spans, protection_spans, center_lat: float,
                   damage_radius_km: float) -> float:
     """P(the service goes down). Unprotected (`protection_spans is None`):
     the working path's own cut probability. Protected: both legs must be
-    cut; a protection leg with no cuttable span (`()`) cannot be cut, so 0."""
-    if protection_spans is None:
-        return p_cut_region(working_spans, center_lat, center_lon, width_km,
-                            damage_radius_km)
-    return p_cut_region_joint(working_spans, protection_spans, center_lat,
-                              center_lon, width_km, damage_radius_km)
+    cut; a protection leg with no cuttable span (`()`) cannot be cut, so 0.
+
+    Derived from `service_cut_mask`, which already implements both branches
+    (it dispatches to `_working_cut_mask` when `protection_spans is None`),
+    so this is now a thin `mask.mean()` wrapper."""
+    mask = service_cut_mask(working_spans, protection_spans, center_lat,
+                            center_lon, width_km, damage_radius_km)
+    return float(mask.mean()) if mask is not None else 0.0
 
 
 def nearest_span_offset_km(spans, center_lat: float,

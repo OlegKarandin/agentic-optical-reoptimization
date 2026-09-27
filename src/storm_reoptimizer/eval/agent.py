@@ -37,7 +37,9 @@ from .decisions import (
     OBJECTIVE_JSON_SCHEMA, ObjectiveDecision, TIMING_JSON_SCHEMA,
     TimingDecision,
 )
-from .observation import Observation
+from .observation import (
+    Observation, P_CUT_ENUMERATION_THRESHOLD, cut_outcome_rows,
+)
 from .probe import (
     MAX_PROBES_PER_DECISION, PROBE_JSON_SCHEMA, PROBE_TOOL, ProbeError,
 )
@@ -47,7 +49,12 @@ from .runner import menu_for_prompt as _menu_for_prompt
 # p_cut rather than cone containment because D1 is built to punish the
 # containment test -- its SUT sits at offset 58.4 km against a 7.5 km
 # half-width (outside the polygon) with p_cut 0.976.
-P_CUT_ENUMERATION_THRESHOLD = 0.005
+#
+# Moved to observation.py (2026-09-27 T2 correlated-claims spec, same
+# precedent as MAX_LIGHTPATH_CAPACITY_GBPS) because cut_outcome_rows is now a
+# second runtime consumer of the same threshold; re-imported here so every
+# existing reference in this module (and its own re-export to callers that
+# import it from here) keeps working unchanged.
 
 
 def _peak_p_cut(per_horizon: dict) -> float:
@@ -224,6 +231,15 @@ def project_observation(
         svc: {horizon: _project_exposure_entry(entry)
              for horizon, entry in per_horizon.items()}
         for svc, per_horizon in exposure.items() if svc in keep}
+    # Over EXACTLY the ids `payload["exposure"]` shows -- the joint
+    # distribution the model needs to reason about correlated claims (design
+    # spec 2026-09-27 §3.3/§4.2: "who goes down together", not each
+    # service's own p_cut in isolation). Absent from the payload while no
+    # service is shown (design note, §4.2's own wording), rather than an
+    # empty dict every decider would have to special-case.
+    cut_outcomes = cut_outcome_rows(obs, payload["exposure"])
+    if cut_outcomes:
+        payload["cut_outcomes"] = cut_outcomes
     # The roster and the per-horizon totals leave the WIRE, not the
     # Observation (spec 5.3). `exposure` already carries each kept service's
     # demand and `restorable_groups` carries its endpoints, so the roster was
