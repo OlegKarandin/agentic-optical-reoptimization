@@ -271,6 +271,37 @@ def test_a_back_link_is_opt_in_and_escaped(folded):
     assert "__BACKLINK__" not in html
 
 
+def test_quiet_hours_are_unclickable_and_skipped_by_arrow_keys(folded):
+    html = bvd.render_html(folded)
+    assert "' quiet'" in html and ".hcell.quiet" in html
+    assert "if (!quiet) {" in html  # no click handler on a quiet cell
+    assert "nextLiveHour(episode, run, state.hourIndex, step)" in html
+
+
+def test_uncalled_hours_render_no_observation_or_ranking(folded):
+    html = bvd.render_html(folded)
+    assert "if (!agentCalled(hour)) {" in html
+    assert "No decision this hour: the model was not called." in html
+
+
+def test_the_joint_cut_table_reads_the_wire_payload(folded):
+    html = bvd.render_html(folded)
+    assert "function jointCutTable(hour)" in html
+    assert "obs.cut_outcomes" in html and "obs.hours_down_if_cut" in html
+
+
+def test_probe_carry_reads_the_field_the_harness_carries_answers_in(folded):
+    # decided_this_hour only ever holds THIS hour's probes; a carried answer
+    # lives in a later hour's observation.probe_answers_this_episode.
+    html = bvd.render_html(folded)
+    assert ".probe_answers_this_episode" in html
+    assert "decided.probe_answers" not in html
+
+
+def test_no_inversion_warning_on_the_ranking(folded):
+    assert "inverted: SUT ranks" not in bvd.render_html(folded)
+
+
 def test_the_scrubber_marks_events_not_a_spend_hold_verdict(folded):
     # 389346a replaced renderScrubber's per-hour gold-vs-agent color strip
     # with a text line naming the events that drive a decision (a forecast
