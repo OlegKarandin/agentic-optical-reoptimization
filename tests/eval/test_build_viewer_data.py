@@ -448,3 +448,17 @@ def test_the_depot_and_forecast_state_is_a_table(folded):
     html = bvd.render_html(folded)
     assert "depot and forecast state" in html
     assert "const misc = document.createElement('pre');" not in html
+
+
+def test_the_page_says_correct_not_gold(folded):
+    html = bvd.render_html(folded)
+    assert "vs gold" not in html and "gold outcome (label" not in html
+    assert "(correct: ${gold.label})" in html
+    assert "Gbps·h less lost than" in html
+
+
+def test_a_landing_action_is_named_restored_or_rerouted(folded):
+    html = bvd.render_html(folded)
+    assert "parts.push('lands')" not in html
+    assert "parts.push('restored')" in html
+    assert "parts.push('rerouted')" in html

@@ -2033,9 +2033,16 @@ function jointCutTable(hour) {
         if (down) {
             const foot = document.createElement('div');
             foot.className = 'table-note';
-            foot.innerHTML = `A cut service stays down <b>${esc(down.unrestored)} h</b> ` +
-                `if left alone, or <b>${esc(down.restored_after_cut)} h</b> if ` +
-                'the held spare restores it after the cut.';
+            // The exchange rate between the two uses of the spare: spending
+            // saves a cut service's whole outage, holding saves only what
+            // is left once restoration's own lead time is paid.
+            const saved = down.unrestored - down.restored_after_cut;
+            foot.innerHTML = '<b>Spend vs. hold:</b> spending the spare now ' +
+                'reroutes a service before the storm, saving its full ' +
+                `<b>${esc(down.unrestored)} h</b> outage if it would have ` +
+                'been cut. Holding it restores a service only after its cut ' +
+                `(${esc(down.restored_after_cut)} h to restore), saving ` +
+                `<b>${esc(saved)} h</b>.`;
             wrap.appendChild(foot);
         }
     }
@@ -2302,10 +2309,13 @@ function hourEvents(episode, run, i) {
     }
     if (((episode.realized_cuts || {})[h.hour] || []).length ||
         (h.dropped_after_cut || []).length) parts.push('cut');
-    if ((run.actions || []).some(a => a.effective_at_index === i &&
-                                      a.hour !== h.hour)) {
-        parts.push('lands');
-    }
+    // An action decided earlier that takes effect now: a post-cut harness
+    // restoration coming back up, or the agent's pre-emptive reroute going
+    // live.
+    const landing = (run.actions || []).filter(a =>
+        a.effective_at_index === i && a.hour !== h.hour);
+    if (landing.some(a => a.origin === 'harness')) parts.push('restored');
+    if (landing.some(a => a.origin !== 'harness')) parts.push('rerouted');
     return parts;
 }
 
@@ -2402,7 +2412,10 @@ function renderScrubber(episode, run) {
                 cuts.length
                     ? `realized cut(s): ${cuts.map(c => c.join('-')).join(', ')}`
                     : null,
-                parts.includes('lands') ? 'an earlier action takes effect' : null,
+                parts.includes('restored')
+                    ? 'a post-cut restoration comes back up' : null,
+                parts.includes('rerouted')
+                    ? "the agent's reroute goes live" : null,
             ].filter(Boolean).join(' -- ');
 
         if (!quiet) {
@@ -2677,10 +2690,17 @@ function renderHappened(episode, run, hour) {
 
     const gold = episode.gold || {};
     if (gold.rationale) {
-        el.appendChild(stepLabel(`gold outcome (label: ${gold.label || '?'})`));
+        el.appendChild(stepLabel(`Correct answer: ${gold.label || '?'}. Both ` +
+            'policies replayed through the real harness; Gbps·h lost per ' +
+            'service'));
         const pre = document.createElement('pre');
         pre.className = 'rationale';
-        pre.textContent = gold.rationale;
+        // The scenario files' own "gold: <label> (argmin ...)" line, in the
+        // page's vocabulary. A line in any other shape is shown untouched.
+        pre.textContent = gold.rationale.replace(
+            /^gold: (\w+) \(argmin total Gbps-hours lost, margin ([\d.]+) over '(\w+)'\)$/m,
+            (_, label, margin, other) =>
+                `correct: ${label} (${+margin} Gbps·h less lost than ${other})`);
         el.appendChild(pre);
     }
 }
@@ -2760,7 +2780,7 @@ function renderScoreboard(episode, run) {
     // one fact under two vocabularies, not two independent signals, so it
     // never tells this row anything gold.label didn't already say.
     const rows = [
-        ['decision_label', `${m.decision_label} vs gold ${gold.label}`,
+        ['decision', `${m.decision_label} (correct: ${gold.label})`,
          m.label_correct],
         ['regret_gbps_h',
          m.regret_gbps_h === null || m.regret_gbps_h === undefined
