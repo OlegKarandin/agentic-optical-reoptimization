@@ -13,7 +13,13 @@ import json
 from collections.abc import Iterable
 from pathlib import Path
 
-from .agent import project_observation
+from .agent import (
+    TIMING_TOOL,
+    ClaudeDecider,
+    _peak_capacity_at_risk_gbps,
+    project_observation,
+)
+from .decisions import DecisionError, TimingDecision
 from .observation import P_CUT_ENUMERATION_THRESHOLD, Observation
 
 # ---------------------------------------------------------------------------
@@ -195,6 +201,47 @@ def _wire(state: dict) -> dict:
     return json.loads(json.dumps(state, sort_keys=True, default=str))
 
 
+def _answers_record(response, questions: dict) -> dict:
+    out = {}
+    for qid, q in questions.items():
+        if q["type"] == "choice":
+            a = response.choices[qid]
+            out[qid] = {"choice": a.choice, "confidence": a.confidence,
+                        "probabilities": dict(a.probabilities)}
+        elif q["type"] == "score":
+            a = response.scores[qid]
+            out[qid] = {"score": a.score, "confidence": a.confidence,
+                        "probabilities": {str(k): v for k, v
+                                          in a.probabilities.items()}}
+        else:
+            out[qid] = {"noul": response.nouls[qid].noul}
+    return out
+
+
+def _summary(model: str, answer, probes: list[dict],
+             extra: dict | None = None) -> str:
+    """Machine-generated `reasoning` (spec §3.4). No markup can appear, so
+    scoring.cites_flip_variable_frac reads ~0 for these arms by
+    construction -- stated in the results table, not hidden."""
+    top = sorted(answer.probabilities.items(),
+                 key=lambda kv: (-kv[1], str(kv[0])))[:4]
+    probs = ", ".join(f"{k}:{v:.2f}" for k, v in top)
+    text = (f"{model} choice={answer.choice} p={{{probs}}} "
+            f"conf={answer.confidence:.2f}")
+    if extra:
+        text += "; claim " + ", ".join(f"{k}:{v:.2f}" for k, v in extra.items())
+    if probes:
+        rendered = []
+        for r in probes:
+            args = r["arguments"]
+            outcome = (f"rejected ({r['error']})" if r["error"] is not None
+                       else (r["answer"] or {}).get("status"))
+            rendered.append(f"{args['service_id']}@{args['risk_group_id']} "
+                            f"-> {outcome}")
+        text += "; probed [" + ", ".join(rendered) + "]"
+    return text
+
+
 class JevDecider:
     """Standalone replacement decider (spec §3.1). Stateless across calls
     for the same reason as ClaudeDecider (agent.py:746): suite.py builds one
@@ -244,3 +291,84 @@ class JevDecider:
 
     def _with_totals(self, text: str) -> str:
         return f"{text} {TOTALS_SENTENCE}" if self.include_totals else text
+
+    async def _ask(self, state: dict, questions: dict, log: list,
+                   purpose: str):
+        response = await self._api.system_one(
+            state=_wire(state), questions=questions, model=self.model)
+        log.append({
+            "purpose": purpose, "questions": questions,
+            "answers": _answers_record(response, questions),
+            "model": response.model,
+            "usage": {"input_tokens": response.usage.input_tokens,
+                      "output_tokens": response.usage.output_tokens}})
+        return response
+
+    def _validated(self, cls, raw: dict, payload: dict, tool_name: str,
+                   obs, probes: list, log: list):
+        """Jev can only answer with offered options, so a failure here is a
+        mapping bug, not a model error (spec §3.3): no retry, raise loudly."""
+        try:
+            decision = cls.from_dict(raw)
+            ClaudeDecider._check_named_services(decision, payload, tool_name)
+        except DecisionError as exc:
+            answers = json.dumps([r["answers"] for r in log], default=str)
+            raise DecisionError(
+                f"{self.name}: mapped answer failed validation ({exc}); "
+                f"jev answers: {answers}") from exc
+        self._audit(obs, payload, tool_name, decision, probes, log)
+        return decision
+
+    def _audit(self, obs, payload, tool_name, decision, probes, log) -> None:
+        if self._audit_path is None:
+            return
+        record = {
+            "decider": self.name,
+            "scenario_id": obs.scenario_id,
+            "hour": obs.hour,
+            "iteration": obs.iteration,
+            "decision": tool_name,
+            "attempts": 1,
+            "probes": probes,
+            "shown_services": sorted(payload["exposure"]),
+            "shown_expected_capacity_at_risk_gbps": {
+                svc: round(_peak_capacity_at_risk_gbps(per_horizon), 3)
+                for svc, per_horizon in payload["exposure"].items()},
+            "omitted_services": payload["omitted_services"],
+            "n_services_total": payload["n_services_total"],
+            "result": decision.to_dict(),
+            "jev": log,
+        }
+        self._audit_path.parent.mkdir(parents=True, exist_ok=True)
+        with self._audit_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, default=str) + "\n")
+
+    async def timing(self, obs: Observation) -> TimingDecision:
+        payload = self._project(obs)
+        base = {"observation": payload}
+        log: list = []
+        probe_answers, probes = [], []          # Task 3: probe gate here
+        services = sorted(payload["exposure"])
+        sut = payload["actionable_service"]
+        questions = {"action": _choice(
+            self._with_totals(TIMING_ACTION_INSTRUCTION.format(sut=sut)),
+            TIMING_ACTION_CRITERIA)}
+        for i, svc in enumerate(services):
+            questions[f"claim_{i}"] = _score(
+                self._with_totals(
+                    CLAIM_SCORE_INSTRUCTION.format(service_id=svc)),
+                CLAIM_LEVELS)
+        response = await self._ask(
+            {**base, "probe_answers": probe_answers}, questions, log,
+            "decision")
+        action = response.choices["action"]
+        # Each Score is an absolute, independent judgement (spec §3.3);
+        # `score` is already probability-weighted -- not recomputed. Ties are
+        # expected; the id tie-break is load-bearing and tested.
+        scores = {svc: response.scores[f"claim_{i}"].score
+                  for i, svc in enumerate(services)}
+        claim_priority = sorted(services, key=lambda s: (-scores[s], s))
+        raw = {"action": action.choice, "claim_priority": claim_priority,
+               "reasoning": _summary(response.model, action, probes, scores)}
+        return self._validated(TimingDecision, raw, payload, TIMING_TOOL,
+                               obs, probes, log)
