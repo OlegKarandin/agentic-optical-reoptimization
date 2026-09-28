@@ -434,3 +434,17 @@ def test_the_land_backdrop_is_folded_in_as_lat_lon_rings(folded):
     for lat, lon in folded["topology"]["nodes"].values():
         assert min(lats) <= lat <= max(lats)
         assert min(lons) <= lon <= max(lons)
+
+
+def test_probes_asked_at_a_decision_carry_no_validity_column(folded):
+    # Asked at this very decision, so always "current": the column only
+    # means something in the whole-run ledger, which mixes hours.
+    html = bvd.render_html(folded)
+    assert "wrap.appendChild(probeTable(probes, false));" in html
+    assert "el.appendChild(probeTable(rows));" in html
+
+
+def test_the_depot_and_forecast_state_is_a_table(folded):
+    html = bvd.render_html(folded)
+    assert "depot and forecast state" in html
+    assert "const misc = document.createElement('pre');" not in html

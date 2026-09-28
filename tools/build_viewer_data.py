@@ -518,6 +518,7 @@ footer { flex: 0 0 auto; border-top: 1px solid #ccc; padding: 6px 12px; }
 .hcell.past-decision { opacity: 0.55; }
 .hcell.quiet { opacity: 0.25; cursor: default; background: transparent; }
 .stale-row td { color: #999; }
+th.kv { text-align: left; font-weight: normal; color: #555; }
 .table-note { font-size: 11px; color: #555; margin: 2px 0 4px; }
 .hcell-events { font-size: 9px; color: #777; margin-top: 2px;
                 white-space: nowrap; }
@@ -1943,37 +1944,39 @@ function renderSaw(hour) {
 
     el.appendChild(jointCutTable(hour));
 
-    // Every field below is Observation.to_dict()'s own per-hour ledger
-    // state -- what the agent actually knew going into THIS hour, not a
-    // run-final scalar (spares_remaining) or a flat episode constant
-    // (the YAML's initial spares_on_hand / lead_time_hours). Nothing here
-    // is recomputed from run.actions.
-    const misc = document.createElement('pre');
-    misc.className = 'reasoning';
-    misc.textContent =
-        `spares_on_hand: ${JSON.stringify(obs.spares_on_hand)}\n` +
-        `spares_spent: ${JSON.stringify(obs.spares_spent)}\n` +
-        `risk_group_ids: ${JSON.stringify(obs.risk_group_ids || {})}\n` +
-        `actions_taken: ${JSON.stringify(obs.actions_taken || [])}\n` +
-        `hours_remaining: ${JSON.stringify(obs.hours_remaining)}\n` +
-        `issuance_schedule: ${JSON.stringify(obs.issuance_schedule || [])}\n` +
-        // next_issuance is GENUINELY nullable -- {"hour": "t1"} while a later
-        // issuance is still scheduled, else null once it isn't (observation.py:
-        // upcoming = issue hours later than the in-force one). That "null"
-        // must stay visually distinct from a pre-2026-09-10 trace that never
-        // recorded this key at all ('in obs' is false there) -- collapsing
-        // both to the same displayed "null" would silently claim "no more
-        // issuances" about an old trace that simply never said either way.
-        `next_issuance: ${'next_issuance' in obs
-            ? JSON.stringify(obs.next_issuance)
-            : 'unknown (older trace predates this field)'}\n` +
-        // obs.lead_time_hours (the raw per-lever provisioning delay) is also
-        // on the wire but not shown here -- deadline_hour is it, already
-        // resolved against the current hour into the number that actually
-        // matters: the last hour each lever can still be issued on time.
-        `act_by_hour (deadline_hour, per lever): ` +
-        `${JSON.stringify(obs.deadline_hour || {})}`;
-    el.appendChild(misc);
+    // Every field below is this hour's own ledger state as the agent was
+    // shown it -- not a run-final scalar or a flat episode constant.
+    // lead_time_hours is on the wire too but not listed: deadline_hour is
+    // the same fact already resolved against the current hour.
+    const fmtMap = m => Object.entries(m || {})
+        .map(([k, v]) => `${k}: ${v}`).join(', ') || '-';
+    const stateRows = [
+        ['spares_on_hand', obs.spares_on_hand],
+        ['spares_spent', obs.spares_spent],
+        ['risk_group_ids', fmtMap(obs.risk_group_ids)],
+        ['actions_taken', (obs.actions_taken || []).length
+            ? JSON.stringify(obs.actions_taken) : 'none'],
+        ['hours_remaining', obs.hours_remaining],
+        ['issuance_schedule', (obs.issuance_schedule || []).join(', ') || '-'],
+        // next_issuance is genuinely nullable: {"hour": "t1"} while a later
+        // issuance is scheduled, null once none is. A trace that never
+        // recorded the key must not read as "no more issuances".
+        ['next_issuance', !('next_issuance' in obs)
+            ? 'unknown (older trace predates this field)'
+            : obs.next_issuance ? obs.next_issuance.hour
+            : 'none (this is the last forecast)'],
+        ['deadline_hour (last hour each lever can still land in time)',
+         fmtMap(obs.deadline_hour)],
+    ];
+    el.appendChild(stepLabel('depot and forecast state'));
+    const stateTable = document.createElement('table');
+    for (const [name, value] of stateRows) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<th class="kv">${esc(name)}</th>` +
+            `<td>${esc(value === undefined || value === null ? '-' : value)}</td>`;
+        stateTable.appendChild(tr);
+    }
+    el.appendChild(stateTable);
 
     el.appendChild(rawJson('timing', {observation: hour.projected}));
 }
@@ -2057,7 +2060,7 @@ function jointCutTable(hour) {
 // a look-ahead across the run's later hours), so this reads them off
 // currentEpisode()/currentRun() rather than taking them as parameters --
 // every call site renders after those are already the state in force.
-function probeTable(probes) {
+function probeTable(probes, showValidity = true) {
     const run = currentRun();
     const flip = (currentEpisode() || {}).probe_flip;
     const table = document.createElement('table');
@@ -2068,6 +2071,9 @@ function probeTable(probes) {
         'viewed: current if it was asked under the risk group in force ' +
         'now, stale if the forecast has since revised the group">' +
         'valid now?</th></tr>';
+    if (!showValidity) {
+        table.querySelector('tr').lastElementChild.remove();
+    }
     const inForce = run ? riskGroupsInForce(run, state.hourIndex) : null;
     const keyTitle = flip
         ? `The claimant whose restorability decides this pair (scenario ` +
@@ -2077,12 +2083,13 @@ function probeTable(probes) {
         const isFlip = !!flip && p.service_id === flip.claimant;
         const validity = probeValidity(inForce, p);
         tr.className = [isFlip ? 'flip-row' : '',
-                        validity.stale ? 'stale-row' : ''].join(' ').trim();
+                        showValidity && validity.stale ? 'stale-row' : '']
+            .join(' ').trim();
         if (p.error) {
             tr.innerHTML = `<td>${esc(p.hour)}</td><td>${esc(p.decision)}</td>` +
                 `<td>${esc(p.service_id)}</td><td>${esc(p.risk_group_id)}</td>` +
                 `<td class="probe-error" colspan="5">error: ${esc(p.error)}</td>` +
-                `<td>${esc(validity.text)}</td>`;
+                (showValidity ? `<td>${esc(validity.text)}</td>` : '');
             table.appendChild(tr);
             continue;
         }
@@ -2098,7 +2105,7 @@ function probeTable(probes) {
             `<td>${esc(a.full_restore_candidates)}</td>` +
             `<td>${esc(spares)}</td>` +
             `<td>${esc((a.levers || []).join(', '))}</td>` +
-            `<td>${esc(validity.text)}</td>`;
+            (showValidity ? `<td>${esc(validity.text)}</td>` : '');
         table.appendChild(tr);
     }
     return table;
@@ -2112,7 +2119,8 @@ function probesBlock(probes, label) {
     h.className = 'probes-label';
     h.textContent = label;
     wrap.appendChild(h);
-    wrap.appendChild(probeTable(probes));
+    // Asked at this very decision, so always current -- no validity column.
+    wrap.appendChild(probeTable(probes, false));
     return wrap;
 }
 
