@@ -438,8 +438,10 @@ if this issuance is right; the band says how much that number can change \
 when the issuance is revised.
 - `cut_outcomes` -- per horizon, rows of shown services that go down TOGETHER \
 in one storm outcome; rows are mutually exclusive and sum to 1; a service's \
-`p_cut` is the sum of the rows containing it; rare outcomes are folded into \
-one `other` row.
+`p_cut` is approximately the sum of the rows containing it (rounding, and \
+the `other` row folds rare outcomes without itemizing who is down in them, \
+so the two can differ slightly); rare outcomes are folded into one `other` \
+row.
 - `hours_down_if_cut` -- per horizon, the hours a service cut there stays \
 down if never restored (`unrestored`) and if restored by a new lightpath \
 after the cut (`restored_after_cut`).
@@ -459,7 +461,8 @@ claim. After a cut, the harness gives whatever spares remain to the services \
 the cut dropped: first the ones you ranked in `claim_priority`, in that \
 order, skipping any that were not cut or that no route can restore; then \
 every other service shown to you in this episode, largest demand first. A \
-service never shown to you in this episode is not restored, and their claim \
+service never shown to you in this episode is not restored. The shown \
+services that terminate here compete for this depot: their claim \
 on this site's inventory is real.
 \n\
   Services that do not terminate at `depot_site` are summarized under \

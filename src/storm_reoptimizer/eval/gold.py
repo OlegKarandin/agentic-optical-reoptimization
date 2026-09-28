@@ -190,6 +190,17 @@ def gold_from_outcomes(
     scaling it off the scope total asks exactly what the spec asks, of
     exactly the services the decision moves.
 
+    That premise -- that `_scope`'s own loss is where the decision's
+    information lives -- can fail for a specific episode when an id
+    tie-break in `best_hold_ranking` sends a hold rollout's restored spare
+    to a service OUTSIDE `_scope` instead of to a named claimant. T1a is a
+    live example (2026-09-27 plan, Task 5): the ranking
+    `indore > d0346 > d0422 > dhulia-fwd > dhulia-rev` sends the held pair
+    to `d0346`/`d0422`, so the named dhulia claimants lose identically
+    (500 each) under both `spend` and `hold`, and T1a's entire 600 Gbps-h
+    margin is carried by `d0346`/`d0422` -- outside `_scope` -- rather than
+    by the SUT or its declared claimants.
+
     The denominator stays `_scope` even though the rationale table now also
     lists every other service whose loss differs between the choices
     (2026-09-27 spec 4.5/4.6): the table reports where the difference

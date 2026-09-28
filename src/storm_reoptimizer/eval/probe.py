@@ -91,7 +91,15 @@ def unrestorable_under(answers: Iterable[dict],
     Only the agent's OWN probes count: a harness-side restorability check
     here would make `ranking_conflict`'s accept/reject decision itself reveal
     which way a T2-shaped pair flips, for a claimant the agent never asked
-    about."""
+    about.
+
+    KNOWN LIMITATION: `latest` is keyed by `service_id` alone, so when
+    `current_group_ids` names MORE THAN ONE currently-valid group at once,
+    the "latest" answer for a service is the latest across ALL of those
+    groups combined, not the latest per group. Harmless today -- every
+    shipped T episode has exactly one horizon's worth of current groups at
+    a time -- but would need a per-group `latest` if a future episode ever
+    carries more than one horizon's group as current simultaneously."""
     current = set(current_group_ids)
     latest: dict[str, str | None] = {}
     for a in answers:

@@ -223,8 +223,15 @@ def test_the_probe_answers_what_the_replay_then_does_on_t1a(
 ):
     """Spec 8.1: for the same service and group, the probe's cheapest full
     restore is exactly what `restore_after_cuts` spends on it after the cut.
-    T1a: the hold rollout restores the dhulia claimant at t3 with one pair
-    at jalgaon and one at dhulia."""
+    T1a, under `oracle.hold_decider`'s own BARE default ranking (claimants
+    first, as this test calls it below, `hold_decider(scenario)` with no
+    explicit `claim_priority`): the hold rollout restores the dhulia
+    claimant at t3 with one pair at jalgaon and one at dhulia. This is NOT
+    necessarily what GOLD's own hold rollout does -- since Task 5 (2026-09-27
+    spec 4.6), `gold.enumerate_outcomes` ranks its hold branch with
+    `spare_value.best_hold_ranking` instead, which for T1a sends the held
+    spare pair to `d0346`/`d0422` (an id tie-break), not the dhulia
+    claimants (see `gold.gold_from_outcomes`'s docstring)."""
     scenario = load_all_scenarios()["T1a"]
     claimant = scenario.metadata["claimant_services"][0]
     horizon, rg_id = oracle.spend_risk_group(scenario)

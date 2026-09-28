@@ -1038,6 +1038,15 @@ async def run_episode(
     # only an authored claimant roster. Accumulated on skipped hours too:
     # what the replay restores follows what the observation carried, not
     # whether the decider happened to be consulted that hour.
+    #
+    # KNOWN LIMITATION (whole-branch final review): the `.update()` below
+    # runs BEFORE the `is_decidable` branch, so in principle a skipped hour
+    # (where the decider is shown nothing) could still grow this set. Not
+    # gated on `is_decidable` here deliberately -- that would be a behavior
+    # change beyond this review's scope. Unreachable in every shipped
+    # episode today: a skipped hour's `projected_exposure` is always a
+    # subset of the prior decided hour's own issuance, so nothing NEW is
+    # ever added on a skip.
     shown_services: set[str] = set()
 
     for hour_index, hour in enumerate(scenario.hours):

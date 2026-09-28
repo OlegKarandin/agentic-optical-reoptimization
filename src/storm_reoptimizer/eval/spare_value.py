@@ -14,9 +14,10 @@ depot cost, and how long a cut there stays down before the harness's own
 post-cut replay would restore it (`observation.build_observation`'s
 `hours_down_if_cut`).
 
-Deliberately does NOT import `.assertions` or `.gold`: this module is a leaf
-`.oracle`/`.probe`/`.observation`/`.agent`/`.runner` consume, not the other
-way around (both DO import this module -- Task 5's own wiring)."""
+Deliberately does NOT import `.assertions` or `.gold`: this module ITSELF
+imports `.oracle`/`.probe`/`.observation`/`.agent`/`.runner` (see below), and
+it is `.gold`/`.assertions` that consume THIS module, not the other way
+around (both DO import this module -- Task 5's own wiring)."""
 from __future__ import annotations
 
 from dataclasses import dataclass
