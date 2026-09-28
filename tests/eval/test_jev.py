@@ -9,6 +9,7 @@ import pytest
 
 import storm_reoptimizer.eval.jev as jev_module
 from storm_reoptimizer.eval.agent import SYSTEM_PROMPT, ClaudeDecider
+from storm_reoptimizer.eval.decisions import DecisionError
 from storm_reoptimizer.eval.jev import (
     CLAIM_LEVELS,
     CLAIM_SCORE_INSTRUCTION,
@@ -291,9 +292,11 @@ def test_reasoning_is_machine_summary_that_passes_the_guard():
     assert "</" not in decision.reasoning and "<parameter" not in decision.reasoning
 
 
-def test_audit_none_writes_nothing(tmp_path):              # Review Focus 5
-    decider, _ = _decider(_timing_answers())
-    _run(decider.timing(_obs()))
+def test_audit_none_writes_nothing(tmp_path, monkeypatch):  # Review Focus 5
+    monkeypatch.chdir(tmp_path)
+    decider, _ = _decider(_timing_answers(), audit_path=None)
+    decision = _run(decider.timing(_obs()))
+    assert decision.action in ("act", "wait")  # verify decision was returned
     assert list(tmp_path.iterdir()) == []
 
 
@@ -317,7 +320,6 @@ def test_audit_line_carries_base_fields_and_jev_block(tmp_path):
 
 
 def test_mapping_failure_raises_decision_error_with_raw_answers(monkeypatch):
-    from storm_reoptimizer.eval.decisions import DecisionError
     decider, _ = _decider(_timing_answers())
     monkeypatch.setattr(jev_module.ClaudeDecider, "_check_named_services",
                         staticmethod(lambda *a: (_ for _ in ()).throw(
