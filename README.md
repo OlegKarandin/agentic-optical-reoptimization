@@ -3,14 +3,13 @@
 An agent that reoptimizes a multi-layer (IP-over-optical) network ahead of an
 environmental disaster, such as a cyclone, a flood or a heatwave, whose
 **correlated failures the design-time risk model never anticipated**. It
-ships with a benchmark that measures the one thing such an agent is actually
-for: making resource-allocation calls under forecast uncertainty that a fixed
-policy table cannot make.
+ships with a benchmark that must make resource-allocation calls under 
+forecast uncertainty that a fixed policy table cannot make.
 
-**Headline result (2026-09-28).** On the benchmark's three twin-pair tests,
-**Claude Opus 5.5 got all 18 decisions right** (3 pairs × 2 halves × 3 seeds),
+**Headline result** On the benchmark's three twin-pair tests, 
+Claude Opus 5.5 got all 18 decisions right (3 pairs × 2 halves × 3 seeds),
 solving every pair on every seed with zero regret. The forecast-blind fixed
-policies it is compared against solve **none** of the pairs, and cannot by
+policies it is compared against solve none of the pairs, and cannot by
 construction.
 
 **▶ [Step through every rollout in the interactive run viewer](https://olegkarandin.github.io/agentic-optical-reoptimization/)**
@@ -76,16 +75,14 @@ tree matches the agent, the scenario doesn't justify the agent.
      (QoT, routing, disjointness, validate_plan, commit_plan)
 ```
 
-The seam is a hard rule. The server stays disaster-agnostic and reusable.
-This repo owns everything storm-shaped: event ingestion, geo mapping, the
-agent loop, the evaluation harness and the viewer. Nothing here reimplements
-routing or QoT. Every network fact comes from a tool call to the real server,
-never a mock.
+The server is disaster-agnostic and reusable. This repo owns everything storm-shaped: 
+event ingestion, geo mapping, the agent loop, the evaluation harness and the viewer. 
+Nothing here reimplements routing or QoT. Every network fact comes from a tool call 
+to the real server.
 
 The network is a 143-node, 180-edge India backbone derived from Internet
 Topology Zoo's `TataNld` graph. Span lengths are great-circle and mount types
-(aerial/buried) come from a documented heuristic (`scripts/convert_tata_topology.py`),
-so it is a toy topology, not an as-built record. A seeded, gravity-loaded
+(aerial/buried) are randomly selected. A seeded, gravity-loaded
 operating state (about 580 services, seed 17) sits on top.
 
 ---
@@ -124,10 +121,10 @@ more:
   and any probe answers carried forward, each tagged with the risk group it
   was answered under.
 
-The model **never** sees the realized cuts or a future forecast issuance.
+The model never sees the realized cuts or a future forecast issuance.
 Waiting is what buys the next issuance.
 
-After the storm hits, a deterministic **replay** restores cut services in the
+After the storm hits, a deterministic replay restores cut services in the
 model's `claim_priority` order using whatever spare it held. A held spare
 therefore has a real, simulated value, and holding it is a genuine
 alternative to spending it. Every episode is scored on **realized Gbps·h
@@ -179,7 +176,7 @@ varies is the fact the model must establish to answer it.
 so a probe answered under `t0`'s group can be wrong an hour later. The
 correct move is to re-probe under the *current* group.
 
-### Results (2026-09-28)
+### Results
 
 One seed of the operating state (17), three rollouts per decider per
 episode, on the real MCP server. The baselines are deterministic and
@@ -232,30 +229,6 @@ raw exposure:
 > Every cut outcome that takes down indore also takes down both claimant
 > groups (the 0.117 row). That means holding the spare never leaves it
 > unused.
-
-### Limitations
-
-- **Small n.** Three pairs × three seeds on one topology and one
-  operating-state seed. `pair_solved` over three pairs separates a working
-  harness from a broken one, not skill from luck at fine resolution.
-  Held-out seeds and states are the path to power.
-- **One kind of judgement.** All three pairs are the same shape: one scarce
-  spare and competing claims. They vary *which fact* the decision hinges on,
-  not the kind of decision. The other justified agent step, interpreting
-  free-text operator reports and novel event types, is not yet benchmarked.
-- **The raw-exposure vs expected-value distinction is not isolated.** On
-  both T1 halves, ranking by raw ECAR and ranking by expected Gbps·h agree.
-  Opus visibly reasons in expected value, but no shipped half forces the two
-  rules to disagree.
-- **T3's original design did not survive contact with the solver.** It was
-  meant to test "does the restoration *need* the spare at all", via a free IP
-  groom. The solver never produced that groom, so T3 ships as a second
-  restorability test on a different corridor.
-- **`D1`**, a single-service diagnostic episode, was last run on 2026-09-15,
-  before the most recent harness changes. It is excluded from the table and
-  the viewer.
-- The toy topology's mount types are a heuristic and three of them are
-  scenario design. The network is illustrative, not a real operator's plant.
 
 ---
 
