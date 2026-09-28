@@ -519,7 +519,7 @@ footer { flex: 0 0 auto; border-top: 1px solid #ccc; padding: 6px 12px; }
 .hcell.quiet { opacity: 0.25; cursor: default; background: transparent; }
 .stale-row td { color: #999; }
 th.kv { text-align: left; font-weight: normal; color: #555; }
-td.kv-note { font-size: 11px; color: #777; font-style: italic; }
+.kv-note { font-size: 10px; color: #777; }
 .table-note { font-size: 11px; color: #555; margin: 2px 0 4px; }
 .hcell-events { font-size: 9px; color: #777; margin-top: 2px;
                 white-space: nowrap; }
@@ -1966,23 +1966,20 @@ function renderSaw(hour) {
             ? 'unknown (older trace predates this field)'
             : obs.next_issuance ? obs.next_issuance.hour
             : 'none (this is the last forecast)'],
-        // An optional third element is a note, rendered as its own
-        // full-width row below, so a long gloss never widens the name column.
+        // An optional third element is a gloss, shown on a second line of
+        // the name cell rather than run on after the name.
         ['deadline_hour', fmtMap(obs.deadline_hour),
-         'last hour each lever can still land in time'],
+         '(last hour each lever can still land in time)'],
     ];
     el.appendChild(stepLabel('depot and forecast state'));
     const stateTable = document.createElement('table');
     for (const [name, value, note] of stateRows) {
         const tr = document.createElement('tr');
-        tr.innerHTML = `<th class="kv">${esc(name)}</th>` +
+        tr.innerHTML = `<th class="kv">${esc(name)}` +
+            (note ? `<br><span class="kv-note">${esc(note)}</span>` : '') +
+            '</th>' +
             `<td>${esc(value === undefined || value === null ? '-' : value)}</td>`;
         stateTable.appendChild(tr);
-        if (note) {
-            const noteRow = document.createElement('tr');
-            noteRow.innerHTML = `<td class="kv-note" colspan="2">${esc(note)}</td>`;
-            stateTable.appendChild(noteRow);
-        }
     }
     el.appendChild(stateTable);
 
