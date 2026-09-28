@@ -448,6 +448,9 @@ def test_the_depot_and_forecast_state_is_a_table(folded):
     html = bvd.render_html(folded)
     assert "depot and forecast state" in html
     assert "const misc = document.createElement('pre');" not in html
+    # The deadline gloss sits in its own full-width row, not in the name.
+    assert "'deadline_hour (last hour" not in html
+    assert 'class="kv-note" colspan="2"' in html
 
 
 def test_the_page_says_correct_not_gold(folded):
