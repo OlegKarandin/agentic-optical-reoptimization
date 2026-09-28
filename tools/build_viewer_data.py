@@ -21,6 +21,7 @@ Run: python tools/build_viewer_data.py --out eval/viewer/index.html
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import re
 from pathlib import Path
@@ -336,7 +337,7 @@ _HTML_TEMPLATE = """<!doctype html>
     <label id="projected-risk-label" class="toggle-btn">
       <input type="checkbox" id="projected-risk" checked> projected risk
     </label>
-    <button id="reset-view" type="button">reset view</button>
+    <button id="reset-view" type="button">reset view</button>__BACKLINK__
   </div>
   <div id="legend-row">
     <div id="legend">
@@ -401,6 +402,7 @@ body { margin: 0; font-family: ui-monospace, "Cascadia Code", Consolas,
 #controls-row { display: flex; align-items: center; gap: 10px; }
 #controls select, #controls label { font: inherit; }
 #reset-view { font: inherit; cursor: pointer; }
+#back-link { margin-left: auto; }
 /* A checkbox styled to look pressed rather than merely checked, so the one
    control that changes what's ON THE MAP (as against episode/run, which
    change WHICH RUN) reads as a toggle, not a stray box among five others. */
@@ -2772,15 +2774,22 @@ renderAll();
 """
 
 
-def render_html(payload: dict) -> str:
+def render_html(payload: dict, back_link: str | None = None) -> str:
     """One file, double-click, no server and no dependencies.
 
     The payload is INLINED rather than fetched: fetch() from file:// fails
     CORS in Chrome, which would mean running a local HTTP server on every
     inspection -- a tax paid on exactly the workflow this design exists to
-    remove (run-viewer design, §5.3)."""
+    remove (run-viewer design, §5.3).
+
+    `back_link` is for a HOSTED copy only (e.g. GitHub Pages): a plain
+    anchor to the repo's README, never a resource the page loads. Omitted
+    by default, so a local build stays free of any URL at all."""
+    link = (f'\n    <a id="back-link" href="{html.escape(back_link)}">'
+            f'README &amp; source</a>' if back_link else "")
     blob = json.dumps(payload, separators=(",", ":")).replace("</", "<\\/")
     return (_HTML_TEMPLATE
+            .replace("__BACKLINK__", link)
             .replace("__CSS__", _CSS)
             .replace("__JS__", _JS)
             .replace("__PAYLOAD__", blob))
@@ -2799,12 +2808,16 @@ def main() -> None:
                    help="The topology JSON the runs were driven against.")
     p.add_argument("--out", default=str(DEFAULT_OUT),
                    help=f"Output HTML file (default: {DEFAULT_OUT}).")
+    p.add_argument("--back-link", default=None, metavar="URL",
+                   help="Header link to the repo README, for a hosted copy. "
+                        "Default: none.")
     args = p.parse_args()
     payload = fold(Path(args.traces), Path(args.scenarios),
                    Path(args.topology))
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(render_html(payload), encoding="utf-8")
+    out.write_text(render_html(payload, back_link=args.back_link),
+                   encoding="utf-8")
     runs = sum(len(e["runs"]) for e in payload["episodes"].values())
     print(f"wrote {out}: {len(payload['episodes'])} episodes, {runs} runs, "
           f"{out.stat().st_size // 1024} KB", flush=True)

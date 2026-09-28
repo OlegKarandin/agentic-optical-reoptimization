@@ -263,18 +263,27 @@ def test_the_html_is_one_self_contained_file(folded):
         assert banned not in html
 
 
-def test_the_scrubber_filters_the_spend_hold_strip_to_decider_actions(folded):
-    # Task 16 fix-report: renderScrubber's spend/conserve match indicator
-    # must judge only the DECIDER's own actions, the same convention
-    # scoring.py uses (`a.origin == "decider"`) -- a harness restoration
-    # (replay.restore_after_cuts mints origin="harness" Actions into the
-    # SAME per-hour list) must not be able to render as the decider's own
-    # "spend". This is JS embedded in the generated HTML, so it is checked
-    # as a string assertion on the rendered output rather than executed.
+def test_a_back_link_is_opt_in_and_escaped(folded):
+    assert 'id="back-link"' not in bvd.render_html(folded)
+    html = bvd.render_html(folded, back_link='https://x.test/r?a=1&b="2"')
+    assert ('<a id="back-link" href="https://x.test/r?a=1&amp;b=&quot;2&quot;">'
+            in html)
+    assert "__BACKLINK__" not in html
+
+
+def test_the_scrubber_marks_events_not_a_spend_hold_verdict(folded):
+    # 389346a replaced renderScrubber's per-hour gold-vs-agent color strip
+    # with a text line naming the events that drive a decision (a forecast
+    # revision, a realized cut). The strip judged the decider's own spend
+    # against gold -- a judgment the scoreboard already makes per run -- so
+    # nothing per-hour may render a match/mismatch verdict any more. This is
+    # JS embedded in the generated HTML, so it is checked as a string
+    # assertion on the rendered output rather than executed.
     html = bvd.render_html(folded)
-    assert "a.origin === 'decider'" in html
-    assert "decided.length" in html
-    assert "decided.some(" in html
+    assert "hcell-events" in html
+    assert "parts.push('forecast')" in html
+    assert "parts.push('cut')" in html
+    assert "'strip ' + cls" not in html
 
 
 def test_the_payload_survives_a_script_close_in_the_data(folded):

@@ -21,9 +21,13 @@ from storm_reoptimizer.mcp_client import connect_server
 # the server by invoking its main() directly via `python -c` instead of by
 # name. No PYTHONPATH override is needed any more: both packages already
 # resolve from the env's site-packages.
-_MULTILAYER_OPTICAL_MCP_ENV_PYTHON = Path(
-    r"C:\Users\olegk\miniconda3\envs\multilayer-optical-mcp\python.exe"
-)
+#
+# Elsewhere, point MULTILAYER_OPTICAL_MCP_PYTHON at any python that can
+# import multilayer_optical_mcp; the server-backed tests skip without one.
+_MULTILAYER_OPTICAL_MCP_ENV_PYTHON = Path(os.environ.get(
+    "MULTILAYER_OPTICAL_MCP_PYTHON",
+    r"C:\Users\olegk\miniconda3\envs\multilayer-optical-mcp\python.exe",
+))
 
 
 @pytest.fixture(scope="session")
