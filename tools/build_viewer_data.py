@@ -510,7 +510,7 @@ footer { flex: 0 0 auto; border-top: 1px solid #ccc; padding: 6px 12px; }
 .hcell { flex: 1; padding: 3px 2px; text-align: center; cursor: pointer;
          border: 1px solid #ddd; background: #f5f5f3; }
 .hcell.current { background: #3366cc; color: #fff; }
-.hcell.decision { border-color: #cc6633; border-width: 2px; }
+.hcell.decision { border-color: #444; border-width: 2px; }
 /* Not hidden -- these hours are still real (cuts land, the replay plays
    out) and still clickable, just guaranteed by is_decidable (runner.py) to
    never have held a decision. Dimmed so the LAST hour that could matter
@@ -2374,7 +2374,7 @@ function renderScrubber(episode, run) {
     }
     // is_decidable (runner.py) requires an ISSUANCE hour, and every
     // episode's deadline is itself an issuance hour by construction -- so
-    // decision_hour, marked below with the orange border, is also
+    // decision_hour, marked below with a dark border and "deadline", is also
     // guaranteed the LAST hour that could ever hold a decision. Everything
     // strictly after it is dimmed: real hours (cuts land, the replay plays
     // out) the decider was simply never called for again, not missing data.
@@ -2395,9 +2395,17 @@ function renderScrubber(episode, run) {
         // Text, not a match/mismatch color strip: the events that actually
         // DRIVE a decision (a forecast revision, a realized cut) vary hour
         // to hour; a spend/hold verdict per hour did not.
+        // The decision hour is the deadline: the last hour an optical reroute
+        // (lead_time_hours) can be ordered and still be live when the storm
+        // reaches its horizon. Display-only -- it is always an agent-called
+        // hour, so it never changes whether a cell is quiet.
+        const isDeadline = h.hour === episode.decision_hour;
+        const stormHour = Object.keys(
+            (episode.forecast || {})[episode.decision_hour] || {})[0];
         const events = document.createElement('div');
         events.className = 'hcell-events';
-        events.textContent = parts.join(' / ') || '\u00a0';
+        events.textContent =
+            (isDeadline ? [...parts, 'deadline'] : parts).join(' / ') || '\u00a0';
         cell.appendChild(events);
 
         const acted = actionsByHour[h.hour] || [];
@@ -2406,6 +2414,12 @@ function renderScrubber(episode, run) {
             ? 'nothing happens this hour: no forecast, no cut, the agent ' +
               'is not called and no action takes effect'
             : [
+                isDeadline
+                    ? 'deadline: last hour to act before the storm -- an ' +
+                      'optical reroute ordered later ' +
+                      `(${episode.lead_time_hours} h lead time) can't be ` +
+                      `live by ${stormHour || 'the storm'}`
+                    : null,
                 agentCalled(h) ? 'agent called' : 'agent not called',
                 acted.length ? `action(s): ${JSON.stringify(acted)}` : null,
                 parts.includes('forecast') ? 'forecast issued this hour' : null,

@@ -462,3 +462,13 @@ def test_a_landing_action_is_named_restored_or_rerouted(folded):
     assert "parts.push('lands')" not in html
     assert "parts.push('restored')" in html
     assert "parts.push('rerouted')" in html
+
+
+def test_the_decision_hour_is_labelled_deadline_not_alarm_red(folded):
+    html = bvd.render_html(folded)
+    assert "[...parts, 'deadline']" in html
+    assert "deadline: last hour to act before the storm" in html
+    # #cc6633 is still the map's candidate-route colour; only the deadline
+    # border moved off it.
+    assert ".hcell.decision { border-color: #444;" in html
+    assert ".hcell.decision { border-color: #cc6633" not in html
