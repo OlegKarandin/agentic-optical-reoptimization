@@ -271,6 +271,46 @@ def test_a_back_link_is_opt_in_and_escaped(folded):
     assert "__BACKLINK__" not in html
 
 
+def test_quiet_hours_are_unclickable_and_skipped_by_arrow_keys(folded):
+    html = bvd.render_html(folded)
+    assert "' quiet'" in html and ".hcell.quiet" in html
+    assert "if (!quiet) {" in html  # no click handler on a quiet cell
+    assert "nextLiveHour(episode, run, state.hourIndex, step)" in html
+
+
+def test_uncalled_hours_render_no_observation_or_ranking(folded):
+    html = bvd.render_html(folded)
+    assert "if (!agentCalled(hour)) {" in html
+    assert "No decision this hour: the model was not called." in html
+
+
+def test_the_joint_cut_table_reads_the_wire_payload(folded):
+    html = bvd.render_html(folded)
+    assert "function jointCutTable(hour)" in html
+    assert "obs.cut_outcomes" in html and "obs.hours_down_if_cut" in html
+
+
+def test_probe_validity_is_judged_against_the_risk_group_in_force(folded):
+    # A probe answer holds only under the risk group it was asked under; a
+    # later issuance replaces the group and makes it stale. Judged against
+    # the viewed hour, never a later one.
+    html = bvd.render_html(folded)
+    assert "valid now?" in html and "re-shown later" not in html
+    assert "riskGroupsInForce(run, state.hourIndex)" in html
+    assert "stale: risk group revised at" in html
+
+
+def test_the_joint_cut_table_explains_itself(folded):
+    html = bvd.render_html(folded)
+    assert "Storm outcomes at" in html
+    assert "mutually exclusive and sum to 1." in html
+    assert "none (everything survives)" in html
+
+
+def test_no_inversion_warning_on_the_ranking(folded):
+    assert "inverted: SUT ranks" not in bvd.render_html(folded)
+
+
 def test_the_scrubber_marks_events_not_a_spend_hold_verdict(folded):
     # 389346a replaced renderScrubber's per-hour gold-vs-agent color strip
     # with a text line naming the events that drive a decision (a forecast

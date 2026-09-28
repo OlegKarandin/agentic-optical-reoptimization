@@ -516,6 +516,9 @@ footer { flex: 0 0 auto; border-top: 1px solid #ccc; padding: 6px 12px; }
    never have held a decision. Dimmed so the LAST hour that could matter
    (.decision, above) reads as a boundary at a glance, not just on hover. */
 .hcell.past-decision { opacity: 0.55; }
+.hcell.quiet { opacity: 0.25; cursor: default; background: transparent; }
+.stale-row td { color: #999; }
+.table-note { font-size: 11px; color: #555; margin: 2px 0 4px; }
 .hcell-events { font-size: 9px; color: #777; margin-top: 2px;
                 white-space: nowrap; }
 .hcell.current .hcell-events { color: #dbe6ff; }
@@ -1572,7 +1575,7 @@ function selectedIteration(hour) {
 
 function esc(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 // Any candidate in any iteration this hour, not just the committed one or
@@ -1860,12 +1863,24 @@ function renderSaw(hour) {
     const el = document.getElementById('saw');
     el.innerHTML = '<h3>What the agent saw (click a row to spotlight it)</h3>';
     if (!hour) return;
+    if (!agentCalled(hour)) {
+        const note = document.createElement('div');
+        note.className = 'skipped';
+        note.textContent = `The agent was not called at ${hour.hour}. It is ` +
+            'only called on hours with a new forecast issuance while a ' +
+            'spare is still on hand, so nothing was shown to it.';
+        el.appendChild(note);
+        return;
+    }
     // Only what the agent was actually shown -- the omitted rows this table
     // used to include (project_observation's own trim) are noise here; the
     // trim itself is still checked in tests/eval/test_build_viewer_data.py.
     const rows = (hour.exposure_rows || []).filter(r => r.shown);
     const table = document.createElement('table');
-    table.innerHTML = '<tr><th>service</th><th>horizon</th><th>offset_km</th>' +
+    // No offset_km column: it was trimmed off the wire (the model sees
+    // p_cut, which already prices distance in), so showing it here would
+    // misstate what the agent saw.
+    table.innerHTML = '<tr><th>service</th><th>horizon</th>' +
         '<th>p_cut</th><th>if revised</th><th>demand_gbps</th>' +
         '<th title="expected capacity at risk: demand_gbps * p_cut, ' +
         'Gbps">ECAR (Gbps)</th></tr>';
@@ -1878,7 +1893,7 @@ function renderSaw(hour) {
         tr.innerHTML =
             `<td>${esc(r.service_id)}${isSut ? ' <span class="sut-badge">SUT</span>' : ''}</td>` +
             `<td>${esc(r.horizon)}</td>` +
-            `<td>${esc(r.offset_km)}</td><td>${esc(r.p_cut)}</td>` +
+            `<td>${esc(r.p_cut)}</td>` +
             `<td>${esc(r.p_cut_if_track_revised
                 ? `${r.p_cut_if_track_revised.min}-${r.p_cut_if_track_revised.max}`
                 : '-')}</td>` +
@@ -1926,6 +1941,8 @@ function renderSaw(hour) {
         el.appendChild(gTable);
     }
 
+    el.appendChild(jointCutTable(hour));
+
     // Every field below is Observation.to_dict()'s own per-hour ledger
     // state -- what the agent actually knew going into THIS hour, not a
     // run-final scalar (spares_remaining) or a flat episode constant
@@ -1961,6 +1978,67 @@ function renderSaw(hour) {
     el.appendChild(rawJson('timing', {observation: hour.projected}));
 }
 
+// cut_outcomes (observation.py, on the wire only -- hence hour.projected):
+// per horizon, a partition of the storm's possible outcomes. Each row is one
+// outcome -- exactly these shown services cut, every other shown service
+// survives -- so the rows are mutually exclusive and sum to 1. This is what
+// lets a decider see that, say, the SUT only ever goes down in an outcome
+// where every claimant goes down too.
+function pctText(p) {
+    if (!(p > 0)) return '~0%';
+    if (p < 0.001) return '<0.1%';
+    return `${+(p * 100).toFixed(1)}%`;
+}
+
+function jointCutTable(hour) {
+    const wrap = document.createElement('div');
+    const obs = hour.projected || {};
+    const outcomes = obs.cut_outcomes || {};
+    if (!Object.keys(outcomes).length) return wrap;
+    const sut = hour.actionable_service;
+    for (const [horizon, rows] of Object.entries(outcomes)) {
+        wrap.appendChild(stepLabel(
+            `Storm outcomes at ${horizon} (per the forecast issued at ` +
+            `${obs.issued_at || hour.hour})`));
+        const intro = document.createElement('div');
+        intro.className = 'table-note';
+        intro.textContent = 'Each row is one way the storm could go: the ' +
+            'listed services are cut, all others shown survive. Rows are ' +
+            'mutually exclusive and sum to 1.';
+        wrap.appendChild(intro);
+        const table = document.createElement('table');
+        table.innerHTML = '<tr><th>chance</th>' +
+            '<th>services cut in this outcome</th></tr>';
+        for (const r of rows) {
+            const tr = document.createElement('tr');
+            let cell;
+            if (r.other) {
+                cell = `<span class="omitted">${esc(r.count)} rarer ` +
+                    'outcomes, combined</span>';
+            } else if (!(r.down || []).length) {
+                cell = '<span class="omitted">none (everything survives)</span>';
+            } else {
+                cell = r.down.map(id => id === sut
+                    ? `<b>${esc(id)}</b> <span class="sut-badge">SUT</span>`
+                    : esc(id)).join(', ');
+            }
+            tr.innerHTML = `<td>${esc(pctText(r.p))}</td><td>${cell}</td>`;
+            table.appendChild(tr);
+        }
+        wrap.appendChild(table);
+        const down = (obs.hours_down_if_cut || {})[horizon];
+        if (down) {
+            const foot = document.createElement('div');
+            foot.className = 'table-note';
+            foot.innerHTML = `A cut service stays down <b>${esc(down.unrestored)} h</b> ` +
+                `if left alone, or <b>${esc(down.restored_after_cut)} h</b> if ` +
+                'the held spare restores it after the cut.';
+            wrap.appendChild(foot);
+        }
+    }
+    return wrap;
+}
+
 // ---- probes -------------------------------------------------------------
 // probe_restorability: the one read-only tool T2/T3 add (probe.py). One
 // ProbeBinding per hour, so hour.probes is a FLAT list spanning every
@@ -1986,32 +2064,41 @@ function probeTable(probes) {
     table.innerHTML = '<tr><th>hour</th><th>decision</th><th>service</th>' +
         '<th>risk_group</th><th>status</th><th>candidates</th>' +
         '<th>min_spares</th><th>levers</th>' +
-        '<th>carried into next hour?</th></tr>';
+        '<th title="whether this answer still holds at the hour being ' +
+        'viewed: current if it was asked under the risk group in force ' +
+        'now, stale if the forecast has since revised the group">' +
+        'valid now?</th></tr>';
+    const inForce = run ? riskGroupsInForce(run, state.hourIndex) : null;
+    const keyTitle = flip
+        ? `The claimant whose restorability decides this pair (scenario ` +
+          `design). Expected answer: ${flip.expected}.` : '';
     for (const p of probes) {
         const tr = document.createElement('tr');
         const isFlip = !!flip && p.service_id === flip.claimant;
-        if (isFlip) tr.className = 'flip-row';
+        const validity = probeValidity(inForce, p);
+        tr.className = [isFlip ? 'flip-row' : '',
+                        validity.stale ? 'stale-row' : ''].join(' ').trim();
         if (p.error) {
             tr.innerHTML = `<td>${esc(p.hour)}</td><td>${esc(p.decision)}</td>` +
                 `<td>${esc(p.service_id)}</td><td>${esc(p.risk_group_id)}</td>` +
-                `<td class="probe-error" colspan="5">error: ${esc(p.error)}</td>`;
+                `<td class="probe-error" colspan="5">error: ${esc(p.error)}</td>` +
+                `<td>${esc(validity.text)}</td>`;
             table.appendChild(tr);
             continue;
         }
         const a = p.answer || {};
         const spares = Object.entries(a.min_spares_needed_by_site || {})
             .map(([site, n]) => `${site}:${n}`).join(', ') || '-';
-        const carried = run ? probeCarriedForward(run, p.hour, p) : '?';
         tr.innerHTML =
             `<td>${esc(p.hour)}</td><td>${esc(p.decision)}</td>` +
             `<td>${esc(p.service_id)}` +
-            `${isFlip ? ' <span class="flip-badge">FLIP</span>' : ''}</td>` +
+            `${isFlip ? ` <span class="flip-badge" title="${esc(keyTitle)}">KEY</span>` : ''}</td>` +
             `<td>${esc(p.risk_group_id)}</td>` +
             `<td>${esc(a.status)}</td>` +
             `<td>${esc(a.full_restore_candidates)}</td>` +
             `<td>${esc(spares)}</td>` +
             `<td>${esc((a.levers || []).join(', '))}</td>` +
-            `<td>${esc(carried)}</td>`;
+            `<td>${esc(validity.text)}</td>`;
         table.appendChild(tr);
     }
     return table;
@@ -2049,21 +2136,16 @@ function renderSaid(hour) {
     if (hour.timing.skipped) {
         const note = document.createElement('div');
         note.className = 'skipped';
-        note.textContent = 'no decision this hour: ' +
-            'nothing was decidable (no spare left, no exposure, or no new ' +
-            'issuance). The harness recorded a wait; the model was not called.';
+        note.textContent = 'No decision this hour: the model was not called.';
         el.appendChild(note);
-        appendRanking(el, hour);
         return;
     }
     const probeCursor = {i: 0};
     // hour.probes entries carry no `hour` field of their own (the trace
     // schema leaves it implicit -- they're already scoped to this hour
-    // record); episodeProbes() synthesizes one for the whole-run ledger, but
-    // probeTable()'s `hour` column and probeCarriedForward()'s lookup into
-    // run.hours both need it too, or the former shows "undefined" and the
-    // latter's hours.findIndex() misses, falling through to the same message
-    // a genuine last-hour probe gets ("n/a (last hour)") for the wrong reason.
+    // record); episodeProbes() synthesizes one for the whole-run ledger, and
+    // probeTable()'s `hour` column needs it here too, or it shows
+    // "undefined".
     const allProbes = (hour.probes || []).map(p => ({...p, hour: hour.hour}));
     // hour.rejections is populated in the SAME order the iterations loop
     // executes (runner.py: every failing continue appends exactly one
@@ -2192,24 +2274,50 @@ function renderSaid(hour) {
 
 // ---- scrubber -------------------------------------------------------
 
-function renderScrubber(episode, run) {
-    const el = document.getElementById('scrubber');
-    el.innerHTML = '';
-    if (!episode || !run) return;
+// Whether the model was actually called this hour. A skipped hour (the
+// decidable-hours rule, runner.is_decidable) still carries an observation
+// record, but nothing in it was ever shown to anyone.
+function agentCalled(hour) {
+    return !!(hour && hour.timing && !hour.timing.skipped);
+}
+
+// What makes hour i worth stopping on: the model was called, a forecast was
+// issued, a cut landed, or an action (a decider reroute or a harness
+// restoration) took effect. An hour with none of these shows nothing the
+// previous hour didn't, so the scrubber makes it unclickable.
+function hourEvents(episode, run, i) {
+    const h = run.hours[i];
+    const parts = [];
+    if (agentCalled(h)) parts.push('agent');
+    if (Object.prototype.hasOwnProperty.call(episode.forecast || {}, h.hour)) {
+        parts.push('forecast');
+    }
+    if (((episode.realized_cuts || {})[h.hour] || []).length ||
+        (h.dropped_after_cut || []).length) parts.push('cut');
+    if ((run.actions || []).some(a => a.effective_at_index === i &&
+                                      a.hour !== h.hour)) {
+        parts.push('lands');
+    }
+    return parts;
+}
+
+function isQuietHour(episode, run, i) {
+    return !hourEvents(episode, run, i).length;
+}
+
+// Arrow-key stepping: the nearest non-quiet hour in direction `step`, or the
+// current index if there is none.
+function nextLiveHour(episode, run, from, step) {
+    const last = lastRelevantIdx(episode, run);
+    for (let i = from + step; i >= 0 && i <= last; i += step) {
+        if (!isQuietHour(episode, run, i)) return i;
+    }
+    return from;
+}
+
+function lastRelevantIdx(episode, run) {
     const forecast = episode.forecast || {};
     const cutsByHour = episode.realized_cuts || {};
-    // Actions live on the run, each tagged with the hour it landed in --
-    // hour records carry no `actions` key of their own.
-    const actionsByHour = {};
-    for (const a of run.actions || []) {
-        (actionsByHour[a.hour] = actionsByHour[a.hour] || []).push(a);
-    }
-    // is_decidable (runner.py) requires an ISSUANCE hour, and every
-    // episode's deadline is itself an issuance hour by construction -- so
-    // decision_hour, marked below with the orange border, is also
-    // guaranteed the LAST hour that could ever hold a decision. Everything
-    // strictly after it is dimmed: real hours (cuts land, the replay plays
-    // out) the decider was simply never called for again, not missing data.
     const decisionIdx = run.hours.findIndex(h => h.hour === episode.decision_hour);
     // The scrubber shows a REPLAY horizon, not scenario.hours verbatim --
     // scenario.hours (and so gbps_hours_lost's own outage-duration ceiling,
@@ -2231,55 +2339,71 @@ function renderScrubber(episode, run) {
             .map(([hh]) => hourIdx(hh)),
         ...(run.actions || []).map(a => a.effective_at_index),
     ].filter(i => i !== undefined && i !== null && i !== -1);
-    const lastRelevantIdx = relevantIdxs.length
+    return relevantIdxs.length
         ? Math.max(...relevantIdxs) : run.hours.length - 1;
-    run.hours.slice(0, lastRelevantIdx + 1).forEach((h, i) => {
+}
+
+function renderScrubber(episode, run) {
+    const el = document.getElementById('scrubber');
+    el.innerHTML = '';
+    if (!episode || !run) return;
+    const cutsByHour = episode.realized_cuts || {};
+    // Actions live on the run, each tagged with the hour it landed in --
+    // hour records carry no `actions` key of their own.
+    const actionsByHour = {};
+    for (const a of run.actions || []) {
+        (actionsByHour[a.hour] = actionsByHour[a.hour] || []).push(a);
+    }
+    // is_decidable (runner.py) requires an ISSUANCE hour, and every
+    // episode's deadline is itself an issuance hour by construction -- so
+    // decision_hour, marked below with the orange border, is also
+    // guaranteed the LAST hour that could ever hold a decision. Everything
+    // strictly after it is dimmed: real hours (cuts land, the replay plays
+    // out) the decider was simply never called for again, not missing data.
+    const decisionIdx = run.hours.findIndex(h => h.hour === episode.decision_hour);
+    run.hours.slice(0, lastRelevantIdx(episode, run) + 1).forEach((h, i) => {
+        const parts = hourEvents(episode, run, i);
+        const quiet = !parts.length;
         const cell = document.createElement('div');
         cell.className = 'hcell' +
             (i === state.hourIndex ? ' current' : '') +
             (h.hour === episode.decision_hour ? ' decision' : '') +
-            (decisionIdx !== -1 && i > decisionIdx ? ' past-decision' : '');
+            (decisionIdx !== -1 && i > decisionIdx ? ' past-decision' : '') +
+            (quiet ? ' quiet' : '');
         const label = document.createElement('div');
         label.textContent = h.hour;
         cell.appendChild(label);
 
-        const acted = actionsByHour[h.hour] || [];
-        const skipped = !!(h.timing && h.timing.skipped);
-        const revised = Object.prototype.hasOwnProperty.call(forecast, h.hour);
-        const cuts = cutsByHour[h.hour] || [];
-
-        // Text, not a match/mismatch color strip: the old strip judged the
-        // decider's action against gold.gold_spare_action, which is only
-        // ever set for the spare_action_by_deadline episodes and mostly flat
-        // ("unknown") everywhere else -- it didn't vary hour to hour the way
-        // the events that actually DRIVE a decision (a forecast revision, a
-        // realized cut) do. Those events apply to every episode.
+        // Text, not a match/mismatch color strip: the events that actually
+        // DRIVE a decision (a forecast revision, a realized cut) vary hour
+        // to hour; a spend/hold verdict per hour did not.
         const events = document.createElement('div');
         events.className = 'hcell-events';
-        const parts = [];
-        if (revised) parts.push('forecast');
-        if (cuts.length) parts.push('cut');
-        events.textContent = parts.join(' / ') || ' ';
+        events.textContent = parts.join(' / ') || '\u00a0';
         cell.appendChild(events);
 
-        cell.title = [
-            acted.length
-                ? `agent action(s): ${JSON.stringify(acted)}`
-                : skipped
-                    ? 'skipped: nothing decidable this hour, the decider ' +
-                      'was never called'
-                    : 'no action this hour',
-            revised ? 'forecast revised this hour' : null,
-            cuts.length
-                ? `realized cut(s): ${cuts.map(c => c.join('-')).join(', ')}`
-                : null,
-        ].filter(Boolean).join(' -- ');
+        const acted = actionsByHour[h.hour] || [];
+        const cuts = cutsByHour[h.hour] || [];
+        cell.title = quiet
+            ? 'nothing happens this hour: no forecast, no cut, the agent ' +
+              'is not called and no action takes effect'
+            : [
+                agentCalled(h) ? 'agent called' : 'agent not called',
+                acted.length ? `action(s): ${JSON.stringify(acted)}` : null,
+                parts.includes('forecast') ? 'forecast issued this hour' : null,
+                cuts.length
+                    ? `realized cut(s): ${cuts.map(c => c.join('-')).join(', ')}`
+                    : null,
+                parts.includes('lands') ? 'an earlier action takes effect' : null,
+            ].filter(Boolean).join(' -- ');
 
-        cell.addEventListener('click', () => {
-            state.hourIndex = i;
-            state.selectedCandidate = null;
-            renderAll();
-        });
+        if (!quiet) {
+            cell.addEventListener('click', () => {
+                state.hourIndex = i;
+                state.selectedCandidate = null;
+                renderAll();
+            });
+        }
         el.appendChild(cell);
     });
 }
@@ -2410,8 +2534,11 @@ function appendRanking(el, hour) {
     }
     const funded = obs.spares_on_hand || 0;
     const sut = hour.actionable_service;
-    const standingIdx = standing.indexOf(sut);
-    const ecarIdx = ecar.indexOf(sut);
+    // No "inverted" warning when the two columns disagree: raw ECAR ignores
+    // restorability and joint cuts, so a sound ranking often departs from it
+    // on purpose (T2b demotes the largest claim because it probes
+    // unrestorable). The side-by-side table shows the departure; flagging
+    // it as an error would mislabel the correct behaviour.
     if (!standingKnown) {
         const note = document.createElement('div');
         note.className = 'reasoning';
@@ -2423,12 +2550,6 @@ function appendRanking(el, hour) {
         note.className = 'reasoning';
         note.textContent = '(no standing ranking yet this episode)';
         el.appendChild(note);
-    } else if (standingIdx !== -1 && ecarIdx !== -1 && standingIdx !== ecarIdx) {
-        const warn = document.createElement('div');
-        warn.className = 'inversion';
-        warn.textContent = `inverted: SUT ranks #${standingIdx + 1} in the ` +
-            `standing order but #${ecarIdx + 1} by current ECAR`;
-        el.appendChild(warn);
     }
     const table = document.createElement('table');
     table.innerHTML = '<tr><th>#</th><th>standing_claim_priority</th>' +
@@ -2467,11 +2588,25 @@ function renderHappened(episode, run, hour) {
     const dropped = hour.dropped_after_cut || [];
     const restorations = ((run && run.restorations) || [])
         .filter(r => r.hour === hour.hour);
+    // Actions decided at an EARLIER hour that take effect now (an optical
+    // reroute's lead time, a post-cut restoration landing hours later).
+    const landing = ((run && run.actions) || []).filter(a =>
+        a.effective_at_index === state.hourIndex && a.hour !== hour.hour);
+    for (const a of landing) {
+        const div = document.createElement('div');
+        div.className = 'gate-ok';
+        div.textContent = `takes effect now: ${a.service_id} ` +
+            `(${a.origin === 'harness' ? 'harness restoration' : 'agent action'}` +
+            `${a.lever ? ', ' + a.lever : ''}, decided at ${a.hour})`;
+        el.appendChild(div);
+    }
     if (!dropped.length && !restorations.length) {
-        const note = document.createElement('div');
-        note.className = 'reasoning';
-        note.textContent = '(no cuts realized this hour)';
-        el.appendChild(note);
+        if (!landing.length) {
+            const note = document.createElement('div');
+            note.className = 'reasoning';
+            note.textContent = '(no cuts realized this hour)';
+            el.appendChild(note);
+        }
         return;
     }
     const sut = hour.actionable_service;
@@ -2558,41 +2693,33 @@ function episodeProbes(run) {
     return rows;
 }
 
-// Whether this probe's answer shows up in decided_this_hour.probe_answers
-// on any LATER hour -- the one place a carried-forward answer would have
-// to appear (runner.py: decided_this_hour is rebuilt fresh every hour from
-// THAT hour's own probe.records, never a prior hour's -- agent.py's
-// _decide also opens a fresh `messages` list each hour).
-//
-// No 'unknown (older trace)' fallback: this function is only ever called
-// with a `probe` that came from hour.probes, and the probes field and
-// decided_this_hour landed in the SAME commit pair (4df9053/9b3fd71) -- a
-// trace old enough to lack decided_this_hour never has hour.probes either,
-// so it never produces a `probe` to call this with in the first place.
-// decided_this_hour is ALSO, separately and legitimately, absent on any
-// later hour that never ran a constraints/objective iteration (a skipped
-// hour, or a hold reached at the timing step alone) -- agent.py: it is only
-// attached "on the constraints and menu requests". Checked directly against
-// every current trace: T1a/T2b/T3a/T3b rollouts routinely carry probes with
-// zero decided_this_hour anywhere in the whole file, simply because no
-// later hour ever reached that step -- not because the trace predates the
-// field. That is a real "no", not an unanswerable question.
-function probeCarriedForward(run, probeHour, probe) {
-    const hours = (run && run.hours) || [];
-    const hourIdx = hours.findIndex(h => h.hour === probeHour);
-    if (hourIdx === -1 || hourIdx === hours.length - 1) return 'n/a (last hour)';
-    for (let i = hourIdx + 1; i < hours.length; i++) {
-        for (const it of hours[i].iterations || []) {
-            const decided = (it.projected || {}).decided_this_hour;
-            if (!decided) continue;
-            const answers = decided.probe_answers || [];
-            if (answers.some(a => a.service_id === probe.service_id &&
-                                  a.risk_group_id === probe.risk_group_id)) {
-                return 'yes';
-            }
+// The risk groups in force at hour `idx`: those of the latest hour at or
+// before it where the agent was called (an uncalled hour carries none of
+// its own -- the last issuance's forecast is still the one standing), plus
+// the hour they were issued at. Null before any called hour.
+function riskGroupsInForce(run, idx) {
+    for (let i = Math.min(idx, run.hours.length - 1); i >= 0; i--) {
+        const h = run.hours[i];
+        const ids = (h.projected || {}).risk_group_ids ||
+                    (h.observation || {}).risk_group_ids;
+        if (agentCalled(h) && ids && Object.keys(ids).length) {
+            return {hour: h.hour, ids: new Set(Object.values(ids))};
         }
     }
-    return 'no';
+    return null;
+}
+
+// Whether a probe's answer still holds at the viewed hour: it was asked
+// under a specific risk group, and a later forecast issuance replaces the
+// group -- after which the answer describes a storm that is no longer the
+// forecast (T2b: khandwa's t0 `solution` is stale at t1, where the re-probe
+// says `no_solution`).
+function probeValidity(inForce, probe) {
+    if (!inForce) return {text: '?', stale: false};
+    if (inForce.ids.has(probe.risk_group_id)) {
+        return {text: 'current', stale: false};
+    }
+    return {text: `stale: risk group revised at ${inForce.hour}`, stale: true};
 }
 
 function probeSplit(run) {
@@ -2653,31 +2780,36 @@ function renderScoreboard(episode, run) {
 
 function renderProbeLedger(episode, run) {
     const el = document.getElementById('probes');
-    el.innerHTML = '<h3>Combined probe ledger -- every probe_restorability ' +
-        'call this run, all hours and decisions together</h3>';
-    if (!episode || !run) return;
-    const rows = episodeProbes(run);
+    if (!episode || !run) {
+        el.innerHTML = '<h3>Probe ledger</h3>';
+        return;
+    }
+    const through = (run.hours[state.hourIndex] || {}).hour;
+    el.innerHTML = '<h3>Probe ledger -- every probe_restorability call ' +
+        `so far (through ${esc(through)}), all decisions together</h3>`;
+    const rows = episodeProbes(run).filter(r =>
+        run.hours.findIndex(h => h.hour === r.hour) <= state.hourIndex);
     const flip = episode.probe_flip;
     if (flip) {
         const div = document.createElement('div');
         div.className = 'reasoning';
-        div.textContent = `metadata.probe_flip: claimant ${flip.claimant}, ` +
-            `kind ${flip.kind}, expected ${flip.expected}`;
+        div.innerHTML = '<span class="flip-badge">KEY</span> ' +
+            `${esc(flip.claimant)} is the claimant whose restorability ` +
+            'decides this pair (scenario design). Expected probe answer: ' +
+            `${esc(flip.expected)}.`;
         el.appendChild(div);
     }
     const flipProbed = !!flip && rows.some(r => r.service_id === flip.claimant);
     if (flip && !flipProbed) {
         const warn = document.createElement('div');
         warn.className = 'inversion';
-        warn.textContent = `never probed: ${flip.claimant} (the deciding ` +
-            'claimant per metadata.probe_flip) was not asked about at ' +
-            'all this run';
+        warn.textContent = `${flip.claimant} has not been probed so far.`;
         el.appendChild(warn);
     }
     if (!rows.length) {
         const note = document.createElement('div');
         note.className = 'reasoning';
-        note.textContent = '(no probe_restorability calls this run)';
+        note.textContent = '(no probe_restorability calls so far)';
         el.appendChild(note);
         return;
     }
@@ -2755,13 +2887,13 @@ syncProjectedRiskToggle();
 
 document.addEventListener('keydown', (ev) => {
     const run = currentRun();
-    if (!run) return;
-    if (ev.key === 'ArrowLeft' && state.hourIndex > 0) {
-        state.hourIndex -= 1;
-        state.selectedCandidate = null;
-        renderAll();
-    } else if (ev.key === 'ArrowRight' && state.hourIndex < run.hours.length - 1) {
-        state.hourIndex += 1;
+    const episode = currentEpisode();
+    if (!run || !episode) return;
+    const step = ev.key === 'ArrowLeft' ? -1 : ev.key === 'ArrowRight' ? 1 : 0;
+    if (!step) return;
+    const next = nextLiveHour(episode, run, state.hourIndex, step);
+    if (next !== state.hourIndex) {
+        state.hourIndex = next;
         state.selectedCandidate = null;
         renderAll();
     }
