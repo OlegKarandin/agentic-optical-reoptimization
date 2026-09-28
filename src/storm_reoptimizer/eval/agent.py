@@ -374,6 +374,14 @@ def strict_tool_schema(node):
 
 
 DEFAULT_MODEL = "claude-sonnet-5"
+# Claude Opus 5.5 (and the Fable 5.1 / Mythos 5.1 family) return a 400 on
+# tool_choice type "any"/"tool" -- forced tool use was removed for these
+# models. Falling back to "auto" needs no other change here: _decide's
+# retry loop already tolerates a response with no tool_use block or the
+# wrong tool called (both existing branches, exercised for Sonnet 5 by
+# other model quirks), and every per-step instruction already tells the
+# model explicitly which tool to call.
+_NO_FORCED_TOOL_CHOICE_MODELS = frozenset({"claude-opus-5-5"})
 # Thinking tokens count against max_tokens. A generous cap costs nothing
 # (billing is on tokens actually produced) and avoids a truncated tool call.
 MAX_TOKENS = 16000
@@ -758,12 +766,18 @@ class ClaudeDecider:
                  p_cut_threshold: float = P_CUT_ENUMERATION_THRESHOLD,
                  audit_path: str | Path | None = None,
                  oms_nodes: dict[str, list[str]] | None = None,
-                 lit_runs: Iterable[tuple[str, str]] | None = None) -> None:
+                 lit_runs: Iterable[tuple[str, str]] | None = None,
+                 effort: str | None = None) -> None:
         self.model = model
         # suite.run_suite keys its results dict AND the trace filename on
         # `name`.
         self.name = f"agent:{model}"
         self._client = client
+        # None (the default) omits `output_config.effort` entirely, which is
+        # the existing Sonnet-5 behavior (defaults to "high" server-side) --
+        # left untouched. Only set this to steer a model's effort level
+        # explicitly, e.g. "medium" on claude-opus-5-5.
+        self.effort = effort
         self._p_cut_threshold = p_cut_threshold
         self._audit_path = Path(audit_path) if audit_path else None
         self._system_prompt = SYSTEM_PROMPT
@@ -817,6 +831,12 @@ class ClaudeDecider:
         return f"{rendered}\n\n{instruction}"
 
     def _create(self, messages: list[dict]):
+        tool_choice = ({"type": "auto", "disable_parallel_tool_use": True}
+                      if self.model in _NO_FORCED_TOOL_CHOICE_MODELS else
+                      {"type": "any", "disable_parallel_tool_use": True})
+        kwargs = {}
+        if self.effort is not None:
+            kwargs["output_config"] = {"effort": self.effort}
         return self._api.messages.create(
             model=self.model,
             max_tokens=MAX_TOKENS,
@@ -826,8 +846,9 @@ class ClaudeDecider:
             # top_k -- any of them is a 400.
             thinking={"type": "adaptive"},
             tools=TOOLS,
-            tool_choice={"type": "any", "disable_parallel_tool_use": True},
+            tool_choice=tool_choice,
             messages=messages,
+            **kwargs,
         )
 
     @staticmethod

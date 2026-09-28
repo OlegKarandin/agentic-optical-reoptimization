@@ -242,6 +242,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--agent-model", default=DEFAULT_MODEL,
         help=f"Model for --include-agent (default: {DEFAULT_MODEL}).")
     p.add_argument(
+        "--agent-effort", default=None,
+        help="output_config.effort for --include-agent (low/medium/high/"
+             "xhigh/max). Default: omit the field entirely (the model's own "
+             "server-side default).")
+    p.add_argument(
         "--only", default=None,
         help="Comma-separated scenario ids to run (e.g. T1a,T1b). Restricts "
              "both the pre-flight gates and the rollouts to this subset. "
@@ -263,7 +268,8 @@ def build_deciders(args: argparse.Namespace) -> list:
                 ForecastBlindBaseline("at_deadline")]
     if args.include_agent:
         deciders.append(ClaudeDecider(
-            model=args.agent_model, audit_path=AGENT_AUDIT_PATH))
+            model=args.agent_model, audit_path=AGENT_AUDIT_PATH,
+            effort=args.agent_effort))
     return deciders
 
 

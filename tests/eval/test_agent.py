@@ -743,7 +743,8 @@ def test_build_deciders_wiring_gap_is_closed(monkeypatch):
     menu renders onto the wire with no crash."""
     monkeypatch.setattr(
         "storm_reoptimizer.eval.suite.AGENT_AUDIT_PATH", None)
-    args = SimpleNamespace(include_agent=True, agent_model=DEFAULT_MODEL)
+    args = SimpleNamespace(include_agent=True, agent_model=DEFAULT_MODEL,
+                          agent_effort=None)
     decider = build_deciders(args)[-1]
     assert isinstance(decider, ClaudeDecider)
     assert decider.oms_nodes == {}, (
