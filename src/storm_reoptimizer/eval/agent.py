@@ -194,7 +194,21 @@ def project_observation(
     risk_groups` and `avoid.assets` can both be named without the model
     having to cross-reference a separate block. It is what makes
     `avoid.assets` nameable rather than all-or-nothing, and it is large, so
-    only the caller deciding constraints passes it."""
+    only the caller deciding constraints passes it.
+
+    `cut_outcomes` (2026-09-27 T2 correlated-claims spec §4.2) is added
+    AFTER `exposure` is trimmed to `keep`, and is built OVER exactly that
+    trimmed set (`cut_outcome_rows(obs, payload["exposure"])`, not over the
+    full roster) -- the reduction happens in this projection, not in
+    `build_observation`, so a service dropped from `exposure` for being
+    below threshold or ineligible for the depot never appears in a
+    `cut_outcomes` row either. It is the joint distribution of which shown
+    services go down TOGETHER, one row per distinct co-occurring set,
+    mutually exclusive and summing to 1; it is omitted from the payload
+    entirely when no service is shown, rather than shipped as an empty
+    dict. See the inline comment at its call site below for the exact
+    reduction, and `Observation.cut_masks`'s own field comment for what it
+    is reduced FROM."""
     payload = obs.to_dict()
     payload.pop("damage_radius_km")
     # `list(...)`, NOT `sorted(...)` -- horizon-hour labels ("t2", "t10", ...)

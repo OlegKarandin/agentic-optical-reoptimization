@@ -2496,7 +2496,8 @@ function renderHappened(episode, run, hour) {
     if (restorations.length) {
         el.appendChild(stepLabel(
             "restore_after_cuts -- the harness's own post-cut replay " +
-            '(SUT + claimant_services, in standing_claim_priority order)'));
+            '(every service shown to the agent this episode, in ' +
+            'standing_claim_priority order)'));
         const table = document.createElement('table');
         table.innerHTML = '<tr><th>service</th><th>outcome</th>' +
             '<th>lever</th><th>spares</th><th>effective_at_hour</th></tr>';
