@@ -290,12 +290,21 @@ def test_the_joint_cut_table_reads_the_wire_payload(folded):
     assert "obs.cut_outcomes" in html and "obs.hours_down_if_cut" in html
 
 
-def test_probe_carry_reads_the_field_the_harness_carries_answers_in(folded):
-    # decided_this_hour only ever holds THIS hour's probes; a carried answer
-    # lives in a later hour's observation.probe_answers_this_episode.
+def test_probe_validity_is_judged_against_the_risk_group_in_force(folded):
+    # A probe answer holds only under the risk group it was asked under; a
+    # later issuance replaces the group and makes it stale. Judged against
+    # the viewed hour, never a later one.
     html = bvd.render_html(folded)
-    assert ".probe_answers_this_episode" in html
-    assert "decided.probe_answers" not in html
+    assert "valid now?" in html and "re-shown later" not in html
+    assert "riskGroupsInForce(run, state.hourIndex)" in html
+    assert "stale: risk group revised at" in html
+
+
+def test_the_joint_cut_table_explains_itself(folded):
+    html = bvd.render_html(folded)
+    assert "Storm outcomes at" in html
+    assert "mutually exclusive and sum to 1." in html
+    assert "none (everything survives)" in html
 
 
 def test_no_inversion_warning_on_the_ranking(folded):

@@ -517,6 +517,8 @@ footer { flex: 0 0 auto; border-top: 1px solid #ccc; padding: 6px 12px; }
    (.decision, above) reads as a boundary at a glance, not just on hover. */
 .hcell.past-decision { opacity: 0.55; }
 .hcell.quiet { opacity: 0.25; cursor: default; background: transparent; }
+.stale-row td { color: #999; }
+.table-note { font-size: 11px; color: #555; margin: 2px 0 4px; }
 .hcell-events { font-size: 9px; color: #777; margin-top: 2px;
                 white-space: nowrap; }
 .hcell.current .hcell-events { color: #dbe6ff; }
@@ -1977,10 +1979,17 @@ function renderSaw(hour) {
 }
 
 // cut_outcomes (observation.py, on the wire only -- hence hour.projected):
-// per horizon, the joint distribution of WHICH shown services the storm cuts
-// together, most likely outcome first, with hours_down_if_cut beside it.
-// This is the table that lets a decider see that, say, the SUT only ever
-// goes down in an outcome where every claimant goes down too.
+// per horizon, a partition of the storm's possible outcomes. Each row is one
+// outcome -- exactly these shown services cut, every other shown service
+// survives -- so the rows are mutually exclusive and sum to 1. This is what
+// lets a decider see that, say, the SUT only ever goes down in an outcome
+// where every claimant goes down too.
+function pctText(p) {
+    if (!(p > 0)) return '~0%';
+    if (p < 0.001) return '<0.1%';
+    return `${+(p * 100).toFixed(1)}%`;
+}
+
 function jointCutTable(hour) {
     const wrap = document.createElement('div');
     const obs = hour.projected || {};
@@ -1988,32 +1997,44 @@ function jointCutTable(hour) {
     if (!Object.keys(outcomes).length) return wrap;
     const sut = hour.actionable_service;
     for (const [horizon, rows] of Object.entries(outcomes)) {
-        const down = (obs.hours_down_if_cut || {})[horizon];
         wrap.appendChild(stepLabel(
-            `cut_outcomes at ${horizon} -- joint cut scenarios (which ` +
-            'services go down together)' +
-            (down ? ` -- a cut service is down ${down.unrestored} h, or ` +
-                    `${down.restored_after_cut} h if restored after the cut`
-                  : '')));
+            `Storm outcomes at ${horizon} (per the forecast issued at ` +
+            `${obs.issued_at || hour.hour})`));
+        const intro = document.createElement('div');
+        intro.className = 'table-note';
+        intro.textContent = 'Each row is one way the storm could go: the ' +
+            'listed services are cut, all others shown survive. Rows are ' +
+            'mutually exclusive and sum to 1.';
+        wrap.appendChild(intro);
         const table = document.createElement('table');
-        table.innerHTML = '<tr><th>p</th><th>services cut together</th></tr>';
+        table.innerHTML = '<tr><th>chance</th>' +
+            '<th>services cut in this outcome</th></tr>';
         for (const r of rows) {
             const tr = document.createElement('tr');
             let cell;
             if (r.other) {
-                cell = `<span class="omitted">${esc(r.count)} other ` +
-                    'outcome(s), lumped together</span>';
+                cell = `<span class="omitted">${esc(r.count)} rarer ` +
+                    'outcomes, combined</span>';
             } else if (!(r.down || []).length) {
-                cell = '<span class="omitted">nothing cut</span>';
+                cell = '<span class="omitted">none (everything survives)</span>';
             } else {
                 cell = r.down.map(id => id === sut
                     ? `<b>${esc(id)}</b> <span class="sut-badge">SUT</span>`
                     : esc(id)).join(', ');
             }
-            tr.innerHTML = `<td>${esc(r.p)}</td><td>${cell}</td>`;
+            tr.innerHTML = `<td>${esc(pctText(r.p))}</td><td>${cell}</td>`;
             table.appendChild(tr);
         }
         wrap.appendChild(table);
+        const down = (obs.hours_down_if_cut || {})[horizon];
+        if (down) {
+            const foot = document.createElement('div');
+            foot.className = 'table-note';
+            foot.innerHTML = `A cut service stays down <b>${esc(down.unrestored)} h</b> ` +
+                `if left alone, or <b>${esc(down.restored_after_cut)} h</b> if ` +
+                'the held spare restores it after the cut.';
+            wrap.appendChild(foot);
+        }
     }
     return wrap;
 }
@@ -2043,28 +2064,31 @@ function probeTable(probes) {
     table.innerHTML = '<tr><th>hour</th><th>decision</th><th>service</th>' +
         '<th>risk_group</th><th>status</th><th>candidates</th>' +
         '<th>min_spares</th><th>levers</th>' +
-        '<th title="whether the harness showed this answer to the model ' +
-        'again at a later hour (observation.probe_answers_this_episode), ' +
-        'and whether it was still current there or stale because the ' +
-        'risk group had been revised">re-shown later</th></tr>';
+        '<th title="whether this answer still holds at the hour being ' +
+        'viewed: current if it was asked under the risk group in force ' +
+        'now, stale if the forecast has since revised the group">' +
+        'valid now?</th></tr>';
+    const inForce = run ? riskGroupsInForce(run, state.hourIndex) : null;
     const keyTitle = flip
         ? `The claimant whose restorability decides this pair (scenario ` +
           `design). Expected answer: ${flip.expected}.` : '';
     for (const p of probes) {
         const tr = document.createElement('tr');
         const isFlip = !!flip && p.service_id === flip.claimant;
-        if (isFlip) tr.className = 'flip-row';
+        const validity = probeValidity(inForce, p);
+        tr.className = [isFlip ? 'flip-row' : '',
+                        validity.stale ? 'stale-row' : ''].join(' ').trim();
         if (p.error) {
             tr.innerHTML = `<td>${esc(p.hour)}</td><td>${esc(p.decision)}</td>` +
                 `<td>${esc(p.service_id)}</td><td>${esc(p.risk_group_id)}</td>` +
-                `<td class="probe-error" colspan="5">error: ${esc(p.error)}</td>`;
+                `<td class="probe-error" colspan="5">error: ${esc(p.error)}</td>` +
+                `<td>${esc(validity.text)}</td>`;
             table.appendChild(tr);
             continue;
         }
         const a = p.answer || {};
         const spares = Object.entries(a.min_spares_needed_by_site || {})
             .map(([site, n]) => `${site}:${n}`).join(', ') || '-';
-        const carried = run ? probeCarriedForward(run, p.hour, p) : '?';
         tr.innerHTML =
             `<td>${esc(p.hour)}</td><td>${esc(p.decision)}</td>` +
             `<td>${esc(p.service_id)}` +
@@ -2074,7 +2098,7 @@ function probeTable(probes) {
             `<td>${esc(a.full_restore_candidates)}</td>` +
             `<td>${esc(spares)}</td>` +
             `<td>${esc((a.levers || []).join(', '))}</td>` +
-            `<td>${esc(carried)}</td>`;
+            `<td>${esc(validity.text)}</td>`;
         table.appendChild(tr);
     }
     return table;
@@ -2119,11 +2143,9 @@ function renderSaid(hour) {
     const probeCursor = {i: 0};
     // hour.probes entries carry no `hour` field of their own (the trace
     // schema leaves it implicit -- they're already scoped to this hour
-    // record); episodeProbes() synthesizes one for the whole-run ledger, but
-    // probeTable()'s `hour` column and probeCarriedForward()'s lookup into
-    // run.hours both need it too, or the former shows "undefined" and the
-    // latter's hours.findIndex() misses, falling through to the same message
-    // a genuine last-hour probe gets ("n/a (last hour)") for the wrong reason.
+    // record); episodeProbes() synthesizes one for the whole-run ledger, and
+    // probeTable()'s `hour` column needs it here too, or it shows
+    // "undefined".
     const allProbes = (hour.probes || []).map(p => ({...p, hour: hour.hour}));
     // hour.rejections is populated in the SAME order the iterations loop
     // executes (runner.py: every failing continue appends exactly one
@@ -2671,27 +2693,33 @@ function episodeProbes(run) {
     return rows;
 }
 
-// Where the harness showed this probe's answer to the model again: a probe
-// asked at hour N is carried into every later called hour's
-// observation.probe_answers_this_episode (runner.py), tagged `current`
-// false once that hour's risk group has been revised. Looks no further
-// than the hour being viewed, so the page never shows the future.
-function probeCarriedForward(run, probeHour, probe) {
-    const hours = (run && run.hours) || [];
-    const from = hours.findIndex(h => h.hour === probeHour);
-    if (from === -1) return '-';
-    const shown = [];
-    for (let i = from + 1; i <= Math.min(state.hourIndex, hours.length - 1); i++) {
-        const answers = (hours[i].projected || {}).probe_answers_this_episode || [];
-        const a = answers.find(x => x.service_id === probe.service_id &&
-                                    x.risk_group_id === probe.risk_group_id &&
-                                    x.hour === probeHour);
-        if (a) {
-            shown.push(`${hours[i].hour} (${a.current === false
-                ? 'stale: risk group revised' : 'current'})`);
+// The risk groups in force at hour `idx`: those of the latest hour at or
+// before it where the agent was called (an uncalled hour carries none of
+// its own -- the last issuance's forecast is still the one standing), plus
+// the hour they were issued at. Null before any called hour.
+function riskGroupsInForce(run, idx) {
+    for (let i = Math.min(idx, run.hours.length - 1); i >= 0; i--) {
+        const h = run.hours[i];
+        const ids = (h.projected || {}).risk_group_ids ||
+                    (h.observation || {}).risk_group_ids;
+        if (agentCalled(h) && ids && Object.keys(ids).length) {
+            return {hour: h.hour, ids: new Set(Object.values(ids))};
         }
     }
-    return shown.join(', ') || '-';
+    return null;
+}
+
+// Whether a probe's answer still holds at the viewed hour: it was asked
+// under a specific risk group, and a later forecast issuance replaces the
+// group -- after which the answer describes a storm that is no longer the
+// forecast (T2b: khandwa's t0 `solution` is stale at t1, where the re-probe
+// says `no_solution`).
+function probeValidity(inForce, probe) {
+    if (!inForce) return {text: '?', stale: false};
+    if (inForce.ids.has(probe.risk_group_id)) {
+        return {text: 'current', stale: false};
+    }
+    return {text: `stale: risk group revised at ${inForce.hour}`, stale: true};
 }
 
 function probeSplit(run) {
