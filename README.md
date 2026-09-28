@@ -11,7 +11,7 @@ policy table cannot make.
 **Claude Opus 5.5 got all 18 decisions right** (3 pairs × 2 halves × 3 seeds),
 solving every pair on every seed with zero regret. The forecast-blind fixed
 policies it is compared against solve **none** of the pairs, and cannot by
-construction. On the identical harness, Claude Sonnet 5 got 14 of 18.
+construction.
 
 **▶ [Step through every rollout in the interactive run viewer](https://olegkarandin.github.io/agentic-optical-reoptimization/)**
 It shows the storm cones, the exposed spans, what the model was shown at each
@@ -188,20 +188,19 @@ collapse to one rollout each.
 | Decider | Halves correct | T1 solved | T2 solved | T3 solved | Mean `pair_solved` | Regret (Gbps·h) |
 |---|---|---|---|---|---|---|
 | **agent: claude-opus-5-5** | **18/18** | 3/3 | 3/3 | 3/3 | **1.00** | **0** |
-| agent: claude-sonnet-5 | 14/18 | 3/3 | 0/3 | 2/3 | 0.56 | 2400 total |
 | baseline: immediate | 3/6 | 0/1 | 0/1 | 0/1 | 0.00 | 1800 |
 | baseline: at_deadline | 3/6 | 0/1 | 0/1 | 0/1 | 0.00 | 1800 |
 
 Gold outcomes (Gbps·h lost, both policies measured through the real harness):
 
-| Half | Gold | Spend | Hold | Opus 5.5 | Sonnet 5 | Baselines |
-|---|---|---|---|---|---|---|
-| T1a | hold | 13 000 | **12 400** | 3/3 ✔ | 3/3 ✔ | spend ✘ |
-| T1b | spend | **32 500** | 33 100 | 3/3 ✔ | 3/3 ✔ | spend ✔ |
-| T2a | hold | 33 500 | **32 900** | 3/3 ✔ | 3/3 ✔ | spend ✘ |
-| T2b | spend | **37 000** | 37 600 | 3/3 ✔ | 0/3 ✘ | spend ✔ |
-| T3a | hold | 33 500 | **32 900** | 3/3 ✔ | 3/3 ✔ | spend ✘ |
-| T3b | spend | **14 000** | 14 600 | 3/3 ✔ | 2/3 | spend ✔ |
+| Half | Gold | Spend | Hold | Opus 5.5 | Baselines |
+|---|---|---|---|---|---|
+| T1a | hold | 13 000 | **12 400** | 3/3 ✔ | spend ✘ |
+| T1b | spend | **32 500** | 33 100 | 3/3 ✔ | spend ✔ |
+| T2a | hold | 33 500 | **32 900** | 3/3 ✔ | spend ✘ |
+| T2b | spend | **37 000** | 37 600 | 3/3 ✔ | spend ✔ |
+| T3a | hold | 33 500 | **32 900** | 3/3 ✔ | spend ✘ |
+| T3b | spend | **14 000** | 14 600 | 3/3 ✔ | spend ✔ |
 
 ### What the winning reasoning looks like
 
@@ -233,10 +232,6 @@ raw exposure:
 > Every cut outcome that takes down indore also takes down both claimant
 > groups (the 0.117 row). That means holding the spare never leaves it
 > unused.
-
-Sonnet 5 failed differently. In all three `T2b` rollouts it held the spare
-for khandwa, the largest visible claim, without establishing under the
-current risk group that khandwa could be restored.
 
 ### Limitations
 
