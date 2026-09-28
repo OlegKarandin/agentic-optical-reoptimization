@@ -1,641 +1,326 @@
-# storm-reoptimizer — Agentic Disaster Reoptimization for Optical Networks
+# storm-reoptimizer — agentic disaster reoptimization for optical networks
 
-An agentic application that reoptimizes and restores a multi-layer (IP-over-optical)
-network in response to environmental disasters — storms, floods, heatwaves — that
-create **correlated failures the design-time risk model never anticipated**.
+An agent that reoptimizes a multi-layer (IP-over-optical) network ahead of an
+environmental disaster, such as a cyclone, a flood or a heatwave, whose
+**correlated failures the design-time risk model never anticipated**. It
+ships with a benchmark that measures the one thing such an agent is actually
+for: making resource-allocation calls under forecast uncertainty that a fixed
+policy table cannot make.
 
-The canonical case: a storm sweeps a region. Working and protection paths of a
-service are SRLG-disjoint — certified disjoint at design time against buried-conduit
-and shared-amplifier groups — yet *both* contain aerial fiber inside the storm's
-footprint. No static SRLG check flags this. The agent detects the exposure by
-synthesizing a risk group that did not exist when the paths were certified, replans
-for disjointness against it, and verifies the reroute survives physically.
+**Headline result (2026-09-28).** On the benchmark's three twin-pair tests,
+**Claude Opus 5.5 got all 18 decisions right** (3 pairs × 2 halves × 3 seeds),
+solving every pair on every seed with zero regret. The forecast-blind fixed
+policies it is compared against solve **none** of the pairs, and cannot by
+construction. On the identical harness, Claude Sonnet 5 got 14 of 18.
 
-## The evaluation harness
-
-CLAUDE.md's Evaluation section sets the bar this repo has to clear: the agent is
-not measured by "did it restore the network" — a solver does that — but by
-whether it earns its place over a `(service_class → policy)` table on decisions
-the table cannot key on. `src/storm_reoptimizer/eval/` is the benchmark built to
-answer that question, and `src/storm_reoptimizer/eval/suite.py` is what wires its
-seven episodes — three twin pairs, all grading one spare at one depot (`T1`
-how exposed the claimant is, `T2` whether it can be restored at all, `T3`
-whether its restoration needs the spare) — plus one diagnostic (`D1`) —
-into a single runnable suite: it drives every episode against one or more
-deciders over the real `multilayer-optical-mcp`
-server (never a mock — CLAUDE.md's hard seam), scores `pair_solved` and the
-per-episode metrics in `scoring.py`, and renders the results table below.
-
-Run it with:
-
-```
-python -m storm_reoptimizer.eval.suite
-```
-
-### Results
-
-The table `render_results_table()` produces, from a real run (2026-09-07,
-T2/T3 probe redesign plan, Task 14) against the three pairs' own state files
-(`eval/states/loaded-s17.json`, `t2-jalgaon-s17.json`, `t3-jalgaon-s17.json`,
-all seed 17) over all seven episodes:
-
-| decider | pair_solved | episodes correct | regret_gbps_h | inert_commits | notes |
-|---|---|---|---|---|---|
-| baseline:at_deadline | 0.00 | 4/7 | 250.0 | 0 | fixed policy: same input in both halves, so exactly one half per pair |
-| baseline:immediate | 0.00 | 4/7 | 250.0 | 0 | fixed policy: same input in both halves, so exactly one half per pair |
-
-Budget: seed(s) [17] x 7 episodes x N=3 = 42 rollouts (both baseline variants
-are collapsed to one real rollout per episode by `collapse_deterministic`; the
-budget line reports the nominal N=3 the same code path would use for a
-non-deterministic decider).
+**▶ [Step through every rollout in the interactive run viewer](https://olegkarandin.github.io/agentic-optical-reoptimization/)**
+It shows the storm cones, the exposed spans, what the model was shown at each
+hour, what it probed, what it said, and what the replay did with the spare.
 
 ---
-**Boundary (added 2026-08-26, Finding #9).** Everything ABOVE this line --
-the table and the budget line -- is what `render_results_table()` literally
-prints for a real run; re-pasting a fresh table here should only ever touch
-that part. Everything BELOW is hand-maintained analysis this plan worked to
-preserve (Claims 1/2, the `episodes correct` reading, the shared-shape
-discussion) -- it is not runtime output, and a mechanical re-paste of a fresh
-results table must not overwrite it.
+
+## The problem
+
+A storm sweeps a region. A protected service's working and protection paths
+are SRLG-disjoint: they were certified disjoint at design time against
+buried-conduit and shared-amplifier groups. Yet *both* run over aerial fiber
+inside the storm's footprint. No static SRLG check flags this. Protection
+switching doesn't save the service, because both legs fail together.
+
+The app detects this exposure by synthesizing, from the forecast cone, a
+**risk group that did not exist when the paths were certified**. It then asks
+the network's solvers for reroutes that avoid it. When restoration resources
+are scarce, it decides *who gets them*, before the cut or after.
+
+## What the agent is for (and what it is not)
+
+Geometry, QoT, routing, disjoint-path computation and scoring a fixed
+objective are all **deterministic**. They live in plain GIS code and in the
+[`multilayer-optical-mcp`](https://github.com/OlegKarandin/multilayer-optical-mcp)
+server, built on the
+[`multilayer-optical-network`](https://github.com/OlegKarandin/multilayer-optical-network)
+simulator (GNPy-based QoT, RSA and disjoint-path solvers, validate/commit). An
+LLM that "discovers" reroutes adds nothing a solver doesn't do better.
+
+The agent earns its place in only two kinds of step:
+
+1. **Turning open-ended input into formal objects** the deterministic
+   machinery consumes, such as risk groups, asset filters and solver
+   constraints.
+2. **Setting objectives from event *state*, not from service class.** An
+   example is whether to spend the depot's last spare transponder now or hold
+   it for a service the storm may cut later. That choice depends on the
+   forecast, on who else is exposed, and on whether they could even be
+   restored.
+
+The benchmark below is built to test point 2. The bar it sets is a
+deterministic pipeline with a `(service_class → policy)` table. If a decision
+tree matches the agent, the scenario doesn't justify the agent.
+
+## Architecture
+
+```
+   Event feeds / scripted cyclone track (IMD best track, Cyclone Hudhud 2014)
+                          |
+                  Event interpreter  ─────────────┐
+            (normalizes to {geometry, event_type, │
+             valid_at, attributes})               │  agent loop (LLM):
+                          |                       │  observe → probe →
+                   Geo / asset mapper             │  decide timing +
+       (Shapely: forecast cone ∩ span geometry,   │  claim priority →
+        filtered by mount type: storm → aerial)   │  set constraints →
+                          |                       │  choose candidate
+                risk-group definition ────────────┤
+                          |                       │
+          multilayer-optical-mcp server (MCP, stdio)
+     (QoT, routing, disjointness, validate_plan, commit_plan)
+```
+
+The seam is a hard rule. The server stays disaster-agnostic and reusable.
+This repo owns everything storm-shaped: event ingestion, geo mapping, the
+agent loop, the evaluation harness and the viewer. Nothing here reimplements
+routing or QoT. Every network fact comes from a tool call to the real server,
+never a mock.
+
+The network is a 143-node, 180-edge India backbone derived from Internet
+Topology Zoo's `TataNld` graph. Span lengths are great-circle and mount types
+(aerial/buried) come from a documented heuristic (`scripts/convert_tata_topology.py`),
+so it is a toy topology, not an as-built record. A seeded, gravity-loaded
+operating state (about 580 services, seed 17) sits on top.
+
 ---
 
-**Re-run 2026-08-31 (Task 15, exposure-and-depot plan), against the corrected
-exposure model.** `episodes correct` moved from 1/7 to 2/7 for BOTH baseline
-variants — `pair_solved` did not move (still `0.00` for both, over all three
-pairs). The extra correct episode is `D1`, not a change within any pair; see
-"Reading `episodes correct` honestly" below for why, and
-`docs/superpowers/rehearsals/D1.md`'s rewritten Q3 for the live-verified
-mechanism. **Superseded 2026-09-06 by the T2/T3 probe redesign plan**, which
-moved this further to 4/7 (T2 and T3 rebuilt on T1's own label rule) — see
-"Reading `episodes correct` honestly" below for the current mechanism; this
-entry is kept only as the historical record of the 1/7 -> 2/7 step.
-**Superseded again 2026-09-09 (Task 5, fair-scoring plan): the results
-table above is now STALE.** It still prints `4/7`, pasted from the
-2026-09-07 run and not re-run since — `timing_at_decision_hour` was
-changed to read `record["timing_effective"]` instead of the raw declared
-`record["timing"]["action"]` (an act that commits nothing, or commits
-inertly, is a wait), which flips `D1`'s label from correct to incorrect for
-both baseline variants. The current, correct figure is **3/7** for both
-variants; see "Reading `episodes correct` honestly" below for the full
-mechanism and evidence. The table above must not be hand-edited per the
-Boundary note (Finding #9) — it stays `4/7` until the next real
-`render_results_table()` run repastes it; until then, treat this note and
-the section below as authoritative over the stale table.
+## The evaluation
 
-**Claim 1 (provable).** The agent beats every fixed policy that does not read
-the forecast: the twins' menus and observables are identical by construction,
-so such a policy emits the same answer twice and scores exactly 50%.
-**Claim 2 (asserted at build time).** No rule keyed on any single forecast
-variable -- and no parameter-free greedy policy -- solves the suite; checked
-over the gold labels before any rollout runs. All three pairs are now real,
-authored, reviewed twins on ONE spare at ONE depot (`jalgaon`), rebuilt on the
-T2/T3 probe redesign (`docs/superpowers/specs/2026-09-06-t2-t3-probe-redesign-design.md`):
-`T1` grades how EXPOSED its claimant is (decidable from the observation
-alone), `T2` grades whether the claimant can be RESTORED AT ALL after its
-cut (decidable only by a `probe_restorability` call, since the observation
-alone points the wrong way in `T2`'s spend half), and `T3` grades whether
-that restoration NEEDS the spare. `T3`'s two halves show the decider the
-same NAMED claim size, 114.8 G, both times, but its two claimants' own
-exposure is not tied -- whichever claimant is more exposed this half is
-always the one whose (constant, identity-determined) restorability status
-decides the pair, so the observation does say WHICH claimant matters. What
-it cannot say is WHY: the probe is what confirms the more-exposed claimant
-is genuinely isolated there, not merely bigger, so a policy keyed on
-exposure magnitude alone (in either orientation) still fails the same way
-it fails on `T1`/`T2` -- a narrower, claimant-identity-keyed rule would
-solve `T3` from the observation alone, but that is a different, more
-specific kind of "lookup table" than the ones `T1`/`T2` defeat, not proof
-`T3` adds nothing. Two distinct static checks back this claim, and they ask
-opposite questions:
+### Episode model
 
-- `assertions.assert_no_single_variable_rule_solves` -- per pair, over the
-  variables both halves are supposed to SHARE (`rules.OBSERVABLE_VARS` and
-  `rules.DERIVED_VARS`): does any of them differ between the two halves in a
-  way a single threshold could key on?
-- `assertions.assert_no_global_policy_solves_the_suite` -- over the whole
-  suite, over the claimant-side aggregate that IS the flip
-  (`derived.FLIP_VARS`): does one FIXED threshold, applied UNIFORMLY with one
-  fixed orientation, answer all six halves at once -- i.e. could an operator
-  deploy a bare number and skip the comparison the agent is meant to make?
-  Extracted (Task 13, T2/T3 probe redesign plan) into a reusable
-  `assertions.global_policy_report` that names WHY each variable falls
-  short, not just whether it does.
+Each episode is an hour-by-hour rollout (`t0` … `t7`) of a scripted cyclone
+cone passing over one depot site, `jalgaon`, which holds **one spare
+transponder**. The forecast is issued at `t0` and revised at `t1`. Each
+issuance predicts the cone at the exposure horizon `t3`. `t1` is also the
+last hour an optical reroute (2 h lead time) can land before the storm, so
+the decision cannot be put off.
 
-**The whole-suite sweep (Task 13, `tools/sweep_flip_vars.py`, printed
-live against the three shipped pairs) confirms all five `FLIP_VARS`
-members are genuinely blocked**, by one of two structural reasons:
+At every decidable hour the model sees a projected **observation** and makes
+up to three decisions through tool calls:
 
-| Variable | Blocked by | Best achievable (of 6 halves) |
+| Step | Tool | What it decides |
 |---|---|---|
-| `claimant_ecar_at_exposure_horizon` | REVERSAL | 5/6 |
-| `claimant_ecar_before_exposure_horizon` | TIE | 0/6 |
-| `claimant_ecar_peak_over_horizons` | REVERSAL | 5/6 |
-| `claimant_ecar_min_over_horizons` | REVERSAL | 5/6 |
-| `largest_restorable_group_ecar_gbps` | TIE | 4/6 |
+| Timing | `submit_timing_decision` | `act` or `wait`, plus a `claim_priority` ranking of who gets the spare if it is held |
+| (optional) | `probe_restorability` | Read-only: *if every asset in risk group X were down, what could the routing tools offer service S, and at what spare cost?* (≤ 4 per decision) |
+| Constraints | `submit_constraint_decision` | The `avoid` set (risk groups / assets) that the server's `route_service` must route around |
+| Objective | `submit_objective_decision` | Which candidate from the solver's priced menu to commit. The harness then runs `validate_plan` → `commit_plan` on the server |
 
-Every pair now publishes exactly ONE horizon (`t3`) per issuance, so
-`..._at_exposure_horizon`, `..._peak_over_horizons` and `..._min_over_
-horizons` are the identical column: `T1b=831.070` (spend), `T3b=1090.169`
-(spend), `T1a=2456.858` (conserve), `T2a=3991.015` (conserve),
-`T3a=4094.957` (conserve), `T2b=6737.691` (spend). A TIE means at least one
-pair's two halves read the identical value on that variable, so any single
-threshold necessarily assigns them the same label -- `before_exposure_
-horizon` ties at 0.0 across all six halves (no pair publishes a horizon
-before its own single exposure horizon), so there is no split point to
-sweep at all and "best achievable" reads 0/6, not the 3/6 a naive
-default-to-one-label policy would score outside this sweep's own threshold
-search. A REVERSAL means no tie exists, but the best orientation still
-misses because one pair's halves are ordered the OPPOSITE way from
-another's: `T1` and `T3` both read "more claimant exposure -> conserve"
-(spend below conserve in each), but `T2` reads the other way round
-(conserve `3991.015` below spend `6737.691`) -- exactly the design spec's
-"T2 reverses the orientation any function of claimant exposure would need."
+The observation carries the facts the right answer depends on and nothing
+more:
 
-**Reading the same table by PAIR, not by variable, matches the design
-spec's own framing (§3).** On `claimant_ecar_at_exposure_horizon` (=peak=
-min): `T1`'s own two halves read "more claimant exposure -> conserve"
-(spend `831.070` < conserve `2456.858`), and `T3`'s agree (spend `1090.169`
-< conserve `4094.957`) -- but `T2` is the pair that reverses it (conserve
-`3991.015` < spend `6737.691`), by exposing MORE claimant capacity in the
-half where holding the spare is *worthless* (`no_solution` on the probe),
-which is exactly the design spec's "forecast-blind / naive-exposure reflex
-defeated" story for `T1` and the "REVERSED orientation" story for `T2`. On
-`largest_restorable_group_ecar_gbps`: `T3` contributes a TIE
-(`T3a`/`T3b` both read `114.763` G, enforced bit-identically by
-`tools/derive_t1.py --require-flip-tie largest_restorable_group_ecar_gbps`)
--- but `T1` and `T2` alone already interleave that same variable (sorted:
-`T1b=24.643` spend, `T2a=114.763` conserve, `T1a=148.931` conserve,
-`T2b=197.076` spend), so `T3`'s tie is a real, ADDITIONAL blocker of the
-gate on this one variable, not the sole one an earlier draft of the design
-spec claimed (corrected there, 2026-09-07 followup).
+- **Per-service exposure:** `p_cut` at each horizon, computed from the cone
+  under Gaussian track uncertainty over 65,535 Sobol points; expected
+  capacity at risk (ECAR); and a `p_cut_if_track_revised` band while another
+  issuance is still due.
+- **A joint `cut_outcomes` table:** which services fail *together*, with
+  what probability, and `hours_down_if_cut` with and without restoration.
+- **`restorable_groups`**, the spare inventory, lever lead times, deadlines,
+  and any probe answers carried forward, each tagged with the risk group it
+  was answered under.
 
-**One known, honestly-carried limitation.** `T3`'s originally intended flip
-("does the claimant's restoration need the spare at all", via a zero-spare
-`ip_reroute` groomed onto survivor lightpaths) was checked live
-(`tools/probe_restorability.py` against the built survivor pins, both at
-100 G and 50 G demand) and found NOT offered -- `solve_allocation_model`
-never lit a dedicated lightpath on the survivor path at all, so no free
-groom ever existed for `route_service` to reuse. Per the design spec's own
-documented fallback, `T3` ships as the two-corridor RESTORABILITY variant
-instead (same shape as `T2`'s "restorable or not" flip, on a second
-claimant corridor) rather than its originally intended "needs the spare or
-not" contrast -- a real, acknowledged loss of variety between `T2` and
-`T3`, not a hidden one. Recorded in full in
-`docs/superpowers/plans/notes/2026-09-06-t2-t3-authoring.md` (Task 8) and
-`docs/superpowers/specs/2026-09-06-t2-t3-probe-redesign-design.md` §4.2.
+The model **never** sees the realized cuts or a future forecast issuance.
+Waiting is what buys the next issuance.
 
-`pair_solved` over three pairs takes values in {0, 1/3, 2/3, 1}: enough to tell
-a working harness from a broken one, not enough to separate luck from skill.
-Held-out seeds are the path to power.
+After the storm hits, a deterministic **replay** restores cut services in the
+model's `claim_priority` order using whatever spare it held. A held spare
+therefore has a real, simulated value, and holding it is a genuine
+alternative to spending it. Every episode is scored on **realized Gbps·h
+lost** across all shown services.
 
-The flip-variable citation metric is a NECESSARY, NOT SUFFICIENT filter for
-"right answer, absent reason". It is entity matching, not reasoning
-verification.
+### Twin pairs: a fixed policy fails by construction
 
-### The W3.2 measurement
+Each test is a **pair of twin episodes** whose observations a
+forecast-blind policy cannot tell apart, but whose correct answers are
+opposite: `hold` in the `a` half, `spend` in the `b` half. A pair counts as
+solved only if a decider gets **both** halves right on the same seed
+(`pair_solved`). Anything that emits the same answer twice scores exactly one
+half per pair.
 
-Earlier revisions of this harness gated `horizon_totals` — per horizon, the
-service under test's own expected capacity at risk against the summed
-expected capacity at risk of every other service — behind a second agent
-arm (`--agent-rival-totals`), to isolate whether handing the model that
-comparison changed its answers. That two-arm design is gone: rival totals
-are now always computed and always shown, in the observation and the system
-prompt, for every agent run. There is exactly one agent arm, named
-`agent:{model}` (e.g. `agent:claude-sonnet-5`), and one audit sidecar
-(`eval/traces/agent-calls.jsonl`). The rationale for shipping totals
-unconditionally, and what the (now-historical) two-arm comparison found, is
-recorded in `docs/superpowers/2026-08-28-control-arm-findings.md` and
-`docs/superpowers/2026-08-29-shared-depot-arm-predictions.md`.
+The harness enforces this before a single token is spent (`eval/assertions.py`):
 
-Run it with:
+- **Twin-pair discipline.** Shared scalars (spares, lead times, radii,
+  revision rate) must be identical across halves, or the pair is cut.
+- **No single-variable rule solves the suite.** Every candidate flip
+  variable is swept over all six halves; each is blocked either by a **tie**
+  (two halves read the same value) or a **reversal** (one pair needs the
+  opposite threshold orientation from another), so no single threshold
+  answers all six halves.
+- **Gold is measured, not asserted.** `gold.enumerate_outcomes` runs both
+  scripted oracles (spend now, hold for the replay) through the real server
+  and replay and records the Gbps·h each loses. The label is whichever loses
+  less, and every half must clear a minimum margin.
+- **Realized cuts are forecast outcomes.** The storm the harness injects
+  must be one the published forecast assigns real probability to, and the
+  forecast's expected value must agree with the gold label.
 
-```
-python -m storm_reoptimizer.eval.suite --include-agent
-```
+**Baseline:** `ForecastBlindBaseline`, in two variants (act immediately / act
+at the deadline). It uses the same harness, the same tools and the same
+solver menus, so any difference in outcome comes from the decisions alone.
 
-**One further check to make during a run, for W3.3.** Open the constraints
-records for `T3b` at hour `t1` in the audit sidecar and read the
-`reasoning`. The design's acceptance for the unconstrained-menu probe is
-that the constraints decision *references the 0-pair candidate* — the entry
-that reuses `storm-svc-1`'s current working lightpath, which the agent
-previously deleted upstream without ever seeing it. Explicitly **not** an
-acceptance criterion: that `T3b`'s label flips. That is the measurement, not
-the test.
+### The three tests
 
-### Reading `episodes correct` honestly
+All three ask the same question: **spend the depot's last spare on the
+service under test now, or hold it for a claimant the storm may cut?** What
+varies is the fact the model must establish to answer it.
 
-The `episodes correct` column above is 3/7 for both baseline variants
-(re-measured 2026-09-07, T2/T3 probe redesign plan, Task 14, against the
-rebuilt T2/T3 pairs, then revised again by Task 5 of the fair-scoring plan
-below once `timing_at_decision_hour` was changed to read `timing_effective`
-instead of the raw declared `timing.action` — see `D1`'s own paragraph
-below) — exactly the "roughly half" a reading of "both baselines tie every
-pair at exactly one half" predicts, not the 2/7 an earlier revision of this
-section reported. This is not a bug in the
-harness or a confounded pair — `T1a`/`T1b` (`test_each_baseline_variant_
-scores_exactly_one_half`) and `T2`/`T3`'s equivalent checks already pass in
-`tests/eval/test_episodes.py`, which is the pre-flight signal that would
-have caught a genuinely confounded twin. What actually happens:
+| Pair | The fact that flips the answer | How it can be learned |
+|---|---|---|
+| **T1** | How **exposed** the competing claimants are, relative to the service under test | From the observation, but only if the model reasons in expected Gbps·h across joint outcomes rather than comparing raw exposure |
+| **T2** | Whether the biggest claimant can be **restored at all** after its cut | Only by probing. In `T2b` the observation shows a *larger* claim (khandwa, p_cut 0.985) in exactly the half where holding the spare is worthless |
+| **T3** | Which of two equal-sized claimants is **genuinely isolated** once the storm's risk group is avoided | Only by probing. The claims tie at 114.8 G, and exposure magnitude points the wrong way in one half |
 
-- **T1** is scored by `spare_action_by_deadline` (`scoring.decision_label`),
-  which reads whether a decider-origin spend debit lands at or before the
-  relevant deadline, off the trace, regardless of which specific candidate
-  got committed. `ForecastBlindBaseline` genuinely discriminates here: it
-  answers T1's two halves identically (by construction — same observable
-  input) and gets exactly one of the two labels right, exactly as Claim 1
-  requires.
-- **T2** and **T3** are now scored by that SAME `spare_action_by_deadline`
-  rule — not by `avoid_horizon_at_decision_hour` or
-  `chosen_lever_at_decision_hour`, the two rules an earlier revision of this
-  section described. Both of those were RETIRED by the T2/T3 probe redesign
-  (`scoring.LABEL_RULES` no longer lists either name; `decision_label` now
-  raises `ValueError` if a scenario's `metadata.label_rule` names one) along
-  with the `storm-svc-1`-based pair they were built for. `T2` and `T3` are
-  also no longer built on `storm-svc-1`: both SUTs are now jalgaon-homed
-  services whose escape route is a genuinely disjoint `optical_reroute` over
-  the buried `jalgaon <-> aurangabad` spur, so `ForecastBlindBaseline`'s
-  `basis="physical"` constraint no longer collides with a static protection
-  leg the way it did against the old `storm-svc-1`-based pair. The baseline
-  now commits normally in both halves of both pairs, exactly as it does on
-  `T1`, and lands exactly one correct half per pair for the identical
-  reason Claim 1 gives for `T1`.
+`T2` and `T3` also test **staleness**. The risk group is revised at `t1`,
+so a probe answered under `t0`'s group can be wrong an hour later. The
+correct move is to re-probe under the *current* group.
 
-So the true count is: 6 halves discriminating (all three pairs correctly
-land 1/2, as Claim 1 requires) plus `D1` — 6/12 raw label-correct halves
-across the three pairs' six halves, plus `D1` INCORRECT in both variants
-(see below), for 3/7 raw episodes correct per variant (`T1b`, one of
-`T2a`/`T2b`, one of `T3a`/`T3b` — a "one correct half per pair, nothing
-else" count, with `D1` contributing nothing to either side). **Claim 1
-still holds exactly as stated**: it is a claim about `pair_solved` (a fixed
-policy that reads only current exposure can never get *both* halves of a
-well-built pair right), not about hitting any particular raw
-label-accuracy fraction — and `pair_solved` is `0.00` for both variants
-over all three pairs, confirmed by the run above. See
-`docs/superpowers/rehearsals/T2.md` and `T3.md` §8 for the live, per-pair
-numbers this section summarizes. `D1` cannot move this claim either way:
-`pair_solved` is computed over `T1`/`T2`/`T3` only (`D1` declares no
-`pair` key, so `rules._by_pair` groups it alone and `cross_twin_metrics`
-never runs on it), and even if it did, `D1`'s own `label_rule`
-(`timing_at_decision_hour`) is not the rule any pair is scored on — `T1`,
-`T2` and `T3` are all `spare_action_by_deadline` (grep the scenario
-files: `timing_at_decision_hour` is `D1`'s alone). Task 5's change to
-`timing_at_decision_hour` therefore cannot touch Claim 1 by construction,
-independent of what it does to `D1`'s own raw score.
+### Results (2026-09-28)
 
-`D1` (the seventh episode, and not part of any pair) is now INCORRECT for
-both baseline variants, which is a change from the 4/7-with-`D1`-correct
-count an earlier revision of this section reported. `ForecastBlindBaseline`
-still answers `timing.action = "act"` at `t0` in both variants — that has
-not changed — but Task 5 of the fair-scoring plan (2026-09-09) moved
-`decision_label`'s `timing_at_decision_hour` branch off the raw declared
-`timing.action` and onto `record["timing_effective"]`
-(`scoring.timing_at_decision_hour`, same fallback expression
-`first_shot_correct` already used), on the reasoning that an act that
-commits nothing (or commits inertly) is a wait.
-`docs/superpowers/rehearsals/D1.md`'s own Q3 already documents,
-live-verified against the real server (2026-08-31, predating this plan),
-that neither baseline
-variant ever actually commits anything in `D1`: `ForecastBlindBaseline`'s
-hardcoded `basis="physical"` constraint collides with `storm-svc-1`'s own
-static protection leg on every one of its 5 retries at `t0`
-(`outcome: None, committed_lever: None` for both variants — see Q3's
-verbatim probe output), so `timing_effective` at `t0` is `"wait"` for both,
-not `"act"`. `decision_label(D1)` under the new rule is therefore `"wait"`
-for both variants, against `gold.label = "act"` — INCORRECT. This is not a
-discriminating twin and is still not counted in `pair_solved`, but it is
-why the total lands on 3/7 rather than the 4/7 an earlier revision of this
-section reported.
+One seed of the operating state (17), three rollouts per decider per
+episode, on the real MCP server. The baselines are deterministic and
+collapse to one rollout each.
 
-### The one tension the three pairs share
+| Decider | Halves correct | T1 solved | T2 solved | T3 solved | Mean `pair_solved` | Regret (Gbps·h) |
+|---|---|---|---|---|---|---|
+| **agent: claude-opus-5-5** | **18/18** | 3/3 | 3/3 | 3/3 | **1.00** | **0** |
+| agent: claude-sonnet-5 | 14/18 | 3/3 | 0/3 | 2/3 | 0.56 | 2400 total |
+| baseline: immediate | 3/6 | 0/1 | 0/1 | 0/1 | 0.00 | 1800 |
+| baseline: at_deadline | 3/6 | 0/1 | 0/1 | 0/1 | 0.00 | 1800 |
 
-After rebuilding all three pairs on the same underlying comparison rule, they
-share one shape: a scarce resource, two claims on it, and an answer that
-depends on comparing the claims. That convergence is not accidental — it is
-CLAUDE.md's storm-scarcity story, "the strongest single story" — but it
-narrows what the suite demonstrates. What genuinely varies is the *fact the
-decider must establish to get it right*: `T1` how EXPOSED the claimant is
-(readable from the observation alone), `T2` whether the claimant can be
-RESTORED AT ALL after its cut (readable only via `probe_restorability`,
-since the observation alone points the wrong way in `T2`'s spend half), and
-`T3` whether that restoration NEEDS the spare (the observation says which
-claimant is more exposed, but only the probe says whether that claimant's
-loss is real). What does not vary is the underlying *kind* of judgement --
-comparing two claims on one scarce resource. Breadth comes from the
-interpretation axis (free-text operator reports, novel event types), not
-from more pairs of this shape — that axis is a separate spec.
+Gold outcomes (Gbps·h lost, both policies measured through the real harness):
 
-## Demo: the LLM decider on `D1`
+| Half | Gold | Spend | Hold | Opus 5.5 | Sonnet 5 | Baselines |
+|---|---|---|---|---|---|---|
+| T1a | hold | 13 000 | **12 400** | 3/3 ✔ | 3/3 ✔ | spend ✘ |
+| T1b | spend | **32 500** | 33 100 | 3/3 ✔ | 3/3 ✔ | spend ✔ |
+| T2a | hold | 33 500 | **32 900** | 3/3 ✔ | 3/3 ✔ | spend ✘ |
+| T2b | spend | **37 000** | 37 600 | 3/3 ✔ | 0/3 ✘ | spend ✔ |
+| T3a | hold | 33 500 | **32 900** | 3/3 ✔ | 3/3 ✔ | spend ✘ |
+| T3b | spend | **14 000** | 14 600 | 3/3 ✔ | 2/3 | spend ✔ |
 
-`D1` is the cheapest real exercise of the agent loop (build order step 6):
-one service, one decision hour, three tool calls. This section is a real,
-unedited run — `ClaudeDecider(model="claude-sonnet-5")` against
-`eval/states/loaded-s17.json`, scoped to `D1` alone (run 0 of 3) — captured
-to show exactly what the model is shown and exactly what it says back, not a
-paraphrase of either.
+### What the winning reasoning looks like
 
-**This captured trace predates the 2026-08-30 exposure-model correction
-(Task 14, exposure-and-depot plan) and is kept here as an unedited historical
-record, not re-run for this document.** Regenerating it would need a real,
-paid `--include-agent` call, which this rewrite did not make. Under the
-corrected model, `storm-svc-1`'s own `offset_km`/`p_cut` at this cone are now
-`0.000000`/`1.000000` (not `58.4457`/`0.9761` below), and the real
-`claimant-satna-jabalpur-fwd`/`-rev` pair now reads `p_cut = 1.000000` at
-this exact cone too — a genuine, depot-eligible competing claim the observation
-below never shows the model, because the pin that creates that claimant
-postdates this trace. See `docs/superpowers/rehearsals/D1.md`'s corrected
-banner and Q3 for the current, live-verified numbers and for what changed in
-the baseline's own behaviour as a result. The reasoning quoted below is still
-a genuine, faithful account of what this model said against the numbers it
-was actually shown; only the numbers themselves are now historical.
+Excerpts from Opus 5.5's timing decision at `t1` in three episodes,
+verbatim from the audit log:
 
-**The setup** (`src/storm_reoptimizer/eval/scenarios/D1.yaml`). `storm-svc-1`
-(300 Gbps, `satna`↔`allahabad`) routes working via `satna↔rewa` and
-protection via `satna↔jhansi` — SRLG-disjoint at design time. A 15 km-wide
-storm cone centred on `satna` itself (not on the service's own point) catches
-*both* corridors, because they share an origin node. At `storm-svc-1`'s
-58.4 km offset, `p_cut = 0.9761`; the next-most-exposed service, `d0361`, sits
-at `p_cut = 0.012` — effectively uncontested. `hours_remaining` (1) exactly
-equals the optical-reroute lead time (1), so this is also the last hour in
-which acting is still possible. Gold: `act`.
+**T2b (spend).** It probed the largest claimant under the current group,
+found it unrestorable, and demoted it:
 
-**What the model is shown.** `project_observation` trims the loaded state's
-573 services down to the service under test plus every service clearing
-`p_cut >= 0.005` (`eval/agent.py`'s `P_CUT_ENUMERATION_THRESHOLD`) — here,
-just `storm-svc-1` and `d0361`. Reconstructed for readability, captured
-pre-2026-08-30 per the caveat above (the real payload's `n_services_total`
-was 573, `omitted_services.count` 571):
+> Khandwa has by far the largest exposure (197 Gbps at risk, p=0.985), but
+> under the current group rg_T2b_t1_t3 the probe returns no_solution, so it
+> can't use the spare after its cut. I dropped it to the bottom of the
+> ranking. […] If I reroute Nagpur now, the new path is up before the storm,
+> which avoids an expected 0.145 × 300 Gbps × 5 h ≈ 218 Gbps-h of downtime. If
+> I hold the spare instead, the best use after a cut is Indore:
+> 0.165 × 300 × (5−2) h ≈ 149 Gbps-h. […] Acting now on Nagpur is worth more.
 
-```json
-{
-  "scenario_id": "D1", "actionable_service": "storm-svc-1",
-  "hour": "t0", "hours_remaining": 1,
-  "cones": {"t1": {"width_km": 15.0,
-                   "center": {"lat": 24.58333, "lon": 80.83333}}},
-  "exposure": {
-    "storm-svc-1": {"t1": {"hours_ahead": 1, "offset_km": 58.4457,
-                           "p_cut": 0.9761, "demand_gbps": 300.0}},
-    "d0361":       {"t1": {"hours_ahead": 1, "offset_km": 91.7,
-                           "p_cut": 0.012,  "demand_gbps": 100.0}}
-  },
-  "horizon_totals": {
-    "t1": {"sut_ecar_gbps": 292.83, "non_sut_total_ecar_gbps": 1.2}
-  },
-  "spares_on_hand": 2,
-  "lead_time_hours": {"ip_reroute": 0, "hybrid": 1, "optical_reroute": 1},
-  "risk_group_ids": {"t1": "rg_D1_t0_t1"},
-  "n_services_total": 573,
-  "omitted_services": {"count": 571, "p_cut_threshold": 0.005,
-                       "max_p_cut": 0.0,
-                       "summed_expected_capacity_at_risk_gbps": 0.0}
-}
+**T2a (hold).** Same service, same menu. Here both claimants probe as
+restorable, and the model uses the joint outcomes:
+
+> Nagpur only goes down in the 0.145 outcome where every other shown service
+> goes down too. Holding the spare and restoring after the cut saves 3 h per
+> cut service […] That totals ≈ 434 Gbps·h, about twice what acting on nagpur
+> gets.
+
+**T1a (hold).** Decided from the observation alone, in expected value, not
+raw exposure:
+
+> Every cut outcome that takes down indore also takes down both claimant
+> groups (the 0.117 row). That means holding the spare never leaves it
+> unused.
+
+Sonnet 5 failed differently. In all three `T2b` rollouts it held the spare
+for khandwa, the largest visible claim, without establishing under the
+current risk group that khandwa could be restored.
+
+### Limitations
+
+- **Small n.** Three pairs × three seeds on one topology and one
+  operating-state seed. `pair_solved` over three pairs separates a working
+  harness from a broken one, not skill from luck at fine resolution.
+  Held-out seeds and states are the path to power.
+- **One kind of judgement.** All three pairs are the same shape: one scarce
+  spare and competing claims. They vary *which fact* the decision hinges on,
+  not the kind of decision. The other justified agent step, interpreting
+  free-text operator reports and novel event types, is not yet benchmarked.
+- **The raw-exposure vs expected-value distinction is not isolated.** On
+  both T1 halves, ranking by raw ECAR and ranking by expected Gbps·h agree.
+  Opus visibly reasons in expected value, but no shipped half forces the two
+  rules to disagree.
+- **T3's original design did not survive contact with the solver.** It was
+  meant to test "does the restoration *need* the spare at all", via a free IP
+  groom. The solver never produced that groom, so T3 ships as a second
+  restorability test on a different corridor.
+- **`D1`**, a single-service diagnostic episode, was last run on 2026-09-15,
+  before the most recent harness changes. It is excluded from the table and
+  the viewer.
+- The toy topology's mount types are a heuristic and three of them are
+  scenario design. The network is illustrative, not a real operator's plant.
+
+---
+
+## Running it
+
+Requirements: Python ≥ 3.11 and the
+[`multilayer-optical-mcp`](https://github.com/OlegKarandin/multilayer-optical-mcp)
+server installed (it pulls in `multilayer-optical-network`).
+
+```bash
+pip install -e ".[dev,eval,agent]"
+
+# Baselines only: no API key, no cost
+python -m storm_reoptimizer.eval.suite
+
+# Include the LLM decider (paid; needs ANTHROPIC_API_KEY)
+python -m storm_reoptimizer.eval.suite --include-agent --agent-model claude-opus-5-5
+python -m storm_reoptimizer.eval.suite --include-agent --only T2a,T2b
+
+# Fold the traces in eval/traces/ into the single-file HTML viewer
+python tools/build_viewer_data.py --out eval/viewer/index.html
 ```
 
-**2026-09-09 (Task 7, fair-scoring plan): the JSON above is historical and
-must not be read as today's wire shape.** Tasks 1-2 of that plan trimmed
-`offset_km`/`width_km`/`damage_radius_km` and the `cones` key itself (now
-`horizons`, a plain list of horizon-hour strings with no geometry) out of
-what `project_observation` actually sends the model — they were found to be
-distractors the agent double-counted against `p_cut`, which already prices
-distance in. This captured D1 trace predates that trim (and, per the caveat
-above, the exposure-model correction too), so it still shows `cones` and
-`offset_km` — left as-is because the whole block is an unedited historical
-record, not a current-format spec. See "Current wire format" below for a
-same-length, live example against today's trimmed shape.
+If the server's console script isn't on `PATH`, set
+`STORM_REOPTIMIZER_MCP_SERVER_CMD` to a JSON argv list that launches it. The
+server-backed tests look for it via `MULTILAYER_OPTICAL_MCP_PYTHON` (a python
+that can import `multilayer_optical_mcp`) and skip without it.
 
-`horizon_totals` (`eval/agent.py`'s `P_CUT_ENUMERATION_THRESHOLD` neighbor,
-`_horizon_totals` in `observation.py`) is now historical, as of the
-2026-09-10 decider-allocation-redesign plan: the `Observation` dataclass
-still computes and records it (every trace keeps it), but
-`project_observation` no longer sends it to the model — `restorable_groups`
-is what the prompt describes instead, and it is the field a live capture
-below actually carries. A `contested_claim` field used to sit on the TIMING
-decision (an elicited, unscored pointer to the strongest rival claim
-weighed); it was removed entirely (2026-09-17) — `claim_priority` plus the
-exposure table already give a reviewer the same information, and nothing
-ever scored it. See git history for the field it replaced, and "What to
-read afterwards" in `docs/superpowers/2026-08-29-shared-depot-arm-
-predictions.md` for why it was added in the first place.
+The three seeded operating states the episodes run on are checked in under
+`eval/states/`. They were built offline by `tools/build_eval_state.py`, the
+one script that imports the simulator library directly, because no MCP tool
+persists a new service on a live server.
 
-**1. Timing** (`submit_timing_decision`) — `action: "act"`:
-
-> storm-svc-1 has p_cut=0.9761 at only 1 hour ahead, with lead times of 0-1h
-> for the reroute levers. There is no next issuance that will meaningfully
-> change this: the horizon is already t1, hours_remaining=1, so waiting for a
-> sharper forecast means the action would land at or after the cut (act
-> later than exposure hour - lead_time is already at the edge). Expected
-> capacity at risk here is ~293 Gbps, dwarfing d0361's ~1.2 Gbps expected
-> risk (p_cut=0.012). Waiting to see if the cone narrows risks missing the
-> lead-time window entirely on a service that's already near-certain to be
-> cut, and it also risks losing one of the 2 spares to d0361's negligible
-> claim if we delay prioritization. Acting now lets us commit inventory and
-> routing to the dominant, near-certain risk while lead time still permits
-> an effective change.
-
-**2. Constraints** (`submit_constraint_decision`) —
-`avoid.risk_groups: ["rg_D1_t0_t1"]`, `basis: "risk_group"`,
-`level: "risk_group"`, `protected: false`, `best_effort: false`:
-
-> Only one horizon exists (t1, 1 hour ahead) and it is also the only lead
-> time we have (optical_reroute lead=1h, hours_remaining=1) — we must act
-> against this exact cone, not a wider speculative one. storm-svc-1 has
-> p_cut=0.9761 at t1, essentially certain to be cut, and its
-> working+protection paths both sit inside the same forecast-derived risk
-> group rg_D1_t0_t1 (the correlation the static disjointness check never
-> saw). So the reroute must avoid that risk group specifically. Using
-> protected=False/basis=physical/level=link would only dodge the individual
-> link seen today, not the correlated cone risk that's the actual hazard;
-> using basis=risk_group/level=risk_group directly names the forecast
-> hazard we're defending against. protected=True is unusable by the harness
-> per the framing, so leave it False and best_effort False since we want a
-> real avoiding path, not a degraded one.
-
-This is the load-bearing call of the whole scenario: `basis="risk_group"`
-means the reroute is constrained against the *synthesized* forecast group,
-not the single link currently down. Get this wrong and the reroute survives
-today's cut but lands back inside the same storm cone.
-
-**3. Objective** (`submit_objective_decision`) — 8 candidates came back from
-the real solver, all restoring the full 300 Gbps at 1 spare pair. Choice:
-`candidate_0`:
-
-> All eight candidates restore the full 300 Gbps with zero shortfall and use
-> exactly 1 spare pair, so the choice comes down to secondary costs.
-> candidate_0 has the shortest OMS path (7 hops), lowest added_latency
-> (2304.85ms, the minimum across the menu), lowest spectrum_used (848,
-> second-lowest but tied near-best), and the best scalar (3440.27, lowest of
-> all candidates). Its total_margin (397.58) is essentially the best among
-> the higher-bitrate 600G options and very close to the overall max. Given
-> storm-svc-1 has p_cut=0.9761 at hour 1 (near-certain cut) versus d0361's
-> negligible 0.012, this spare is clearly best spent here, and among
-> equivalent restorations candidate_0 minimizes latency and spectrum
-> footprint while preserving strong margin.
-
-**Outcome.** `menu_status: "solution"`, `outcome: "committed"`,
-`lever: "optical_reroute"` — the harness ran the choice through
-`validate_plan`/`commit_plan` on the real (cloned) network state and it
-held. The loop repeats at `t1` (`hours_remaining=0` now): the model reaffirms
-`act`, the same risk group, and the same `candidate_0`.
-
-**Honest gap (historical; see 2026-09-21 update below).** At the time this
-trace was captured, `D1.yaml`'s gold `flip_variable` was
-`[uncontested, spare, lead]`. The model's reasoning covers all three
-*concepts* (d0361 "doesn't compete meaningfully", the spare pairs, the lead
-time) but never writes the literal word "uncontested" — so
-`scoring.cites_flip_variable` (since renamed `cites_flip_variable_frac`,
-and no longer boolean), documented as entity matching over exact
-substrings, would likely score this call low despite the decision and
-reasoning both being correct. That is the metric working as designed
-(NECESSARY, NOT SUFFICIENT), not a decider defect. `uncontested` was later
-dropped from D1's own `flip_variable` for exactly this reason (transponder-
-pairing spec, 2026-09-21) — it never appeared anywhere in the observation
-payload the model reads, so the shipped list is now `[spare, lead]`.
-
-Full traces for all three of `D1`'s rollouts live in `eval/traces/D1-agent_
-claude-sonnet-5-{0,1,2}.json`; the audit sidecar recording exactly what was
-shown on every one of the 18 calls that produced them is
-`eval/traces/agent-calls.jsonl`.
-
-### Current wire format (2026-09-10, decider-allocation-redesign plan)
-
-The `D1` trace above is frozen and, per the note under its JSON, now shows a
-stale field set. For a live comparison, this is `tools/probe_episode.py
---dump-prompt t0` run today against `T2a`'s own state
-(`eval/states/t2-jalgaon-s17.json`) — the same `project_observation` payload
-a real `ClaudeDecider` would receive at `t0`, this episode's first hour
-(chosen over `t1` because `next_issuance` is still populated here — `t1`
-itself is `T2a`'s last issuance, so it comes back `null`), trimmed to the
-SUT plus its two largest claimants (`t1-svc-jalgaon-indore` at 208.5 Gbps
-expected capacity at risk and `t2-claimant-jalgaon-khandwa` at 191.8; the
-full payload also lists the tied `d0346`/`d0422` pair and the tied
-`t1-claimant-jalgaon-dhulia-{fwd,rev}` pair, each member at 60.0, elided
-here):
-
-```json
-{
-  "scenario_id": "T2a", "actionable_service": "t2-svc-jalgaon-nagpur",
-  "hour": "t0", "hours_remaining": 7, "issued_at": "t0",
-  "exposure": {
-    "t2-svc-jalgaon-nagpur": {"t3": {"hours_ahead": 3, "p_cut": 0.6,
-      "demand_gbps": 300.0, "expected_capacity_at_risk_gbps": 180.0,
-      "p_cut_if_track_revised": {"revision_radius_km": 90.0, "min": 0.0,
-                                 "max": 0.42, "mean": 0.093}}},
-    "t1-svc-jalgaon-indore": {"t3": {"hours_ahead": 3, "p_cut": 0.695,
-      "demand_gbps": 300.0, "expected_capacity_at_risk_gbps": 208.5,
-      "p_cut_if_track_revised": {"revision_radius_km": 90.0, "min": 0.0,
-                                 "max": 0.414, "mean": 0.091}}},
-    "t2-claimant-jalgaon-khandwa": {"t3": {"hours_ahead": 3, "p_cut": 0.959,
-      "demand_gbps": 200.0, "expected_capacity_at_risk_gbps": 191.8,
-      "p_cut_if_track_revised": {"revision_radius_km": 90.0, "min": 0.005,
-                                 "max": 0.954, "mean": 0.289}}}
-  },
-  "spares_on_hand": 1,
-  "lead_time_hours": {"ip_reroute": 0, "hybrid": 2, "optical_reroute": 2},
-  "risk_group_ids": {"t3": "rg_T2a_t0_t3"},
-  "iteration": 0, "last_rejection": null,
-  "actions_taken": [], "spares_spent": 0,
-  "restorable_groups": {"t3": [
-    {"endpoints": ["indore", "jalgaon"], "members": ["t1-svc-jalgaon-indore"],
-     "ecar_gbps": 208.5},
-    {"endpoints": ["jalgaon", "khandwa"],
-     "members": ["t2-claimant-jalgaon-khandwa"], "ecar_gbps": 191.8}
-  ]},
-  "issuance_schedule": ["t0", "t1"],
-  "deadline_hour": {"ip_reroute": "t3", "hybrid": "t1", "optical_reroute": "t1"},
-  "next_issuance": {"hour": "t1"},
-  "standing_claim_priority": [],
-  "horizons": ["t3"],
-  "n_services_total": 580,
-  "omitted_services": {
-    "p_cut_threshold": 0.005,
-    "below_threshold": {"count": 296, "max_p_cut": 0.0,
-                        "summed_expected_capacity_at_risk_gbps": 0},
-    "ineligible_for_depot": {"count": 277}
-  }
-}
-```
-
-Note what is gone relative to the `D1` example above: no `cones` key, and no
-`offset_km`/`width_km`/`damage_radius_km` anywhere in `exposure` — `p_cut`
-is the only distance-derived number the model sees now. `horizons` replaces
-`cones` as a plain list of horizon-hour strings. `omitted_services` also now
-splits `below_threshold` (quiet services) from `ineligible_for_depot`
-(exposed but not depot-eligible) rather than D1's single flat bucket, and
-`ineligible_for_depot` is reduced further still, to a bare `count` — it no
-longer carries `max_p_cut`/`summed_expected_capacity_at_risk_gbps` the way
-`below_threshold` still does, because nothing in the suite ever keyed a
-decision off those two figures for a bucket of services that cannot draw on
-this depot at all. Relative to the previous (2026-09-09) capture this one
-replaces: no `services` key (the roster left the wire in an earlier task)
-and no `horizon_totals` key (see the note above); every `exposure` row now
-carries a `p_cut_if_track_revised` band while another issuance is still
-scheduled; `next_issuance` and `standing_claim_priority` are new top-level
-fields; and `restorable_groups` is on the wire in place of `horizon_totals`.
-
-Two more keys exist on the wire but not in the JSON above, because they
-appear only on the constraints and objective requests, never on timing:
-`decided_this_hour` (the timing decision already made this hour — its
-`action`, `reasoning`, `claim_priority`, and any probe answers obtained —
-so the later steps EXECUTE that decision rather than re-deciding it) and `attempts_this_hour` (every avoid set already tried
-this hour, the menu status and size it produced, and what was answered,
-so a repeated attempt with no new information is visible as such). A
-third, `risk_groups` (the named groups' own asset-level contents, needed to
-name `risk_groups[<id>].assets` in `avoid`), appears on the constraints
-request only — the timing and objective steps have no use for it and it is
-large. Neither JSON block on this page claims to be the full payload.
-
-**The decidable-hours rule.** The decider is not called at every hour in an
-episode's `hours`, only at one where a decision could have content: a spare
-is still on hand at `depot_site`, the actionable service carries nonzero
-`p_cut` at some horizon, and this hour carries an issuance of its own in
-`issuance_schedule` (`runner.is_decidable`'s own docstring gives the full
-reasoning). On the shipped suite this is exactly the issuance hours, and it
-applies identically to every arm — agent and baseline alike — so
-`EpisodeTrace.tool_calls` stays comparable across them: the T episodes drop
-from 8 timing calls to 2, D1 from 2 to 1. A skipped hour still appears in
-the trace — the harness records a `wait` with `"skipped": true` and never
-projects an observation or calls the decider at all — and the viewer marks
-it accordingly (see "Viewing a run" below).
-
-**The probe-nudge note.** The probe's "what the answer means for the
-spare" text (`_SYSTEM_PROMPT_TAIL` in `agent.py`) carries three sentences.
-The first two state semantics: what a `full_restore_candidates`/
-`min_spares_needed_by_site` answer implies for whether a service can use
-the spare at all. The third — "The answer is as relevant to the services
-you would keep the spare for as to the one you can act on." — is a
-deliberate nudge, kept as an experiment for the first measured run made
-after this change and reported as such either way; see spec 2 of
-`docs/superpowers/specs/2026-09-10-decider-allocation-redesign-design.md`.
-
-## Viewing a run
-
-`python tools/build_viewer_data.py` folds the scenario YAMLs, the recorded
-traces in `eval/traces/`, and the toy topology into `eval/viewer/index.html`
-— a single self-contained, double-clickable file with no server and no
-network calls needed. Open it in a browser to step hour-by-hour through an
-episode: the exposure map, the candidate menu, and "What it said" (each
-decision's reasoning, alongside the standing claim ranking it produced).
-The per-hour gold-vs-agent strip reads each hour's
-`gold_spare_action` (`spend` or `conserve`) against whether the committed
-action actually spent a physical spare pair. An hour the decidable-hours
-rule skipped (see "Current wire format" above) renders with its own
-`skipped` marker in "What it said" instead of a reasoning block — the
-harness recorded a `wait` there without ever calling the decider, so there
-is no reasoning to show.
+Tests: `pytest` (≈ 780 tests; the server-backed ones need the server and take most of the ~50 min run).
 
 ## Repository layout
 
-- `src/storm_reoptimizer/` — the app: event interpretation, geo/asset mapping
-  (`geo_mapper.py`), the storm scenario pipeline, and the evaluation harness
-  (`eval/`).
-- `src/storm_reoptimizer/eval/scenarios/*.yaml` — the seven episode files
-  (`T1a`/`T1b`, `T2a`/`T2b`, `T3a`/`T3b`, `D1`).
-- `docs/superpowers/rehearsals/*.md` — hour-by-hour walkthroughs of each pair
-  against the real server, including the "does the baseline discriminate"
-  question each pair's own Q3 answers.
-- `docs/superpowers/specs/2026-08-19-agent-eval-design.md` — the harness's
-  design spec.
-- `tests/` — the test suite, including `tests/eval/` for the harness itself.
+```
+src/storm_reoptimizer/
+  events/            event contract, scripted cyclone tracks, (event_type → filter) table
+  geo_mapper.py      forecast cone ∩ span geometry → exposed assets (Shapely)
+  scenario_storm.py  deterministic end-to-end storm pipeline (no LLM)
+  mcp_client.py      stdio MCP client for the server
+  eval/
+    scenarios/       the episode YAMLs (T1a/b, T2a/b, T3a/b, D1)
+    runner.py        hour-by-hour episode rollout
+    observation.py   what the decider sees (and must not see)
+    agent.py         the Claude decider: prompt, tools, retry loop
+    baseline.py      forecast-blind fixed policies
+    probe.py         probe_restorability
+    replay.py        post-cut restoration replay
+    gold.py          measured gold via both oracles
+    assertions.py    pre-flight twin-pair and no-single-rule checks
+    scoring.py       per-episode and cross-twin metrics
+    suite.py         the runnable suite and results table
+tools/               offline builders: states, golds, viewer
+eval/states/         seeded operating states the episodes load
+tests/               pytest suite
+```
 
-See `CLAUDE.md` for the full project scope, build order, and what is
-explicitly out of scope (QoT, routing, RSA, disjointness — all owned by the
-`multilayer-optical-mcp` server this app calls but never reimplements).
+## License
+
+MIT. See [LICENSE](LICENSE).

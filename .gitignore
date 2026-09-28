@@ -8,8 +8,10 @@ dist/
 .venv/
 
 .worktrees/
-eval/states/
 eval/traces/
 eval/traces-control-2026-08-28/
 eval/viewer/
 .superpowers/
+
+# Design specs, plans and working notes: kept locally, never published.
+docs/superpowers/
