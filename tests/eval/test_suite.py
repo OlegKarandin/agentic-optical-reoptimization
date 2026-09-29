@@ -5,13 +5,17 @@ import asyncio
 import json
 from contextlib import asynccontextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+import storm_reoptimizer.eval.suite as suite_module
 from storm_reoptimizer.eval.baseline import ForecastBlindBaseline
+from storm_reoptimizer.eval.jev import DEFAULT_JEV_MODEL, JevDecider
 from storm_reoptimizer.eval.scenario_file import load_all_scenarios
 from storm_reoptimizer.eval.suite import (
-    RUNS_PER_EPISODE, render_results_table, run_suite, select_episodes,
+    RUNS_PER_EPISODE, build_arg_parser, build_deciders, render_results_table,
+    run_suite, select_episodes,
 )
 from storm_reoptimizer.mcp_client import connect_server
 
@@ -272,3 +276,82 @@ def test_a_metrics_sidecar_lands_beside_every_trace(
     assert sidecar == results["episodes"]["D1"]["baseline:immediate"]["metrics"][0]
     assert {"decision_label", "regret_gbps_h", "acted_too_late",
             "inert_commits"} <= set(sidecar)
+
+
+def test_include_jev_appends_both_arms_without_the_extra_or_a_key():
+    built = build_deciders(build_arg_parser().parse_args(["--include-jev"]))
+    jevs = [d for d in built if isinstance(d, JevDecider)]
+    assert [d.name for d in jevs] == [f"jev:{DEFAULT_JEV_MODEL}",
+                                      f"jev:{DEFAULT_JEV_MODEL}+totals"]
+    assert [d.include_totals for d in jevs] == [False, True]
+    assert all(d._client is None for d in jevs)
+    assert all(d._audit_path.name == "jev-calls.jsonl" for d in jevs)
+    assert all(d._audit_path.parent.name == "traces" for d in jevs)
+
+
+def test_jev_model_is_overridable_and_off_by_default():
+    assert not any(isinstance(d, JevDecider)
+                   for d in build_deciders(build_arg_parser().parse_args([])))
+    built = build_deciders(build_arg_parser().parse_args(
+        ["--include-jev", "--jev-model", "jev-9"]))
+    assert [d.name for d in built[-2:]] == ["jev:jev-9", "jev:jev-9+totals"]
+
+
+def test_build_deciders_tolerates_a_namespace_without_jev_fields():
+    # test_agent.py builds args as SimpleNamespace(include_agent, agent_model,
+    # agent_effort) with no jev fields; that must keep working.
+    built = build_deciders(SimpleNamespace(
+        include_agent=False, agent_model="x", agent_effort=None))
+    assert len(built) == 2
+    assert not any(isinstance(d, JevDecider) for d in built)
+
+
+def test_preflight_names_the_missing_sdk(monkeypatch):
+    monkeypatch.setattr(suite_module.importlib.util, "find_spec",
+                        lambda name: None)
+    monkeypatch.setenv("TYPESAFE_API_KEY", "k")
+    with pytest.raises(SystemExit) as exc:
+        suite_module.preflight_jev(SimpleNamespace(include_jev=True))
+    assert "typesafe_sdk" in str(exc.value)
+    assert 'pip install -e ".[jev]"' in str(exc.value)
+
+
+def test_preflight_names_the_missing_key(monkeypatch):
+    monkeypatch.setattr(suite_module.importlib.util, "find_spec",
+                        lambda name: object())
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    with pytest.raises(SystemExit) as exc:
+        suite_module.preflight_jev(SimpleNamespace(include_jev=True))
+    assert "TYPESAFE_API_KEY" in str(exc.value)
+
+
+def test_preflight_is_skipped_without_include_jev(monkeypatch):
+    monkeypatch.setattr(suite_module.importlib.util, "find_spec",
+                        lambda name: None)
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    suite_module.preflight_jev(SimpleNamespace(include_jev=False))
+    suite_module.preflight_jev(SimpleNamespace())
+
+
+def test_main_runs_the_jev_preflight_before_any_work(monkeypatch):
+    def refuse(args):
+        raise SystemExit("preflight ran")
+    monkeypatch.setattr(suite_module, "preflight_jev", refuse)
+    with pytest.raises(SystemExit, match="preflight ran"):
+        suite_module.main(["--include-jev"])
+
+
+def test_results_table_notes_jev_rows_and_the_citation_footnote():
+    results = {"pairs": {"jev:jev-1.13.0": {"pair_solved": 0.0},
+                         "jev:jev-1.13.0+totals": {"pair_solved": 0.0}},
+               "episodes": {}, "budget": {"seeds": [17], "episodes": 0,
+                                          "runs_per_episode": 1, "rollouts": 0}}
+    table = render_results_table(results)
+    assert "System-1 arm" in table and "horizon_totals" in table
+    assert "cites_flip_variable_frac" in table
+    # Only the +totals row names horizon_totals; the raw arm's row must not.
+    rows = {line.split("|")[1].strip(): line for line in table.splitlines()
+            if line.startswith("| jev:")}
+    assert "System-1 arm" in rows["jev:jev-1.13.0"]
+    assert "horizon_totals" not in rows["jev:jev-1.13.0"]
+    assert "horizon_totals" in rows["jev:jev-1.13.0+totals"]
