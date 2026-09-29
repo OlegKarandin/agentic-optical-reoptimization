@@ -169,6 +169,14 @@ class ProbeBinding:
         self.decision = decision
         self._count = 0
 
+    @property
+    def remaining(self) -> int:
+        """Probes still answerable in this decision. Only an accepted call
+        increments `_count`, so a caller that loops `while remaining > 0` is
+        bounded by the binding's own count -- no second counter to drift
+        (2026-09-29 sequential-gate spec §3.1)."""
+        return max(0, self.max_per_decision - self._count)
+
     async def __call__(self, service_id: str, risk_group_id: str) -> dict:
         record = {"decision": self.decision, "service_id": service_id,
                   "risk_group_id": risk_group_id, "answer": None, "error": None}

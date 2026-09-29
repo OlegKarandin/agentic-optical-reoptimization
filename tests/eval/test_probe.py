@@ -141,7 +141,7 @@ def _binding(**kw):
             _call_returning("solution", [LIGHTPATH]), service_id=service_id,
             risk_group_id=risk_group_id, geometry=_geometry(),
             issuance=_issuance(), damage_radius_km=50.0,
-            demands={"c": 200.0})
+            demands={"c": 200.0, "s": 200.0})
     return ProbeBinding(answer=answer, service_ids={"c", "s"},
                         risk_group_ids={"rg_x"}, **kw)
 
@@ -179,6 +179,33 @@ def test_the_cap_is_per_decision_and_begin_resets_it():
     binding.begin("constraints")
     asyncio.run(binding("c", "rg_x"))   # a fresh decision, a fresh cap
     assert len(binding.records) == MAX_PROBES_PER_DECISION + 2
+
+
+def test_remaining_counts_only_accepted_probes_and_resets_on_begin():
+    binding = _binding(max_per_decision=2)
+    binding.begin("timing")
+    assert binding.remaining == 2
+    with pytest.raises(ProbeError):
+        asyncio.run(binding("ghost", "rg_x"))          # rejected: no charge
+    assert binding.remaining == 2
+    asyncio.run(binding("c", "rg_x"))
+    assert binding.remaining == 1
+    asyncio.run(binding("s", "rg_x"))
+    assert binding.remaining == 0
+    with pytest.raises(ProbeError, match="cap"):
+        asyncio.run(binding("c", "rg_x"))
+    assert binding.remaining == 0
+    binding.begin("objective")
+    assert binding.remaining == 2
+
+
+def test_remaining_floors_at_zero():
+    binding = _binding(max_per_decision=2)
+    binding.begin("timing")
+    asyncio.run(binding("c", "rg_x"))
+    asyncio.run(binding("s", "rg_x"))
+    binding.max_per_decision = 1
+    assert binding.remaining == 0
 
 
 def test_a_probe_outside_any_decision_is_rejected():
