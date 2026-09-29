@@ -15,14 +15,22 @@ from pathlib import Path
 
 from .agent import (
     CONSTRAINT_TOOL,
+    OBJECTIVE_TOOL,
     TIMING_TOOL,
     ClaudeDecider,
     _peak_capacity_at_risk_gbps,
     project_observation,
 )
-from .decisions import ConstraintDecision, DecisionError, TimingDecision
+from .decisions import (
+    HOLD_CHOICE,
+    ConstraintDecision,
+    DecisionError,
+    ObjectiveDecision,
+    TimingDecision,
+)
 from .observation import P_CUT_ENUMERATION_THRESHOLD, Observation
 from .probe import ProbeError
+from .runner import menu_for_prompt as _menu_for_prompt
 
 # ---------------------------------------------------------------------------
 # Constants: model, thresholds, and every word Jev is shown (spec §3.2c).
@@ -244,6 +252,35 @@ def _summary(model: str, answer, probes: list[dict],
     return text
 
 
+def _candidate_description(c: dict) -> str:
+    """Compact rendering of one `menu_for_prompt` entry (spec §3.3); the full
+    entry is also in `state["menu"]`. The inert note restates Claude's
+    prompt ("A committed candidate that changes no path and costs no spare
+    is recorded as a wait")."""
+    spares = c.get("spares_needed") or {}
+    delta = c.get("path_delta") or {}
+    collide = c.get("collides_with_protection") or {}
+    parts = [f"lever {c.get('lever')}",
+             f"spares_needed {json.dumps(spares, sort_keys=True)}",
+             f"restored_gbps {c.get('restored_gbps')}",
+             f"shortfall_gbps {c.get('shortfall_gbps')}"]
+    if "changes_working_path" in delta:
+        parts.append(f"changes_working_path {delta['changes_working_path']}")
+    if delta.get("oms_retained_cuttable"):
+        parts.append("oms_retained_cuttable "
+                     f"{json.dumps(delta['oms_retained_cuttable'])}")
+    if "collides" in collide:
+        parts.append(f"collides_with_protection {collide['collides']}")
+    if c.get("residual_exposure"):
+        parts.append("residual_exposure "
+                     f"{json.dumps(c['residual_exposure'], sort_keys=True)}")
+    parts.append(f"cost_vector {json.dumps(c.get('cost_vector') or {}, sort_keys=True)}")
+    if delta.get("changes_working_path") is False and not any(spares.values()):
+        parts.append("changes no path and costs no spare: committing it "
+                     "records as a wait")
+    return "; ".join(parts)
+
+
 class JevDecider:
     """Standalone replacement decider (spec §3.1). Stateless across calls
     for the same reason as ClaudeDecider (agent.py:746): suite.py builds one
@@ -451,3 +488,32 @@ class JevDecider:
         raw = {"avoid": {"risk_groups": [chosen]}, "reasoning": reasoning}
         return self._validated(ConstraintDecision, raw, payload,
                                CONSTRAINT_TOOL, obs, [], log)
+
+    async def objective(self, obs: Observation, menu: dict
+                        ) -> ObjectiveDecision:
+        payload = self._project(obs)
+        rendered = _menu_for_prompt(menu, self.oms_nodes,
+                                    lit_runs=self.lit_runs)
+        base = {"observation": payload, "menu": rendered}
+        log: list = []
+        probe_answers, probes = await self._probe_gate(base, log)
+        candidates = rendered.get("candidates") or []
+        room = MAX_CHOICE_OPTIONS - 2          # hold + infeasible always offered
+        criteria = {c["candidate_label"]: _candidate_description(c)
+                    for c in candidates[:room]}
+        criteria[HOLD_CHOICE] = HOLD_CRITERION
+        criteria["infeasible"] = INFEASIBLE_CRITERION
+        sut = payload["actionable_service"]
+        response = await self._ask(
+            {**base, "probe_answers": probe_answers},
+            {"choice": _choice(
+                self._with_totals(OBJECTIVE_INSTRUCTION.format(sut=sut)),
+                criteria)},
+            log, "decision")
+        if len(candidates) > room:
+            log[-1]["truncated_from"] = len(candidates)
+        answer = response.choices["choice"]
+        raw = {"choice": answer.choice,
+               "reasoning": _summary(response.model, answer, probes)}
+        return self._validated(ObjectiveDecision, raw, payload,
+                               OBJECTIVE_TOOL, obs, probes, log)

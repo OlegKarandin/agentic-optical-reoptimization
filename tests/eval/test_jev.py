@@ -475,3 +475,117 @@ def test_constraints_last_projection_is_claudes_constraints_projection():
     _run(decider.constraints(obs, None))
     assert decider.last_projection == ClaudeDecider(client=object())._project(
         obs, include_risk_group_assets=True)
+
+
+# ---------------------------------------------------------------------------
+# Objective tests (Task 5)
+# ---------------------------------------------------------------------------
+
+MENU = {
+    "status": "solution",
+    "candidates": [
+        {"lever": "optical_reroute", "reused_lightpaths": [],
+         "new_lightpaths": [{"oms_sequence": ["oms_1"], "lam": 0,
+                             "mode_id": "300G@4.8dB", "gsnr_db": 12.0,
+                             "bitrate_gbps": 300.0}],
+         "restored_gbps": 300.0, "shortfall_gbps": 0.0,
+         "cost_vector": {"dropped_traffic": 0.0, "transponders": 40.0,
+                         "services_at_risk": 0, "total_margin": 5.0,
+                         "added_latency": 9.0, "spectrum_used": 20,
+                         "max_util": 0.7},
+         "path_delta": {"changes_working_path": True, "oms_added": ["oms_1"],
+                        "oms_removed": [], "oms_retained_cuttable": []},
+         "collides_with_protection": {"collides": False,
+                                      "oms_shared_with_protection": []},
+         "residual_exposure": {HORIZON: {"p_cut": 0.0, "ecar_gbps": 0.0}}},
+        {"lever": "ip_reroute", "reused_lightpaths": ["lp-x"],
+         "new_lightpaths": [], "restored_gbps": 250.0, "shortfall_gbps": 50.0,
+         "cost_vector": {"dropped_traffic": 50.0, "transponders": 38.0,
+                         "services_at_risk": 0, "total_margin": 5.0,
+                         "added_latency": 4.0, "spectrum_used": 18,
+                         "max_util": 0.8},
+         "path_delta": {"changes_working_path": False, "oms_added": [],
+                        "oms_removed": [], "oms_retained_cuttable": ["oms_9"]},
+         "collides_with_protection": {"collides": False,
+                                      "oms_shared_with_protection": []},
+         "residual_exposure": {HORIZON: {"p_cut": 0.38, "ecar_gbps": 114.0}}},
+    ],
+    "pairs": [],
+}
+OMS_NODES = {"oms_1": ["site_a", "site_b"]}
+
+
+def _objective_decider(*responders, **kwargs):
+    decider, fake = _decider(*responders, oms_nodes=OMS_NODES, **kwargs)
+    return decider, fake
+
+
+def test_objective_choice_offers_every_label_plus_hold_and_infeasible():
+    decider, fake = _objective_decider({"choice": _choice_answer("candidate_0")})
+    decision = _run(decider.objective(_obs(), MENU))
+    q = fake.calls[0]["questions"]["choice"]
+    assert set(q["criteria"]) == {"candidate_0", "candidate_1", "hold",
+                                  "infeasible"}
+    assert q["criteria"]["hold"] == jev_module.HOLD_CRITERION
+    assert q["criteria"]["infeasible"] == jev_module.INFEASIBLE_CRITERION
+    assert "optical_reroute" in q["criteria"]["candidate_0"]
+    assert "spares_needed" in q["criteria"]["candidate_0"]
+    assert "records as a wait" in q["criteria"]["candidate_1"]   # inert marker
+    assert SUT in q["instructions"]
+    assert decision.choice == "candidate_0"
+
+
+def test_objective_menu_state_is_claudes_rendered_menu():
+    from storm_reoptimizer.eval.runner import menu_for_prompt
+    obs = _obs()
+    decider, fake = _objective_decider({"choice": _choice_answer("hold")})
+    decider.lit_runs = [("site_a", "site_b")]
+    _run(decider.objective(obs, MENU))
+    state = fake.calls[0]["state"]
+    claude = ClaudeDecider(client=object())
+    assert state == jev_module._wire({
+        "observation": claude._project(obs),
+        "menu": menu_for_prompt(MENU, OMS_NODES, lit_runs=[("site_a", "site_b")]),
+        "probe_answers": []})
+
+
+def test_objective_empty_menu_still_offers_hold_and_infeasible():  # Review Focus 2
+    decider, fake = _objective_decider({"choice": _choice_answer("infeasible")})
+    decision = _run(decider.objective(
+        _obs(), {"status": "no_solution", "candidates": [], "pairs": []}))
+    assert set(fake.calls[0]["questions"]["choice"]["criteria"]) == {
+        "hold", "infeasible"}
+    assert decision.choice == "infeasible"
+
+
+def test_objective_menu_over_255_options_is_truncated_and_recorded(tmp_path):
+    path = tmp_path / "a.jsonl"
+    big = {**MENU, "candidates": [MENU["candidates"][1]] * 300}
+    decider, fake = _objective_decider(
+        {"choice": _choice_answer("candidate_252")}, audit_path=path)
+    _run(decider.objective(_obs(), big))
+    crit = fake.calls[0]["questions"]["choice"]["criteria"]
+    assert len(crit) == 255 and "candidate_252" in crit and "candidate_253" not in crit
+    rec = json.loads(path.read_text(encoding="utf-8"))
+    assert rec["jev"][-1]["truncated_from"] == 300
+
+
+def test_objective_gate_runs_before_the_choice():
+    decider, fake = _objective_decider(
+        _gate({"claim-a": 0.9}), {"choice": _choice_answer("hold")})
+    binding, seen = _binding([SUT, "claim-a", "claim-b"])
+    binding.begin("objective")
+    decider.bind_probe(binding)
+    _run(decider.objective(_obs(), MENU))
+    assert seen == [("claim-a", RG)]
+    assert fake.calls[1]["state"]["probe_answers"][0]["service_id"] == "claim-a"
+
+
+def test_totals_objective_question_gains_only_the_totals_sentence():
+    raw, rf = _objective_decider({"choice": _choice_answer("hold")})
+    tot, tf = _objective_decider({"choice": _choice_answer("hold")},
+                                 include_totals=True)
+    _run(raw.objective(_obs(), MENU)), _run(tot.objective(_obs(), MENU))
+    rq, tq = rf.calls[0]["questions"]["choice"], tf.calls[0]["questions"]["choice"]
+    assert tq["instructions"] == f"{rq['instructions']} {TOTALS_SENTENCE}"
+    assert tq["criteria"] == rq["criteria"]
