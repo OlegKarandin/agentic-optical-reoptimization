@@ -141,7 +141,9 @@ OBJECTIVE_INSTRUCTION = (
     "nothing this hour. Reason about spares from each candidate's "
     "`spares_needed` and `observation.spares_on_hand`; "
     "`observation.decided_this_hour` is the timing decision this choice "
-    "executes.")
+    "executes. Within one hour there may be several attempts: "
+    "`observation.iteration` counts them and `observation.last_rejection` "
+    "tells you why the previous attempt failed.")
 
 HOLD_CRITERION = {
     "what": (
@@ -168,7 +170,8 @@ HOLD_CRITERION = {
 INFEASIBLE_CRITERION = {
     "what": (
         "None of these candidates is acceptable under the constraints "
-        "set; constraints are asked for again and can be loosened."
+        "set. Repeating an avoid set that produced no menu cannot "
+        "produce one."
     ),
     "not_for": (
         "Declining to spend when an acceptable candidate exists -- "

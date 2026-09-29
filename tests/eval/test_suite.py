@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import storm_reoptimizer.eval.suite as suite_module
 from storm_reoptimizer.eval.baseline import ForecastBlindBaseline
 from storm_reoptimizer.eval.jev import DEFAULT_JEV_MODEL, JevDecider
 from storm_reoptimizer.eval.scenario_file import load_all_scenarios
@@ -303,6 +304,41 @@ def test_build_deciders_tolerates_a_namespace_without_jev_fields():
         include_agent=False, agent_model="x", agent_effort=None))
     assert len(built) == 2
     assert not any(isinstance(d, JevDecider) for d in built)
+
+
+def test_preflight_names_the_missing_sdk(monkeypatch):
+    monkeypatch.setattr(suite_module.importlib.util, "find_spec",
+                        lambda name: None)
+    monkeypatch.setenv("TYPESAFE_API_KEY", "k")
+    with pytest.raises(SystemExit) as exc:
+        suite_module.preflight_jev(SimpleNamespace(include_jev=True))
+    assert "typesafe_sdk" in str(exc.value)
+    assert 'pip install -e ".[jev]"' in str(exc.value)
+
+
+def test_preflight_names_the_missing_key(monkeypatch):
+    monkeypatch.setattr(suite_module.importlib.util, "find_spec",
+                        lambda name: object())
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    with pytest.raises(SystemExit) as exc:
+        suite_module.preflight_jev(SimpleNamespace(include_jev=True))
+    assert "TYPESAFE_API_KEY" in str(exc.value)
+
+
+def test_preflight_is_skipped_without_include_jev(monkeypatch):
+    monkeypatch.setattr(suite_module.importlib.util, "find_spec",
+                        lambda name: None)
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    suite_module.preflight_jev(SimpleNamespace(include_jev=False))
+    suite_module.preflight_jev(SimpleNamespace())
+
+
+def test_main_runs_the_jev_preflight_before_any_work(monkeypatch):
+    def refuse(args):
+        raise SystemExit("preflight ran")
+    monkeypatch.setattr(suite_module, "preflight_jev", refuse)
+    with pytest.raises(SystemExit, match="preflight ran"):
+        suite_module.main(["--include-jev"])
 
 
 def test_results_table_notes_jev_rows_and_the_citation_footnote():

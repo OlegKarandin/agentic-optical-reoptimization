@@ -143,6 +143,22 @@ def test_rule4_confusable_options_carry_structured_criteria():
     assert set(TIMING_ACTION_CRITERIA) == {"act", "wait"}
 
 
+def test_objective_question_points_at_the_previous_rejection():
+    text = OBJECTIVE_INSTRUCTION.format(sut="svc-x")
+    assert "`observation.last_rejection`" in text
+    assert "`observation.iteration`" in text
+    assert "svc-x" in text
+
+
+def test_infeasible_criterion_does_not_claim_constraints_can_be_loosened():
+    # Jev's constraints step is a Choice over whole risk groups (or a fixed
+    # answer when one group is shown): it can never loosen anything.
+    what = INFEASIBLE_CRITERION["what"]
+    assert "loosen" not in what.lower()
+    assert "asked for again" not in what
+    assert set(INFEASIBLE_CRITERION) == {"what", "not_for", "examples"}
+
+
 def test_rule5_score_levels_carry_no_numbers():
     assert 2 <= len(CLAIM_LEVELS) <= 10
     assert not any(ch.isdigit() for level in CLAIM_LEVELS for ch in level)

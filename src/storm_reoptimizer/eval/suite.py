@@ -17,7 +17,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import copy
+import importlib.util
 import json
+import os
 import statistics
 from pathlib import Path
 
@@ -466,8 +468,23 @@ async def _run_dimensional_coherence_invariants(
                 client, scenario, topology_path=topology_path)
 
 
+def preflight_jev(args) -> None:
+    """Fail fast, before any work starts, when `--include-jev` is asked for
+    but the optional SDK or its key is missing. Not in `build_deciders`,
+    which stays keyless so tests can build the arms."""
+    if not getattr(args, "include_jev", False):
+        return
+    if importlib.util.find_spec("typesafe_sdk") is None:
+        raise SystemExit(
+            "--include-jev needs the optional `typesafe_sdk` package; "
+            'install it with: pip install -e ".[jev]"')
+    if not os.environ.get("TYPESAFE_API_KEY"):
+        raise SystemExit(
+            "--include-jev needs the TYPESAFE_API_KEY environment variable "
+            "set")
+
+
 def main(argv: list[str] | None = None) -> None:
-    import os
     from contextlib import asynccontextmanager
 
     from .derived import (
@@ -476,6 +493,7 @@ def main(argv: list[str] | None = None) -> None:
     from ..mcp_client import connect_server
 
     args = build_arg_parser().parse_args(argv)
+    preflight_jev(args)
 
     topology = (Path(__file__).parent.parent / "data"
                 / "toy_india_topology.json")
