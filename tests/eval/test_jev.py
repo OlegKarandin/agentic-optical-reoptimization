@@ -18,14 +18,15 @@ from storm_reoptimizer.eval.jev import (
     HOLD_CRITERION,
     INFEASIBLE_CRITERION,
     OBJECTIVE_INSTRUCTION,
-    PROBE_GATE_INSTRUCTION,
+    PROBE_STEP_INSTRUCTION,
+    PROBE_STOP_CRITERION,
     TIMING_ACTION_CRITERIA,
     TIMING_ACTION_INSTRUCTION,
     TOTALS_SENTENCE,
     JevDecider,
 )
 from storm_reoptimizer.eval.observation import Observation
-from storm_reoptimizer.eval.probe import ProbeAnswer, ProbeBinding
+from storm_reoptimizer.eval.probe import ProbeAnswer, ProbeBinding, ProbeError
 from storm_reoptimizer.eval.scenario_file import ConeAtHorizon, Issuance
 
 HORIZON = "t3"
@@ -36,7 +37,8 @@ CLAIMANTS = [("claim-a", 0.30, 100.0), ("claim-b", 0.20, 100.0)]
 
 
 def _obs(*, others=CLAIMANTS, risk_group_ids=None, risk_group_assets=(),
-         iteration=0, last_rejection=None):
+         iteration=0, last_rejection=None, decided_this_hour=None,
+         probe_answers_this_episode=()):
     """T1's shape at t0: the SUT plus depot-eligible claimants, each in its
     own co-terminating group, with horizon_totals populated so the `totals`
     arm has something to add."""
@@ -70,6 +72,8 @@ def _obs(*, others=CLAIMANTS, risk_group_ids=None, risk_group_assets=(),
                         else {HORIZON: RG}),
         risk_group_assets=tuple(risk_group_assets),
         iteration=iteration, last_rejection=last_rejection,
+        decided_this_hour=decided_this_hour,
+        probe_answers_this_episode=tuple(probe_answers_this_episode),
         restorable_groups={HORIZON: tuple(groups)} if groups else {},
         horizon_totals={HORIZON: {"sut_ecar_gbps": 114.0,
                                   "largest_restorable_group_ecar_gbps": 30.0,
@@ -118,9 +122,10 @@ def test_with_totals_appends_only_the_totals_sentence():
 def _all_question_text():
     parts = [TIMING_ACTION_INSTRUCTION, CLAIM_SCORE_INSTRUCTION,
              CONSTRAINT_INSTRUCTION, OBJECTIVE_INSTRUCTION,
-             PROBE_GATE_INSTRUCTION, *CLAIM_LEVELS,
+             PROBE_STEP_INSTRUCTION, *CLAIM_LEVELS,
              json.dumps(TIMING_ACTION_CRITERIA), json.dumps(HOLD_CRITERION),
-             json.dumps(INFEASIBLE_CRITERION)]
+             json.dumps(INFEASIBLE_CRITERION), json.dumps(PROBE_STOP_CRITERION),
+             json.dumps(jev_module._probe_option("svc", "rg"))]
     return "\n".join(parts)
 
 
@@ -184,10 +189,6 @@ def _score_answer(score, confidence=0.6):
                            probabilities={round(score): 1.0})
 
 
-def _noul_answer(p):
-    return SimpleNamespace(type="noul", noul=p)
-
-
 class FakeTypeSafe:
     """Mimics `AsyncTypeSafeClient.system_one` and the response attributes
     the decider reads. Each queued responder is a dict of answers or a
@@ -211,7 +212,7 @@ class FakeTypeSafe:
         return SimpleNamespace(
             model="jev-1.13.0",
             usage=SimpleNamespace(input_tokens=1000, output_tokens=5),
-            choices=by("choice"), scores=by("score"), nouls=by("noul"))
+            choices=by("choice"), scores=by("score"))
 
 
 def _timing_answers(action="wait", scores=None):
@@ -353,15 +354,6 @@ PROBE_ANSWER = {"status": "no_solution", "full_restore_candidates": 0,
                 "min_spares_needed_by_site": None, "levers": [], "scope": ""}
 
 
-def _gate(ps):
-    """Gate responder: `ps` maps service_id -> P(yes) (default 0.0)."""
-    def respond(questions):
-        return {qid: _noul_answer(ps.get(
-                    re.search(r"`([^`]+)`", q["instructions"]).group(1), 0.0))
-                for qid, q in questions.items()}
-    return respond
-
-
 def _binding(service_ids, rgs=(RG,), max_per_decision=4):
     seen = []
     async def answer(service_id, risk_group_id):
@@ -373,64 +365,6 @@ def _binding(service_ids, rgs=(RG,), max_per_decision=4):
                            max_per_decision=max_per_decision)
     binding.begin("timing")
     return binding, seen
-
-
-def test_gate_asks_one_noul_per_shown_service_and_group():
-    decider, fake = _decider(_gate({}), _timing_answers())
-    decider.bind_probe(_binding([SUT, "claim-a", "claim-b"])[0])
-    _run(decider.timing(_obs()))
-    gate = fake.calls[0]["questions"]
-    assert all(q["type"] == "noul" for q in gate.values())
-    assert len(gate) == 3
-    # Each question must carry both service id and group id
-    for q in gate.values():
-        assert RG in q["instructions"]                      # rule 1
-    named = {re.search(r"`([^`]+)`", q["instructions"]).group(1)
-             for q in gate.values()}
-    assert named == {SUT, "claim-a", "claim-b"}  # All shown services covered
-
-
-def test_gate_probes_pairs_at_or_above_threshold_in_p_order():
-    decider, fake = _decider(
-        _gate({"claim-b": 0.9, "claim-a": 0.5, SUT: 0.49}), _timing_answers())
-    binding, seen = _binding([SUT, "claim-a", "claim-b"])
-    decider.bind_probe(binding)
-    _run(decider.timing(_obs()))
-    assert seen == [("claim-b", RG), ("claim-a", RG)]
-    state = fake.calls[1]["state"]
-    assert state["probe_answers"] == [
-        {"service_id": "claim-b", "risk_group_id": RG, "answer": PROBE_ANSWER},
-        {"service_id": "claim-a", "risk_group_id": RG, "answer": PROBE_ANSWER}]
-
-
-def test_gate_tie_breaks_equal_p_by_service_id():
-    decider, _ = _decider(_gate({"claim-b": 0.7, "claim-a": 0.7}),
-                          _timing_answers())
-    binding, seen = _binding([SUT, "claim-a", "claim-b"])
-    decider.bind_probe(binding)
-    _run(decider.timing(_obs()))
-    assert seen == [("claim-a", RG), ("claim-b", RG)]
-
-
-def test_gate_over_the_binding_cap_is_recorded_and_skipped(tmp_path):
-    path = tmp_path / "a.jsonl"
-    decider, fake = _decider(
-        _gate({SUT: 0.9, "claim-a": 0.8, "claim-b": 0.7}), _timing_answers(),
-        audit_path=path)
-    binding, seen = _binding([SUT, "claim-a", "claim-b"], max_per_decision=2)
-    decider.bind_probe(binding)
-    decision = _run(decider.timing(_obs()))                 # never dies
-    assert len(seen) == 2
-    assert len(fake.calls[1]["state"]["probe_answers"]) == 2
-    rec = json.loads(path.read_text(encoding="utf-8"))
-    assert [p["error"] is None for p in rec["probes"]] == [True, True, False]
-    # Rejected record must have answer=None and non-empty error
-    assert rec["probes"][2]["answer"] is None
-    assert isinstance(rec["probes"][2]["error"], str) and rec["probes"][2]["error"]
-    assert all("p" in p for p in rec["probes"])
-    # Audit jev block must carry probe_gate entry
-    assert any(entry["purpose"] == "probe_gate" for entry in rec["jev"])
-    assert "rejected" in decision.reasoning
 
 
 def test_no_gate_request_when_nothing_is_bound():            # Review Focus 4
@@ -446,6 +380,224 @@ def test_no_gate_request_when_no_risk_group_is_shown():
     _run(decider.timing(_obs(risk_group_ids={})))
     assert len(fake.calls) == 1
     assert fake.calls[0]["state"]["probe_answers"] == []
+
+
+def _offered(questions):
+    """(service_id, risk_group_id) per offered probe option, in key order."""
+    return [tuple(re.findall(r"`([^`]+)`", c["what"]))
+            for k, c in questions["probe"]["criteria"].items() if k != "stop"]
+
+
+def _key_for(questions, service_id, risk_group_id=RG):
+    for key, c in questions["probe"]["criteria"].items():
+        if key != "stop" and tuple(re.findall(r"`([^`]+)`", c["what"])) == (
+                service_id, risk_group_id):
+            return key
+    raise AssertionError(f"({service_id}, {risk_group_id}) not offered")
+
+
+def _step(pick, risk_group_id=RG, p=0.7):
+    """Probe-step responder: choose `pick`'s option (a service id) or "stop"."""
+    def respond(questions):
+        key = "stop" if pick == "stop" else _key_for(questions, pick, risk_group_id)
+        probs = {k: 0.0 for k in questions["probe"]["criteria"]}
+        probs[key] = p
+        if key != "stop":
+            probs["stop"] = round(1 - p, 3)
+        return {"probe": _choice_answer(key, probs)}
+    return respond
+
+
+def _first_pair():
+    """Probe-step responder that never stops: always the first offered pair."""
+    def respond(questions):
+        key = next(k for k in questions["probe"]["criteria"] if k != "stop")
+        return {"probe": _choice_answer(key, {key: 0.9, "stop": 0.1})}
+    return respond
+
+THREE = [SUT, "claim-a", "claim-b"]
+
+
+def test_probe_step_wording_is_the_specs():
+    text = PROBE_STEP_INSTRUCTION.format(decision="timing", cap=4)
+    assert text.startswith("Before the timing decision")
+    assert "At most 4 questions" in text
+    assert "`probe_budget.remaining`" in text
+    assert text.endswith("as to the one that can act.")       # Claude's nudge
+    assert set(PROBE_STOP_CRITERION) == {"what", "not_for"}
+    opt = jev_module._probe_option("svc-x", "rg_y")
+    assert set(opt) == {"what", "not_for"}
+    assert "`svc-x`" in opt["what"] and "`rg_y`" in opt["what"]
+
+
+def test_stop_at_step_zero_is_one_request_and_no_probe():
+    decider, fake = _decider(_step("stop"), _timing_answers())
+    binding, seen = _binding(THREE)
+    decider.bind_probe(binding)
+    _run(decider.timing(_obs()))
+    assert seen == [] and binding.records == []
+    assert len(fake.calls) == 2
+    q = fake.calls[0]["questions"]
+    assert set(q) == {"probe"} and q["probe"]["type"] == "choice"
+    crit = q["probe"]["criteria"]
+    # timing: decided_this_hour absent -> every pair offered, sorted
+    assert _offered(q) == [("claim-a", RG), ("claim-b", RG), (SUT, RG)]
+    assert list(crit) == ["probe_0", "probe_1", "probe_2", "stop"]
+    assert crit["probe_0"] == jev_module._probe_option("claim-a", RG)
+    assert crit["stop"] == PROBE_STOP_CRITERION
+    assert q["probe"]["instructions"] == PROBE_STEP_INSTRUCTION.format(
+        decision="timing", cap=4)
+    assert fake.calls[1]["state"]["probe_answers"] == []
+
+
+def test_second_step_sees_first_answer_and_a_smaller_budget():
+    decider, fake = _decider(_step("claim-b"), _step("stop"), _timing_answers())
+    binding, seen = _binding(THREE)
+    decider.bind_probe(binding)
+    _run(decider.timing(_obs()))
+    assert seen == [("claim-b", RG)]
+    s0, s1 = fake.calls[0]["state"], fake.calls[1]["state"]
+    assert s0["probe_answers"] == []
+    assert s0["probe_budget"] == {"max_per_decision": 4, "remaining": 4}
+    answered = [{"service_id": "claim-b", "risk_group_id": RG,
+                 "answer": PROBE_ANSWER}]
+    assert s1["probe_answers"] == answered
+    assert s1["probe_budget"] == {"max_per_decision": 4, "remaining": 3}
+    assert ("claim-b", RG) not in _offered(fake.calls[1]["questions"])
+    assert fake.calls[2]["state"]["probe_answers"] == answered
+
+
+def test_the_budget_bounds_the_loop_with_no_rejected_record():
+    decider, fake = _decider(_first_pair(), _first_pair(), _timing_answers())
+    binding, seen = _binding(THREE, max_per_decision=2)
+    decider.bind_probe(binding)
+    decision = _run(decider.timing(_obs()))
+    assert len(seen) == 2
+    assert len(fake.calls) == 3          # 2 steps, no trailing stop, 1 decision
+    assert len(binding.records) == 2
+    assert all(r["error"] is None for r in binding.records)
+    assert "rejected" not in decision.reasoning
+
+
+def test_pairs_answered_earlier_this_hour_are_not_offered_again():
+    flat = {k: v for k, v in PROBE_ANSWER.items()}
+    obs = _obs(
+        decided_this_hour={"timing": {"action": "act"}, "probe_answers": [
+            {"service_id": "claim-a", "risk_group_id": RG, **flat}]},
+        probe_answers_this_episode=(
+            {"hour": "t0", "decision": "timing", "service_id": "claim-b",
+             "risk_group_id": RG, **flat},))
+    decider, fake = _decider(_step("stop"), {"choice": _choice_answer("hold")},
+                             oms_nodes=OMS_NODES)
+    binding, _ = _binding(THREE)
+    binding.begin("objective")
+    decider.bind_probe(binding)
+    _run(decider.objective(obs, MENU))
+    # claim-a answered earlier THIS hour: not offered; claim-b only in the
+    # episode list (an earlier hour): still offered.
+    assert _offered(fake.calls[0]["questions"]) == [("claim-b", RG), (SUT, RG)]
+    assert fake.calls[0]["questions"]["probe"]["instructions"].startswith(
+        "Before the objective decision")
+
+
+def test_decision_state_is_claudes_payload_plus_probe_answers_only():
+    obs = _obs()
+    decider, fake = _decider(_step("claim-a"), _step("stop"), _timing_answers())
+    decider.bind_probe(_binding(THREE)[0])
+    _run(decider.timing(obs))
+    claude = ClaudeDecider(client=object())._project(obs)
+    assert fake.calls[-1]["state"] == jev_module._wire({
+        "observation": claude,
+        "probe_answers": [{"service_id": "claim-a", "risk_group_id": RG,
+                           "answer": PROBE_ANSWER}]})
+    assert all("probe_budget" in c["state"] for c in fake.calls[:-1])
+
+
+def test_a_choice_naming_an_unoffered_key_is_a_mapping_bug():
+    decider, _ = _decider(lambda qs: {"probe": _choice_answer("probe_99")})
+    decider.bind_probe(_binding(THREE)[0])
+    with pytest.raises(DecisionError, match="probe_99"):
+        _run(decider.timing(_obs()))
+
+
+def test_probe_steps_are_audited_with_decodable_options(tmp_path):
+    path = tmp_path / "a.jsonl"
+    decider, _ = _decider(_step("claim-b", p=0.7), _step("stop"),
+                          _timing_answers(), audit_path=path)
+    decider.bind_probe(_binding(THREE)[0])
+    _run(decider.timing(_obs()))
+    rec = json.loads(path.read_text(encoding="utf-8"))
+    steps = [e for e in rec["jev"] if e["purpose"] == "probe_step"]
+    assert [e["step"] for e in steps] == [0, 1]
+    assert [e["remaining"] for e in steps] == [4, 3]
+    chosen = steps[0]["answers"]["probe"]["choice"]
+    assert steps[0]["options"][chosen] == {"service_id": "claim-b",
+                                           "risk_group_id": RG}
+    assert "stop" in steps[0]["answers"]["probe"]["probabilities"]
+    (probe,) = rec["probes"]
+    assert (probe["step"], probe["p_chosen"], probe["p_stop"]) == (0, 0.7, 0.3)
+    assert "p" not in probe
+    assert rec["jev"][-1]["purpose"] == "decision"
+
+
+# Review Focus 1
+def test_a_probe_error_ends_the_gate_but_not_the_decision():
+    decider, fake = _decider(_step("claim-b"), _timing_answers())
+    binding, seen = _binding([SUT, "claim-a"])        # claim-b not bindable
+    decider.bind_probe(binding)
+    decision = _run(decider.timing(_obs()))
+    assert seen == [] and len(fake.calls) == 2         # no second step
+    assert fake.calls[1]["state"]["probe_answers"] == []
+    assert "claim-b@" in decision.reasoning and "rejected" in decision.reasoning
+
+
+# Review Focus 2
+def test_a_choice_without_a_stop_probability_records_p_stop_none(tmp_path):
+    path = tmp_path / "a.jsonl"
+    def respond(questions):
+        key = _key_for(questions, "claim-a")
+        return {"probe": _choice_answer(key, {key: 1.0})}
+    decider, _ = _decider(respond, _step("stop"), _timing_answers(),
+                          audit_path=path)
+    decider.bind_probe(_binding(THREE)[0])
+    _run(decider.timing(_obs()))
+    (probe,) = json.loads(path.read_text(encoding="utf-8"))["probes"]
+    assert probe["p_stop"] is None and probe["p_chosen"] == 1.0
+
+
+# Review Focus 3
+def test_open_pairs_over_the_choice_limit_are_truncated_in_order(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(jev_module, "MAX_CHOICE_OPTIONS", 3)
+    path = tmp_path / "a.jsonl"
+    decider, fake = _decider(_step("stop"), _timing_answers(), audit_path=path)
+    decider.bind_probe(_binding(THREE)[0])
+    _run(decider.timing(_obs()))
+    assert _offered(fake.calls[0]["questions"]) == [("claim-a", RG),
+                                                    ("claim-b", RG)]
+    rec = json.loads(path.read_text(encoding="utf-8"))
+    assert rec["jev"][0]["truncated_from"] == 3
+
+
+# Review Focus 4
+def test_reused_decider_sends_identical_gate_requests():
+    decider, fake = _decider(_step("claim-a"), _step("stop"), _timing_answers(),
+                             _step("claim-a"), _step("stop"), _timing_answers())
+    decider.bind_probe(_binding(THREE)[0])
+    _run(decider.timing(_obs()))
+    decider.bind_probe(_binding(THREE)[0])
+    _run(decider.timing(_obs()))
+    assert fake.calls[:3] == fake.calls[3:]
+
+
+def test_totals_probe_step_gains_only_the_totals_sentence():
+    raw, rf = _decider(_step("stop"), _timing_answers())
+    tot, tf = _decider(_step("stop"), _timing_answers(), include_totals=True)
+    raw.bind_probe(_binding(THREE)[0]); tot.bind_probe(_binding(THREE)[0])
+    _run(raw.timing(_obs())), _run(tot.timing(_obs()))
+    rq, tq = rf.calls[0]["questions"]["probe"], tf.calls[0]["questions"]["probe"]
+    assert tq["instructions"] == f"{rq['instructions']} {TOTALS_SENTENCE}"
+    assert tq["criteria"] == rq["criteria"]
 
 
 # ---------------------------------------------------------------------------
@@ -588,13 +740,14 @@ def test_objective_menu_over_255_options_is_truncated_and_recorded(tmp_path):
 
 def test_objective_gate_runs_before_the_choice():
     decider, fake = _objective_decider(
-        _gate({"claim-a": 0.9}), {"choice": _choice_answer("hold")})
-    binding, seen = _binding([SUT, "claim-a", "claim-b"])
+        _step("claim-a"), _step("stop"), {"choice": _choice_answer("hold")})
+    binding, seen = _binding(THREE)
     binding.begin("objective")
     decider.bind_probe(binding)
     _run(decider.objective(_obs(), MENU))
     assert seen == [("claim-a", RG)]
-    assert fake.calls[1]["state"]["probe_answers"][0]["service_id"] == "claim-a"
+    assert "menu" in fake.calls[0]["state"]
+    assert fake.calls[2]["state"]["probe_answers"][0]["service_id"] == "claim-a"
 
 
 def test_totals_objective_question_gains_only_the_totals_sentence():

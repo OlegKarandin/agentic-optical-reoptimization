@@ -40,10 +40,6 @@ from .runner import menu_for_prompt as _menu_for_prompt
 # models. On 2026-09-28 docs.typesafe.ai/models lists jev-1.13.0 as the only
 # version (jev-latest and jev-preview both alias it).
 DEFAULT_JEV_MODEL = "jev-1.13.0"
-# Spec §3.3 step 2: probing is cheap and a missed probe decides T2/T3, but a
-# gate low enough to probe everything stops T2/T3 measuring the choice. Every
-# pair's p is audited so the gate's calibration can be read back.
-PROBE_GATE_THRESHOLD = 0.5
 MAX_CHOICE_OPTIONS = 255   # TypeSafe Choice limit
 
 TOTALS_SENTENCE = (
@@ -185,11 +181,35 @@ INFEASIBLE_CRITERION = {
     ],
 }
 
-PROBE_GATE_INSTRUCTION = (
-    "Would knowing whether `{service_id}` can be restored after its cut, "
-    "with every asset in `{risk_group_id}` avoided, change the spend-or-hold "
-    "decision the depot faces this hour? "
-    "`observation.probe_answers_this_episode` lists what is already known.")
+# Sequential probe gate (spec 2026-09-29 §3.2), adapted from Claude's probe
+# text (`_SYSTEM_PROMPT_TAIL`, agent.py). The last sentence is Claude's
+# documented nudge experiment, carried for parity: drop it if Claude's is
+# dropped. PROBE_STOP_CRITERION's `not_for` is a DECLARED difference -- text
+# Claude never sees -- kept because `stop` is the confusable option.
+PROBE_STOP = "stop"
+
+PROBE_STEP_INSTRUCTION = (
+    "Before the {decision} decision, you may ask a read-only question about "
+    "one service: what the routing tools would offer it if every asset in "
+    "one risk group were unusable. Pick the question to ask next, or `stop` "
+    "to decide with what is known. At most {cap} questions are answered per "
+    "decision; `probe_budget.remaining` says how many are left. Answers to "
+    "this decision's questions are in `probe_answers`; earlier this hour's "
+    "are in `observation.decided_this_hour.probe_answers`; earlier hours' in "
+    "`observation.probe_answers_this_episode`, each named by the risk group "
+    "it was answered under. "
+    "A service with no full-restore candidate under the group that cuts it "
+    "cannot use the spare after its cut, however exposed it is. A service "
+    "whose cheapest candidate charges nothing at `depot_site` does not need "
+    "it either. `no_solution` means no path exists while every asset in that "
+    "group is unusable, not that no path exists. "
+    "The answer is as relevant to the services the spare would be kept for "
+    "as to the one that can act.")
+
+PROBE_STOP_CRITERION = {
+    "what": "Ask nothing more; make the decision with the answers already known.",
+    "not_for": "Skipping a question whose answer could change which service "
+               "the depot's spare is kept for."}
 
 
 def _choice(instructions, criteria: dict) -> dict:
@@ -202,8 +222,10 @@ def _score(instructions, levels) -> dict:
             "criteria": list(levels)}
 
 
-def _noul(instructions) -> dict:
-    return {"type": "noul", "instructions": instructions}
+def _probe_option(service_id: str, risk_group_id: str) -> dict:
+    return {"what": f"Ask whether `{service_id}` can be restored, and at what "
+                    f"spare cost, with every asset in `{risk_group_id}` unusable.",
+            "not_for": "A question already answered this hour."}
 
 
 def _wire(state: dict) -> dict:
@@ -225,8 +247,6 @@ def _answers_record(response, questions: dict) -> dict:
             out[qid] = {"score": a.score, "confidence": a.confidence,
                         "probabilities": {str(k): v for k, v
                                           in a.probabilities.items()}}
-        else:
-            out[qid] = {"noul": response.nouls[qid].noul}
     return out
 
 
@@ -385,48 +405,87 @@ class JevDecider:
             handle.write(json.dumps(record, default=str) + "\n")
 
     async def _probe_gate(self, base: dict, log: list
-                          ) -> tuple[list[dict], list[dict]]:
-        """Spec §3.3: one batched Noul per (shown service, shown group);
-        probe pairs with p >= PROBE_GATE_THRESHOLD, p descending, then
-        service id, then group id. The binding's own cap is the cap: a
-        ProbeError is recorded and skipped -- the gate never kills a
-        decision."""
+                          ) -> tuple[list[dict], list[dict], str | None]:
+        """Spec 2026-09-29 §3.1: one Choice per step over the (shown service,
+        shown group) pairs not yet answered THIS hour, plus `stop`; probe the
+        chosen pair; repeat while the binding has budget. Bounded by
+        `ProbeBinding.remaining` itself, so the gate never makes a call the
+        binding would refuse. Returns `(answers, probes, ended)`; `ended` is
+        None when no gate runs at all."""
         payload = base["observation"]
         services = sorted(payload["exposure"])
         groups = sorted(set((payload.get("risk_group_ids") or {}).values()))
         if self._probe is None or not services or not groups:
-            return [], []
-        pairs = [(s, g) for s in services for g in groups]
-        questions = {
-            f"probe_{i}": _noul(PROBE_GATE_INSTRUCTION.format(
-                service_id=s, risk_group_id=g))
-            for i, (s, g) in enumerate(pairs)}
-        response = await self._ask(base, questions, log, "probe_gate")
-        wanted = sorted(
-            ((response.nouls[f"probe_{i}"].noul, s, g)
-             for i, (s, g) in enumerate(pairs)
-             if response.nouls[f"probe_{i}"].noul >= PROBE_GATE_THRESHOLD),
-            key=lambda t: (-t[0], t[1], t[2]))
-        answers, probes = [], []
-        for p, service_id, risk_group_id in wanted:
+            return [], [], None
+        # This hour only (§3.1): a commit grows ledger.lit_runs, so an
+        # earlier hour's answer may price differently now.
+        already = (payload.get("decided_this_hour") or {}).get(
+            "probe_answers") or []
+        asked = {(a["service_id"], a["risk_group_id"]) for a in already}
+        cap = self._probe.max_per_decision
+        instruction = self._with_totals(PROBE_STEP_INSTRUCTION.format(
+            decision=self._probe.decision, cap=cap))
+        answers: list[dict] = []
+        probes: list[dict] = []
+        step = 0
+        while True:
+            remaining = self._probe.remaining
+            if remaining <= 0:
+                return answers, probes, "budget exhausted"
+            open_pairs = [(s, g) for s in services for g in groups
+                          if (s, g) not in asked]
+            if not open_pairs:
+                return answers, probes, "nothing left to ask"
+            shown = open_pairs[:MAX_CHOICE_OPTIONS - 1]     # + stop
+            options = {f"probe_{i}": pair for i, pair in enumerate(shown)}
+            criteria = {key: _probe_option(*pair)
+                        for key, pair in options.items()}
+            criteria[PROBE_STOP] = PROBE_STOP_CRITERION
+            state = {**base, "probe_answers": answers,
+                     "probe_budget": {"max_per_decision": cap,
+                                      "remaining": remaining}}
+            response = await self._ask(
+                state, {"probe": _choice(instruction, criteria)}, log,
+                "probe_step")
+            log[-1].update({
+                "step": step, "remaining": remaining,
+                "options": {key: {"service_id": s, "risk_group_id": g}
+                            for key, (s, g) in options.items()}})
+            if len(open_pairs) > len(shown):
+                log[-1]["truncated_from"] = len(open_pairs)
+            answer = response.choices["probe"]
+            if answer.choice == PROBE_STOP:
+                return answers, probes, "stop"
+            if answer.choice not in options:
+                raise DecisionError(
+                    f"{self.name}: probe step answered {answer.choice!r}, "
+                    f"not an offered option ({sorted(criteria)})")
+            service_id, risk_group_id = options[answer.choice]
+            asked.add((service_id, risk_group_id))
+            record = {"arguments": {"service_id": service_id,
+                                    "risk_group_id": risk_group_id},
+                      "step": step,
+                      "p_chosen": answer.probabilities.get(answer.choice),
+                      "p_stop": answer.probabilities.get(PROBE_STOP),
+                      "answer": None, "error": None}
+            probes.append(record)
             try:
-                answer, error = await self._probe(service_id, risk_group_id), None
+                record["answer"] = await self._probe(service_id, risk_group_id)
             except ProbeError as exc:
-                answer, error = None, str(exc)
-            probes.append({"arguments": {"service_id": service_id,
-                                         "risk_group_id": risk_group_id},
-                           "p": p, "answer": answer, "error": error})
-            if error is None:
-                answers.append({"service_id": service_id,
-                                "risk_group_id": risk_group_id,
-                                "answer": answer})
-        return answers, probes
+                # Unreachable by construction (budget and ids both checked);
+                # advisory gate: record, stop asking, never kill the decision.
+                record["error"] = str(exc)
+                return answers, probes, "probe error"
+            answers.append({"service_id": service_id,
+                            "risk_group_id": risk_group_id,
+                            "answer": record["answer"]})
+            step += 1
 
     async def timing(self, obs: Observation) -> TimingDecision:
         payload = self._project(obs)
         base = {"observation": payload}
         log: list = []
-        probe_answers, probes = await self._probe_gate(base, log)
+        probe_answers, probes, gate_end = await self._probe_gate(base, log)
         services = sorted(payload["exposure"])
         sut = payload["actionable_service"]
         questions = {"action": _choice(
@@ -498,7 +557,7 @@ class JevDecider:
                                     lit_runs=self.lit_runs)
         base = {"observation": payload, "menu": rendered}
         log: list = []
-        probe_answers, probes = await self._probe_gate(base, log)
+        probe_answers, probes, gate_end = await self._probe_gate(base, log)
         candidates = rendered.get("candidates") or []
         room = MAX_CHOICE_OPTIONS - 2          # hold + infeasible always offered
         criteria = {c["candidate_label"]: _candidate_description(c)
