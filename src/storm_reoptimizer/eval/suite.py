@@ -36,6 +36,7 @@ from .assertions import (assert_claim_is_one_lightpath,
                          assert_risk_group_covers_measurable_exposure,
                          assert_sampling_error_within_margin)
 from .baseline import ForecastBlindBaseline
+from .jev import DEFAULT_JEV_MODEL, JevDecider
 from .runner import run_episode, service_geometry
 from .scenario_file import ScenarioFile, load_all_scenarios
 from .scoring import cross_twin_metrics, episode_metrics
@@ -45,6 +46,7 @@ RUNS_PER_EPISODE = 3
 REPO_ROOT = Path(__file__).parent.parent.parent.parent
 TRACES_DIR = REPO_ROOT / "eval" / "traces"
 AGENT_AUDIT_PATH = TRACES_DIR / "agent-calls.jsonl"
+JEV_AUDIT_PATH = TRACES_DIR / "jev-calls.jsonl"
 
 
 def _redact_volatile_ids(trace_dict: dict) -> dict:
@@ -197,6 +199,10 @@ def render_results_table(results: dict) -> str:
                     "half per pair")
         elif name.startswith("agent:"):
             note = "agent arm: shown the per-horizon rival/actionable ECAR totals"
+        elif name.startswith("jev:"):
+            note = ("System-1 arm: Claude's payload"
+                    + (" + horizon_totals" if name.endswith("+totals") else "")
+                    + "; reasoning is a machine summary")
         else:
             note = ""
         lines.append(f"| {name} | {summary['pair_solved']:.2f} | "
@@ -223,6 +229,10 @@ def render_results_table(results: dict) -> str:
         "The flip-variable citation metric is a NECESSARY, NOT SUFFICIENT "
         "filter for \"right answer, absent reason\". It is entity matching, "
         "not reasoning verification.",
+        "",
+        "`jev:` arms' `reasoning` is a fixed machine summary (spec 2026-09-28 "
+        "§3.4), so their `cites_flip_variable_frac` (per-run metrics JSON) "
+        "reads ~0 by construction, not by failure.",
     ]
     return "\n".join(lines)
 
@@ -247,6 +257,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
              "xhigh/max). Default: omit the field entirely (the model's own "
              "server-side default).")
     p.add_argument(
+        "--include-jev", action="store_true",
+        help="Also run BOTH TypeSafe Jev arms (raw and +totals; they only "
+             "mean something side by side). Requires the `jev` extra "
+             "(pip install -e '.[jev]') and TYPESAFE_API_KEY; costs cents.")
+    p.add_argument(
+        "--jev-model", default=DEFAULT_JEV_MODEL,
+        help=f"Pinned Jev model for --include-jev (default: {DEFAULT_JEV_MODEL}).")
+    p.add_argument(
         "--only", default=None,
         help="Comma-separated scenario ids to run (e.g. T1a,T1b). Restricts "
              "both the pre-flight gates and the rollouts to this subset. "
@@ -270,6 +288,12 @@ def build_deciders(args: argparse.Namespace) -> list:
         deciders.append(ClaudeDecider(
             model=args.agent_model, audit_path=AGENT_AUDIT_PATH,
             effort=args.agent_effort))
+    # getattr: callers (test_agent.py) build a Namespace without jev fields.
+    if getattr(args, "include_jev", False):
+        model = getattr(args, "jev_model", DEFAULT_JEV_MODEL)
+        deciders += [
+            JevDecider(model, audit_path=JEV_AUDIT_PATH),
+            JevDecider(model, include_totals=True, audit_path=JEV_AUDIT_PATH)]
     return deciders
 
 
