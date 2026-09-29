@@ -430,3 +430,48 @@ def test_no_gate_request_when_no_risk_group_is_shown():
     _run(decider.timing(_obs(risk_group_ids={})))
     assert len(fake.calls) == 1
     assert fake.calls[0]["state"]["probe_answers"] == []
+
+
+# ---------------------------------------------------------------------------
+# Constraints tests (Task 4)
+# ---------------------------------------------------------------------------
+
+def ASSETS(n):
+    return [{"asset_id": f"fiber_{i}", "p_cut": 0.3, "on": "working"}
+            for i in range(n)]
+
+
+def test_single_group_constraints_sends_no_request():
+    decider, fake = _decider()
+    decision = _run(decider.constraints(_obs(), None))
+    assert fake.calls == []
+    assert decision.avoid == {"risk_groups": [RG]}
+    assert "single option, no call" in decision.reasoning
+
+
+def test_two_groups_is_a_choice_described_by_horizon_and_asset_count():
+    obs = _obs(risk_group_ids={"t2": "rg_t2", "t3": "rg_t3"},
+               risk_group_assets=({"horizon": "t2", "assets": ASSETS(2)},
+                                  {"horizon": "t3", "assets": ASSETS(5)}))
+    decider, fake = _decider({"group": _choice_answer("rg_t3")})
+    decision = _run(decider.constraints(obs, None))
+    q = fake.calls[0]["questions"]["group"]
+    assert q["type"] == "choice" and set(q["criteria"]) == {"rg_t2", "rg_t3"}
+    assert "t3" in q["criteria"]["rg_t3"] and "5" in q["criteria"]["rg_t3"]
+    assert SUT in q["instructions"]                          # rule 1
+    assert "risk_groups" in fake.calls[0]["state"]["observation"]
+    assert decision.avoid == {"risk_groups": ["rg_t3"]}
+
+
+def test_no_group_shown_raises_rather_than_inventing_an_avoid():
+    decider, _ = _decider()
+    with pytest.raises(DecisionError, match="no risk group"):
+        _run(decider.constraints(_obs(risk_group_ids={}), None))
+
+
+def test_constraints_last_projection_is_claudes_constraints_projection():
+    obs = _obs()
+    decider, _ = _decider()
+    _run(decider.constraints(obs, None))
+    assert decider.last_projection == ClaudeDecider(client=object())._project(
+        obs, include_risk_group_assets=True)

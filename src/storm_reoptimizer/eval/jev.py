@@ -14,12 +14,13 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from .agent import (
+    CONSTRAINT_TOOL,
     TIMING_TOOL,
     ClaudeDecider,
     _peak_capacity_at_risk_gbps,
     project_observation,
 )
-from .decisions import DecisionError, TimingDecision
+from .decisions import ConstraintDecision, DecisionError, TimingDecision
 from .observation import P_CUT_ENUMERATION_THRESHOLD, Observation
 from .probe import ProbeError
 
@@ -411,3 +412,42 @@ class JevDecider:
                "reasoning": _summary(response.model, action, probes, scores)}
         return self._validated(TimingDecision, raw, payload, TIMING_TOOL,
                                obs, probes, log)
+
+    async def constraints(self, obs: Observation,
+                          unconstrained_menu: dict | None = None
+                          ) -> ConstraintDecision:
+        """A Choice over the shown group ids (spec §3.3). With exactly one
+        group -- every decidable hour of the shipped suite -- no request is
+        sent: a finding, not a hidden shortcut."""
+        payload = self._project(obs, include_risk_group_assets=True)
+        rg_ids = payload.get("risk_group_ids") or {}
+        groups = sorted(set(rg_ids.values()))
+        log: list = []
+        if not groups:
+            raise DecisionError(
+                f"{self.name}: no risk group shown at constraints; refusing "
+                f"to invent an avoid set")
+        if len(groups) == 1:
+            chosen = groups[0]
+            reasoning = f"{self.model} single option, no call: avoid {chosen}"
+        else:
+            horizon_of: dict[str, str] = {}
+            for horizon, group in rg_ids.items():
+                horizon_of.setdefault(group, horizon)
+            n_assets = {entry["risk_group_id"]: len(entry["assets"])
+                        for entry in payload.get("risk_groups", [])}
+            criteria = {g: f"the risk group for horizon {horizon_of[g]}, "
+                           f"{n_assets.get(g, 0)} assets"
+                        for g in groups[:MAX_CHOICE_OPTIONS]}
+            sut = payload["actionable_service"]
+            response = await self._ask(
+                {"observation": payload},
+                {"group": _choice(CONSTRAINT_INSTRUCTION.format(sut=sut),
+                                  criteria)},
+                log, "decision")
+            answer = response.choices["group"]
+            chosen = answer.choice
+            reasoning = _summary(response.model, answer, [])
+        raw = {"avoid": {"risk_groups": [chosen]}, "reasoning": reasoning}
+        return self._validated(ConstraintDecision, raw, payload,
+                               CONSTRAINT_TOOL, obs, [], log)
