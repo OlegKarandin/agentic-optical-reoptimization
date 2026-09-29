@@ -180,8 +180,7 @@ INFEASIBLE_CRITERION = {
     "examples": [
         (
             "No candidate on this menu is acceptable under the avoid set this "
-            "reroute was routed under; looser constraints could produce a "
-            "different menu."
+            "reroute was routed under."
         ),
     ],
 }
