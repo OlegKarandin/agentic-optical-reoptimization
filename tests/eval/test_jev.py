@@ -600,6 +600,49 @@ def test_totals_probe_step_gains_only_the_totals_sentence():
     assert tq["criteria"] == rq["criteria"]
 
 
+def test_nothing_left_to_ask_ends_without_a_stop_request():
+    decider, fake = _decider(_first_pair(), _timing_answers())
+    binding, seen = _binding([SUT])
+    decider.bind_probe(binding)
+    decision = _run(decider.timing(_obs(others=[])))   # one service, one group
+    assert seen == [(SUT, RG)]
+    assert len(fake.calls) == 2                         # no trailing stop
+    assert decision.reasoning.endswith("; probe gate: nothing left to ask")
+
+
+def test_budget_exhaustion_is_reported_in_the_reasoning():
+    decider, _ = _decider(_first_pair(), _first_pair(), _timing_answers())
+    decider.bind_probe(_binding(THREE, max_per_decision=2)[0])
+    decision = _run(decider.timing(_obs()))
+    assert decision.reasoning.endswith("; probe gate: budget exhausted")
+
+
+# Review Focus 5
+def test_a_budget_already_spent_sends_no_gate_request():
+    decider, fake = _decider(_timing_answers())
+    binding, seen = _binding(THREE, max_per_decision=0)
+    decider.bind_probe(binding)
+    decision = _run(decider.timing(_obs()))
+    assert seen == [] and len(fake.calls) == 1
+    assert "probe gate: budget exhausted" in decision.reasoning
+
+
+def test_stop_adds_no_gate_note():
+    decider, _ = _decider(_step("stop"), _timing_answers())
+    decider.bind_probe(_binding(THREE)[0])
+    decision = _run(decider.timing(_obs()))
+    assert "probe gate:" not in decision.reasoning
+
+
+def test_objective_reasoning_carries_the_gate_note():
+    decider, _ = _objective_decider(_first_pair(), {"choice": _choice_answer("hold")})
+    binding, _ = _binding([SUT])
+    binding.begin("objective")
+    decider.bind_probe(binding)
+    decision = _run(decider.objective(_obs(others=[]), MENU))
+    assert decision.reasoning.endswith("; probe gate: nothing left to ask")
+
+
 # ---------------------------------------------------------------------------
 # Constraints tests (Task 4)
 # ---------------------------------------------------------------------------

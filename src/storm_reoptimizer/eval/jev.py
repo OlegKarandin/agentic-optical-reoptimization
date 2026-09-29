@@ -250,8 +250,13 @@ def _answers_record(response, questions: dict) -> dict:
     return out
 
 
+# How a probe gate ended, when it ended without Jev choosing `stop` (spec
+# 2026-09-29 §3.3). A probe error already renders as `rejected (...)`.
+_REPORTED_GATE_ENDS = ("budget exhausted", "nothing left to ask")
+
+
 def _summary(model: str, answer, probes: list[dict],
-             extra: dict | None = None) -> str:
+             extra: dict | None = None, gate_end: str | None = None) -> str:
     """Machine-generated `reasoning` (spec §3.4). No markup can appear, so
     scoring.cites_flip_variable_frac reads ~0 for these arms by
     construction -- stated in the results table, not hidden."""
@@ -271,6 +276,8 @@ def _summary(model: str, answer, probes: list[dict],
             rendered.append(f"{args['service_id']}@{args['risk_group_id']} "
                             f"-> {outcome}")
         text += "; probed [" + ", ".join(rendered) + "]"
+    if gate_end in _REPORTED_GATE_ENDS:
+        text += f"; probe gate: {gate_end}"
     return text
 
 
@@ -507,7 +514,8 @@ class JevDecider:
                   for i, svc in enumerate(services)}
         claim_priority = sorted(services, key=lambda s: (-scores[s], s))
         raw = {"action": action.choice, "claim_priority": claim_priority,
-               "reasoning": _summary(response.model, action, probes, scores)}
+               "reasoning": _summary(response.model, action, probes, scores,
+                                     gate_end=gate_end)}
         return self._validated(TimingDecision, raw, payload, TIMING_TOOL,
                                obs, probes, log)
 
@@ -575,6 +583,7 @@ class JevDecider:
             log[-1]["truncated_from"] = len(candidates)
         answer = response.choices["choice"]
         raw = {"choice": answer.choice,
-               "reasoning": _summary(response.model, answer, probes)}
+               "reasoning": _summary(response.model, answer, probes,
+                                     gate_end=gate_end)}
         return self._validated(ObjectiveDecision, raw, payload,
                                OBJECTIVE_TOOL, obs, probes, log)
