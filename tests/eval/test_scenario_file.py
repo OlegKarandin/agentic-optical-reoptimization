@@ -1,11 +1,16 @@
 """Scenario file contract (eval design spec, "Scenario file contract").
 Fixture-driven: no server, no state file."""
+import dataclasses
+from pathlib import Path
+
 import pytest
+import yaml
 
 from storm_reoptimizer.eval.scenario_file import (
-    ScenarioFileError, dump_scenario, expand_realized_spans, load_all_scenarios,
-    load_scenario, span_mate,
+    SCENARIOS_DIR, HeatGold, ScenarioFileError, dump_scenario,
+    expand_realized_spans, load_all_scenarios, load_scenario, span_mate,
 )
+from storm_reoptimizer.eval.thermal import HourForecast
 
 
 # Task 1 (2026-09-27 plan): realized cuts denote whole SPANS -- the storm
@@ -281,3 +286,73 @@ def test_the_scenario_round_trips_through_dump(
     scenario = load_scenario(write_scenario(example_scenario_yaml))
     again = load_scenario(write_scenario(dump_scenario(scenario), "RT.yaml"))
     assert again == scenario
+
+
+FROZEN = Path(__file__).parent / "fixtures" / "storm_dumps"
+
+
+@pytest.mark.parametrize("name", sorted(p.name for p in FROZEN.glob("*.yaml")))
+def test_every_storm_yaml_dumps_byte_identically(name):
+    assert dump_scenario(load_scenario(SCENARIOS_DIR / name)) == (
+        FROZEN / name).read_text(encoding="utf-8")
+
+
+def test_storm_files_load_as_storm():
+    assert {s.event_type for s in load_all_scenarios().values()} == {"storm"}
+
+
+def test_heat_loads(write_scenario, heat_example_yaml):
+    s = load_scenario(write_scenario(heat_example_yaml, name="HEAT_EXAMPLE.yaml"))
+    assert s.event_type == "heat" and s.decision_hour is None and s.gold is None
+    assert s.thermal.amplifiers == ("amp_a_b_0", "amp_b_a_0")
+    assert s.thermal.heat_class.setpoint_c == 25.0
+    assert s.temperature_forecast["t0"]["t1"] == HourForecast(36.0, 2.0)
+    assert s.temperature_realized == {"t0": 30.5, "t1": 37.0, "t2": 32.0}
+    assert s.cooling_failed_at == "t1"
+
+
+@pytest.mark.parametrize("key,value", [
+    ("track", "amphan"), ("decision_hour", "t0"), ("lead_time_hours", 2),
+    ("spares_on_hand", 1), ("depot_site", "x"), ("spare_inventory", {"x": 1}),
+    ("damage_radius_km", 10.0), ("track_revision_km_per_hour_ahead", 30),
+    ("reference_avoid", {}), ("forecast", {}), ("realized", {})])
+def test_heat_rejects_every_storm_key(write_scenario, heat_example_yaml, key, value):
+    raw = yaml.safe_load(heat_example_yaml)
+    raw[key] = value
+    with pytest.raises(ScenarioFileError, match="storm-only"):
+        load_scenario(write_scenario(yaml.safe_dump(raw), name="H.yaml"))
+
+
+@pytest.mark.parametrize("mutate,match", [
+    (lambda r: r.pop("thermal"), "missing"),
+    (lambda r: r.pop("cooling_failed_at"), "missing"),
+    (lambda r: r["temperature_realized"].pop("t2"), "temperature_realized"),
+    (lambda r: r.update(cooling_failed_at="t9"), "cooling_failed_at"),
+    (lambda r: r["temperature_forecast"].update(t1={"t1": {"t_mean_c": 1, "t_sigma_c": 1}}), "heat_polygon"),
+    (lambda r: r["temperature_forecast"]["t0"].pop("t1"), "no forecast"),
+    (lambda r: r["metadata"].update(label_rule="spare_action_by_deadline"), "mode_by_hour"),
+    (lambda r: r["thermal"].update(amplifiers=[]), "amplifiers"),
+])
+def test_heat_rejects_malformed(write_scenario, heat_example_yaml, mutate, match):
+    raw = yaml.safe_load(heat_example_yaml)
+    mutate(raw)
+    with pytest.raises(ScenarioFileError, match=match):
+        load_scenario(write_scenario(yaml.safe_dump(raw), name="H.yaml"))
+
+
+def test_heat_dump_round_trips_with_gold(write_scenario, heat_example_yaml, tmp_path):
+    s = load_scenario(write_scenario(heat_example_yaml, name="HEAT_EXAMPLE.yaml"))
+    s = dataclasses.replace(s, gold=HeatGold(
+        mode_by_hour={"t0": "800G@15.1dB", "t1": "700G@13.3dB", "t2": "750G@14.1dB"},
+        graded_hours=("t1",), outcome_gbps_h=150.0, rationale="table\n"))
+    path = tmp_path / "rt.yaml"
+    path.write_text(dump_scenario(s), encoding="utf-8")
+    assert load_scenario(path) == s
+
+
+def test_load_all_scenarios_filters_by_event_type(write_scenario, heat_example_yaml, tmp_path):
+    write_scenario(heat_example_yaml, name="HEAT_EXAMPLE.yaml")
+    root = next(tmp_path.rglob("HEAT_EXAMPLE.yaml")).parent
+    assert set(load_all_scenarios(root)) == set()
+    assert set(load_all_scenarios(root, event_type="heat")) == {"HEAT_EXAMPLE"}
+    assert set(load_all_scenarios(root, event_type=None)) == {"HEAT_EXAMPLE"}

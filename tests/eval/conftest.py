@@ -82,3 +82,40 @@ def write_scenario(tmp_path):
         path.write_text(text, encoding="utf-8")
         return path
     return _write
+
+
+HEAT_EXAMPLE_YAML = """\
+id: HEAT_EXAMPLE
+event_type: heat
+seed: 17
+state_file: eval/states/heat-s17.json
+service_under_test: heat-svc-example
+lightpath_under_test: lp-cand-heat-svc-example-0
+hours: [t0, t1, t2]
+thermal:
+  amplifiers: [amp_a_b_0, amp_b_a_0]
+  class:
+    setpoint_c: 25.0
+    coeff_db_per_c: 0.02
+    k_cooled: 0.15
+    k_uncooled: 1.0
+    self_heating_c: 8.0
+    p_cooling_failure: {base: 0.02, per_c_above_setpoint: 0.01, per_hour_above_setpoint: 0.03}
+heat_polygon:
+  t0: {type: Polygon, coordinates: [[[76.0, 13.0], [76.2, 13.0], [76.2, 13.2], [76.0, 13.2], [76.0, 13.0]]]}
+temperature_forecast:
+  t0:
+    t0: {t_mean_c: 30.0, t_sigma_c: 1.0}
+    t1: {t_mean_c: 36.0, t_sigma_c: 2.0}
+    t2: {t_mean_c: 33.0, t_sigma_c: 2.0}
+temperature_realized: {t0: 30.5, t1: 37.0, t2: 32.0}
+cooling_failed_at: t1
+flip_variable: [cooling, margin]
+metadata:
+  label_rule: mode_by_hour
+"""
+
+
+@pytest.fixture
+def heat_example_yaml() -> str:
+    return HEAT_EXAMPLE_YAML

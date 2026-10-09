@@ -50,6 +50,23 @@ _GOLD_KEYS = {"survived", "max_spares_wasted", "decision_at_t0", "label",
 _OPTIONAL_GOLD_KEYS = {"outcome_gbps_h", "min_margin_gbps_h"}
 _HORIZON_KEYS = {"cone", "width_km", "center"}
 
+from .thermal import (HourForecast, ThermalClass, ThermalError,
+                      thermal_class_from_dict, thermal_class_to_dict)
+
+HEAT_LABEL_RULE = "mode_by_hour"
+_COMMON_KEYS = {"id", "seed", "state_file", "service_under_test", "hours",
+                "gold", "flip_variable", "metadata"}
+_STORM_ONLY_KEYS = (_TOP_LEVEL_KEYS - _COMMON_KEYS) - {"pair"}
+_HEAT_TOP_LEVEL_KEYS = _COMMON_KEYS | {
+    "event_type", "lightpath_under_test", "thermal", "heat_polygon",
+    "temperature_forecast", "temperature_realized", "cooling_failed_at"}
+_OPTIONAL_HEAT_KEYS = {"gold"}   # absent until tools/compute_gold.py --write
+_HEAT_GOLD_KEYS = {"mode_by_hour", "graded_hours", "outcome_gbps_h", "rationale"}
+_THERMAL_KEYS = {"amplifiers", "class"}
+_FORECAST_HOUR_KEYS = {"t_mean_c", "t_sigma_c"}
+_HEAT_FIELDS = ("lightpath_under_test", "thermal", "heat_polygon",
+                "temperature_forecast", "temperature_realized", "cooling_failed_at")
+
 
 class ScenarioFileError(ValueError):
     """A scenario file that is malformed, incomplete, or self-inconsistent."""
@@ -141,33 +158,54 @@ class Gold:
 
 
 @dataclass(frozen=True)
+class ThermalSpec:
+    amplifiers: tuple[str, ...]   # the mapper's exact output (plan deviation 7)
+    heat_class: ThermalClass
+
+
+@dataclass(frozen=True)
+class HeatGold:
+    mode_by_hour: dict[str, str]   # the oracle's mode in force, every hour
+    graded_hours: tuple[str, ...]  # best-vs-second expected gap >= 25 Gbps·h
+    outcome_gbps_h: float          # the oracle rollout's REALIZED loss
+    rationale: str
+
+
+@dataclass(frozen=True)
 class ScenarioFile:
     id: str
     pair: str | None
     seed: int
     state_file: str
     service_under_test: str
-    track: str
+    track: str | None
     hours: tuple[str, ...]
-    decision_hour: str
-    lead_time_hours: int          # the optical_reroute value; see lead_time()
-    spares_on_hand: int           # transponder PAIRS
-    depot_site: str               # the site whose depot is scarce this episode
+    decision_hour: str | None
+    lead_time_hours: int | None   # the optical_reroute value; see lead_time()
+    spares_on_hand: int | None    # transponder PAIRS
+    depot_site: str | None        # the site whose depot is scarce this episode
     spare_inventory: dict[str, int]  # per-site spare transponder counts
-    damage_radius_km: float
+    damage_radius_km: float | None
     # How far the cone CENTRE moves between consecutive issuances, per hour
     # of lead -- a property of the forecast product, not of any pair. It is
     # the radius `revision.revision_band` displaces the centre by, scaled by
     # the horizon's own `hours_ahead`. Identical in every episode of the
     # suite and enumerated in `assertions.SHARED_SCALARS`, so it can never
     # become a scalar a one-line rule keys on.
-    track_revision_km_per_hour_ahead: float
+    track_revision_km_per_hour_ahead: float | None
     reference_avoid: dict
     forecast: dict[str, Issuance]        # issue hour -> Issuance
     realized: dict[str, tuple[str, ...]]  # hour -> asset ids cut
-    gold: Gold
+    gold: Gold | HeatGold | None
     flip_variable: tuple[str, ...]
     metadata: dict[str, Any]
+    event_type: str = "storm"
+    lightpath_under_test: str | None = None
+    thermal: ThermalSpec | None = None
+    heat_polygon: dict[str, dict] | None = None
+    temperature_forecast: dict[str, dict[str, HourForecast]] | None = None
+    temperature_realized: dict[str, float] | None = None
+    cooling_failed_at: str | None = None
 
 
 def _require_keys(where: str, got: dict, allowed: set[str],
@@ -186,6 +224,18 @@ def load_scenario(path: str | Path) -> ScenarioFile:
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise ScenarioFileError(f"{path}: top level must be a mapping")
+    event_type = raw.get("event_type", "storm")
+    if event_type == "heat":
+        return _load_heat(path, raw)
+    if event_type != "storm":
+        raise ScenarioFileError(f"{path}: unknown event_type {event_type!r}")
+    if "event_type" in raw:
+        raise ScenarioFileError(
+            f"{path}: storm files omit `event_type` (absent means storm)")
+    return _load_storm(path, raw)
+
+
+def _load_storm(path: str | Path, raw: dict) -> ScenarioFile:
     _require_keys(str(path), raw, _TOP_LEVEL_KEYS, _OPTIONAL_TOP_LEVEL_KEYS)
 
     hours = tuple(raw["hours"])
@@ -346,6 +396,99 @@ def load_scenario(path: str | Path) -> ScenarioFile:
         flip_variable=tuple(raw["flip_variable"]), metadata=raw["metadata"])
 
 
+def _load_heat(path, raw: dict) -> ScenarioFile:
+    storm_keys = sorted(set(raw) & _STORM_ONLY_KEYS)
+    if storm_keys:
+        raise ScenarioFileError(
+            f"{path}: storm-only key(s) {storm_keys} in a heat episode -- "
+            f"rejected rather than ignored (heat spec §4.1)")
+    _require_keys(str(path), raw, _HEAT_TOP_LEVEL_KEYS, _OPTIONAL_HEAT_KEYS)
+    hours = tuple(raw["hours"])
+    if len(set(hours)) != len(hours):
+        raise ScenarioFileError(f"{path}: duplicate hour labels {hours}")
+    index = {h: i for i, h in enumerate(hours)}
+
+    th = raw["thermal"]
+    _require_keys(f"{path}:thermal", th, _THERMAL_KEYS)
+    amps = th["amplifiers"]
+    if (not isinstance(amps, list) or not amps
+            or not all(isinstance(a, str) and a.startswith("amp_") for a in amps)):
+        raise ScenarioFileError(f"{path}: thermal.amplifiers must be a non-empty "
+                                f"list of amp_* ids, got {amps!r}")
+    try:
+        heat_class = thermal_class_from_dict(th["class"])
+    except ThermalError as e:
+        raise ScenarioFileError(f"{path}: thermal.class: {e}") from e
+
+    forecast: dict[str, dict[str, HourForecast]] = {}
+    for issue, by_hour in raw["temperature_forecast"].items():
+        if issue not in index:
+            raise ScenarioFileError(f"{path}: forecast issue hour {issue!r} not in hours")
+        last = index[issue] - 1
+        parsed: dict[str, HourForecast] = {}
+        for hour, fc in by_hour.items():
+            if hour not in index or index[hour] < index[issue] or index[hour] <= last:
+                raise ScenarioFileError(
+                    f"{path}: issuance {issue!r} lists hour {hour!r} out of "
+                    f"order or before its issue hour")
+            last = index[hour]
+            _require_keys(f"{path}:temperature_forecast:{issue}:{hour}", fc,
+                          _FORECAST_HOUR_KEYS)
+            if float(fc["t_sigma_c"]) < 0:
+                raise ScenarioFileError(f"{path}: negative t_sigma_c at {issue}/{hour}")
+            parsed[hour] = HourForecast(float(fc["t_mean_c"]), float(fc["t_sigma_c"]))
+        forecast[issue] = parsed
+    if set(raw["heat_polygon"]) != set(forecast):
+        raise ScenarioFileError(
+            f"{path}: heat_polygon issue hours {sorted(raw['heat_polygon'])} must "
+            f"equal temperature_forecast issue hours {sorted(forecast)}")
+    for issue, poly in raw["heat_polygon"].items():
+        if not isinstance(poly, dict) or poly.get("type") != "Polygon":
+            raise ScenarioFileError(f"{path}: heat_polygon[{issue!r}] must be a GeoJSON Polygon")
+    for hour in hours:
+        issued = [i for i in forecast if index[i] <= index[hour]]
+        if not issued or hour not in forecast[max(issued, key=index.get)]:
+            raise ScenarioFileError(
+                f"{path}: hour {hour!r} has no forecast in the latest issuance at "
+                f"or before it -- every heat hour is a decision hour")
+
+    realized = raw["temperature_realized"]
+    if set(realized) != set(hours):
+        raise ScenarioFileError(
+            f"{path}: temperature_realized must name every hour {hours} exactly")
+    failed_at = raw["cooling_failed_at"]
+    if failed_at is not None and failed_at not in index:
+        raise ScenarioFileError(f"{path}: cooling_failed_at {failed_at!r} not in hours")
+    if raw["metadata"].get("label_rule") != HEAT_LABEL_RULE:
+        raise ScenarioFileError(f"{path}: heat episodes use label_rule "
+                                f"{HEAT_LABEL_RULE!r}")
+
+    gold = None
+    if "gold" in raw and raw["gold"] is not None:
+        g = raw["gold"]
+        _require_keys(f"{path}:gold", g, _HEAT_GOLD_KEYS)
+        if set(g["mode_by_hour"]) != set(hours) or not set(g["graded_hours"]) <= set(hours):
+            raise ScenarioFileError(f"{path}: gold must cover every hour")
+        gold = HeatGold(mode_by_hour={str(k): str(v) for k, v in g["mode_by_hour"].items()},
+                        graded_hours=tuple(g["graded_hours"]),
+                        outcome_gbps_h=float(g["outcome_gbps_h"]),
+                        rationale=g["rationale"])
+
+    return ScenarioFile(
+        id=raw["id"], pair=None, seed=int(raw["seed"]), state_file=raw["state_file"],
+        service_under_test=raw["service_under_test"], track=None, hours=hours,
+        decision_hour=None, lead_time_hours=None, spares_on_hand=None,
+        depot_site=None, spare_inventory={}, damage_radius_km=None,
+        track_revision_km_per_hour_ahead=None, reference_avoid={}, forecast={},
+        realized={}, gold=gold, flip_variable=tuple(raw["flip_variable"]),
+        metadata=raw["metadata"], event_type="heat",
+        lightpath_under_test=raw["lightpath_under_test"],
+        thermal=ThermalSpec(amplifiers=tuple(amps), heat_class=heat_class),
+        heat_polygon=dict(raw["heat_polygon"]), temperature_forecast=forecast,
+        temperature_realized={k: float(v) for k, v in realized.items()},
+        cooling_failed_at=failed_at)
+
+
 class _ScenarioDumper(yaml.SafeDumper):
     """A `SafeDumper` that renders any MULTI-LINE string in block-literal
     (`|`) style -- the style every hand-authored scenario file already uses
@@ -394,7 +537,11 @@ def dump_scenario(scenario: ScenarioFile) -> str:
     PyYAML's own default float rendering (which reproduces the shortest
     string that round-trips to the same float -- the original text,
     whenever that text was already minimal)."""
+    if scenario.event_type == "heat":
+        return _dump_heat(scenario)
     raw = dataclasses.asdict(scenario)
+    for key in ("event_type", *_HEAT_FIELDS):
+        raw.pop(key)
     if raw.get("pair") is None:
         raw.pop("pair", None)
     raw["forecast"] = {
@@ -410,13 +557,41 @@ def dump_scenario(scenario: ScenarioFile) -> str:
     return yaml.dump(raw, Dumper=_ScenarioDumper, sort_keys=False)
 
 
-def load_all_scenarios(directory: str | Path | None = None
-                       ) -> dict[str, ScenarioFile]:
-    """Every episode in `directory` (default: the packaged scenarios/), keyed
-    by scenario id."""
+def _dump_heat(s: ScenarioFile) -> str:
+    raw = {
+        "id": s.id, "event_type": "heat", "seed": s.seed, "state_file": s.state_file,
+        "service_under_test": s.service_under_test,
+        "lightpath_under_test": s.lightpath_under_test, "hours": list(s.hours),
+        "thermal": {"amplifiers": list(s.thermal.amplifiers),
+                    "class": thermal_class_to_dict(s.thermal.heat_class)},
+        "heat_polygon": s.heat_polygon,
+        "temperature_forecast": {
+            issue: {h: {"t_mean_c": fc.t_mean_c, "t_sigma_c": fc.t_sigma_c}
+                    for h, fc in by_hour.items()}
+            for issue, by_hour in s.temperature_forecast.items()},
+        "temperature_realized": dict(s.temperature_realized),
+        "cooling_failed_at": s.cooling_failed_at,
+    }
+    if s.gold is not None:
+        raw["gold"] = {"mode_by_hour": dict(s.gold.mode_by_hour),
+                       "graded_hours": list(s.gold.graded_hours),
+                       "outcome_gbps_h": s.gold.outcome_gbps_h,
+                       "rationale": s.gold.rationale}
+    raw["flip_variable"] = list(s.flip_variable)
+    raw["metadata"] = s.metadata
+    return yaml.dump(raw, Dumper=_ScenarioDumper, sort_keys=False)
+
+
+def load_all_scenarios(directory: str | Path | None = None, *,
+                       event_type: str | None = "storm") -> dict[str, ScenarioFile]:
+    """Every episode in `directory`, keyed by id. Defaults to STORM episodes
+    only, so every existing caller (suite gates, rules, derived scalars, the
+    tools/ scripts) keeps seeing exactly the storm suite; pass
+    event_type="heat" for heat episodes or None for all."""
     root = Path(directory) if directory is not None else SCENARIOS_DIR
     out: dict[str, ScenarioFile] = {}
     for path in sorted(root.glob("*.yaml")):
         scenario = load_scenario(path)
-        out[scenario.id] = scenario
+        if event_type is None or scenario.event_type == event_type:
+            out[scenario.id] = scenario
     return out
