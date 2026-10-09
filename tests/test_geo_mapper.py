@@ -3,8 +3,13 @@ topology JSON, no MCP. See docs/superpowers/specs/2026-08-07-geo-mapper-design.m
 for the Edge-vs-span-vs-OMS terminology this module deliberately uses."""
 from pathlib import Path
 
+import pytest
+from shapely.geometry import LineString as _LS
 from shapely.geometry import LineString, shape
-from storm_reoptimizer.geo_mapper import Edge, load_edges, map_geo_event_to_assets
+from storm_reoptimizer.geo_mapper import (
+    Edge, amplifier_points, load_edges, map_geo_event_to_amplifiers,
+    map_geo_event_to_assets,
+)
 from storm_reoptimizer.events.amphan_track import amphan_track
 from storm_reoptimizer.events.filters import get_filter
 
@@ -130,3 +135,55 @@ def test_amphan_landfall_does_not_expose_a_distant_aerial_edge():
         for e in map_geo_event_to_assets(landfall.geometry, edges, get_filter("storm"))
     }
     assert ("torangallu", "bellary") not in exposed_pairs
+
+
+def _box(x0, x1, y0=-0.1, y1=0.1):
+    return {"type": "Polygon", "coordinates": [[[x0, y0], [x1, y0], [x1, y1],
+                                                [x0, y1], [x0, y0]]]}
+
+
+def _oms(a, b, lengths):
+    elements = [f"roadm_{a}", f"amp_{a}_{b}_booster"]
+    for i, _ in enumerate(lengths):
+        elements += [f"fiber_{a}_{b}_{i}", f"amp_{a}_{b}_{i}"]
+    return ({"id": f"oms_{a}_{b}", "src_node_id": a, "dst_node_id": b,
+             "elements": elements},
+            {f"fiber_{a}_{b}_{i}": length for i, length in enumerate(lengths)})
+
+
+EDGE = Edge(src="a", dst="b", mount_type="aerial", geometry=_LS([(0, 0), (2, 0)]))
+
+
+def test_amp_is_placed_at_its_cumulative_distance_along_the_oms():
+    fwd, lengths = _oms("a", "b", [30.0, 90.0])
+    points = amplifier_points([fwd], lengths, [EDGE])
+    assert points["amp_a_b_booster"].x == pytest.approx(0.0)
+    assert points["amp_a_b_0"].x == pytest.approx(0.5)
+    assert points["amp_a_b_1"].x == pytest.approx(2.0)
+
+
+def test_orientation_follows_oms_node_order_and_directions_are_independent():
+    fwd, lf = _oms("a", "b", [30.0, 90.0])
+    rev, lr = _oms("b", "a", [30.0, 90.0])   # deliberately NOT mirrored
+    hits = map_geo_event_to_amplifiers(_box(0.4, 0.6), [fwd, rev], {**lf, **lr},
+                                       [EDGE], lambda e: True)
+    assert hits == ("amp_a_b_0",)           # reverse amp_b_a_0 sits at x=1.5
+    hits = map_geo_event_to_amplifiers(_box(1.4, 1.6), [fwd, rev], {**lf, **lr},
+                                       [EDGE], lambda e: True)
+    assert hits == ("amp_b_a_0",)
+
+
+def test_co_located_huts_are_both_returned():
+    fwd, lf = _oms("a", "b", [60.0, 60.0])
+    rev, lr = _oms("b", "a", [60.0, 60.0])
+    hits = map_geo_event_to_amplifiers(_box(0.9, 1.1), [fwd, rev], {**lf, **lr},
+                                       [EDGE], lambda e: True)
+    assert hits == ("amp_a_b_0", "amp_b_a_0")
+
+
+def test_filter_excludes_amps_on_rejected_edges():
+    buried = Edge(src="a", dst="b", mount_type="buried", geometry=_LS([(0, 0), (2, 0)]))
+    fwd, lf = _oms("a", "b", [60.0, 60.0])
+    assert map_geo_event_to_amplifiers(
+        _box(0.9, 1.1), [fwd], lf, [buried],
+        lambda e: e.mount_type == "aerial") == ()

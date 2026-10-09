@@ -23,3 +23,10 @@ def test_storm_filter_keeps_aerial_and_rejects_buried():
 def test_get_filter_raises_for_an_unmapped_event_type():
     with pytest.raises(KeyError, match="flood"):
         get_filter("flood")
+
+
+def test_heat_filter_admits_amps_on_aerial_edges_only():
+    filter_fn = get_filter("heat")
+    aerial = Edge(src="a", dst="b", mount_type="aerial", geometry=LineString([(0, 0), (1, 1)]))
+    buried = Edge(src="c", dst="d", mount_type="buried", geometry=LineString([(0, 0), (1, 1)]))
+    assert filter_fn(aerial) is True and filter_fn(buried) is False
