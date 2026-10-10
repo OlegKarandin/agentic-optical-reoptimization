@@ -385,19 +385,27 @@ def test_heat_state_margin_gate_holds(
 def test_heat_state_downshift_is_additive(
         eval_state_paths, local_server_command, local_server_env):
     """Task 1's test_downshift_adds_exactly_the_threshold_gap_and_congests_
-    its_own_link, re-pointed at the heat SUT -- with one deliberate change
-    from Task 1's own 1e-3 tolerance, recorded live (build_eval_state.
-    HEAT_PINS' own comment has the full derivation): every §8-valid heat SUT
-    candidate routes over edges carrying NO other lightpath (that is what
-    §8's OMS-sharing clause requires), so there is no co-propagating
-    channel on those spans and no NLI -- an ASE-only regime where GNPy's own
-    per-request power step measurably shifts GSNR itself by a few hundredths
-    of a dB per requested mode (0.0535 dB measured on this exact SUT),
-    unlike an already-loaded background lightpath (Task 1's own d0463),
-    whose OSNR is bit-identical across a mode switch. The tolerance below
-    (0.1 dB) comfortably covers the measured shift while still failing any
-    gross miscalculation; capacity/offered are still asserted exactly, as
-    Task 1 does."""
+    its_own_link, re-pointed at the heat SUT, at Task 1's OWN 1e-3
+    tolerance.
+
+    An earlier version of this test loosened the tolerance to 0.1 dB,
+    attributing a measured 0.0535 dB discrepancy to an "ASE-only, zero-NLI"
+    regime supposedly inherent to any §8-valid SUT. A reviewer re-measured
+    headroom additivity across the full mode ladder and under ΔNF injection
+    and found it EXACT (every discrepancy 0.000000) -- that hypothesis was
+    wrong. The real cause was a pre-existing builder bug: `_pin_and_dump`
+    (tools/build_eval_state.py) never called `recompute_qot_under_loading`
+    after a pin's own solve, so the STORED state carried a pre-recompute
+    margin (0.448741 dB) while any mutating call (like this test's own
+    `set_modulation_format`) forced the real, live value (0.502237 dB) to
+    appear -- the "discrepancy" was comparing a stale stored before-value
+    against a freshly-recomputed after-value, not a genuine mode-dependent
+    GSNR shift. Fixed (heat pin set only) via `build()`'s
+    `recompute_pin_qot` flag -- see `HEAT_PINS`' own comment for the full
+    derivation and why the fix is scoped to heat only. With the state now
+    storing the correct, already-recomputed margin, this test passes at
+    Task 1's original 1e-3 tolerance; capacity/offered are asserted
+    exactly, as Task 1 does."""
     state = eval_state_paths[HEAT_STATE]
     doc = json.loads(state.read_text(encoding="utf-8"))
     svc, ipl, lp = _heat_sut(doc)
@@ -423,7 +431,7 @@ def test_heat_state_downshift_is_additive(
             return before, result, routing
     before, result, routing = asyncio.run(body())
     assert result.get("ok") is not False, result
-    assert abs(result["margin_db"] - (before + gap)) < 0.1
+    assert abs(result["margin_db"] - (before + gap)) < 1e-3
     row = next(r for r in routing["utilizations"] if r["ip_link_id"] == ipl["id"])
     assert row["down"] is False and row["capacity_gbps"] == next_rate
     assert row["offered_gbps"] == svc["demand_gbps"]   # load does not move

@@ -246,19 +246,19 @@ T3_PINS: list[dict] = [
 #   #4 kanchipuram->trivandrum (target chidambaram-palladam, 265.9 km):
 #      ACCEPTED. Live path: kanchipuram-pondicherry-chidambaram-palladam-
 #      trichy-sivakasi-tirunelveli-kanyakumari-trivandrum (8 OMS hops, all
-#      with zero bystanders). Lit mode 600G@11.2dB, margin 0.449 dB. At the
-#      static candidate's own demand (800 Gbps) the solver still picked the
-#      600G mode (margin is a function of the path's QoT budget, not the
-#      offered demand), oversubscribing the link to 133%; demand_gbps was
-#      set to 600.0 (the lit mode's own line rate) for a clean 100%
-#      utilization instead, with the identical mode and margin. Every other
-#      lightpath sharing either direction of chidambaram<->palladam clears
-#      2 dB (checked live, §8's own bystander clause). kanchipuram-
-#      pondicherry (the OTHER aerial edge on this same path) also
-#      independently satisfies every §8 clause; chidambaram-palladam was
-#      chosen as the target because it sits mid-corridor, away from both
-#      endpoints -- closer to the "regional heat dome over a mid-span hut"
-#      story than an edge adjacent to the SUT's own depot.
+#      with zero bystanders). Lit mode 600G@11.2dB, live margin 0.502237 dB.
+#      At the static candidate's own demand (800 Gbps) the solver still
+#      picked the 600G mode (margin is a function of the path's QoT budget,
+#      not the offered demand), oversubscribing the link to 133%;
+#      demand_gbps was set to 600.0 (the lit mode's own line rate) for a
+#      clean 100% utilization instead, with the identical mode and margin.
+#      Every other lightpath sharing either direction of
+#      chidambaram<->palladam clears 2 dB (checked live, §8's own bystander
+#      clause). kanchipuram-pondicherry (the OTHER aerial edge on this same
+#      path) also independently satisfies every §8 clause; chidambaram-
+#      palladam was chosen as the target because it sits mid-corridor, away
+#      from both endpoints -- closer to the "regional heat dome over a
+#      mid-span hut" story than an edge adjacent to the SUT's own depot.
 #
 # Not tried further for §8 once #4 passed (first PASS wins, per the
 # live-search instruction) -- candidates #5-#25 were spot-checked with the
@@ -272,25 +272,45 @@ T3_PINS: list[dict] = [
 # re-pointed at this SUT as test_heat_state_margin_gate_holds/
 # test_heat_state_downshift_is_additive below. The margin gate holds exactly
 # (ΔNF=16 -> margin -3.59 dB, mode frozen, link down, service dropped, NOT
-# restored -- bit-identical in shape to Task 1's own result). The downshift
-# test does NOT hold to Task 1's 1e-3 tolerance, for a real, structural
-# reason, not a bug in this candidate: ALL ten §8-passing candidates checked
-# (every one of them, this one included) report `limiting_element_id: null`
-# and `gsnr_db == osnr_db` exactly, versus d0463 (Task 1's own SUT, a
-# background-load lightpath) reporting a real limiting element and an
-# OSNR/GSNR split. The common thread is §8 itself: a valid heat SUT is
-# REQUIRED to route over edges carrying NO other lightpath (so the OMS-
-# sharing clause can hold), which means zero co-propagating channels on
-# those spans, which means zero NLI -- an ASE-only regime where GNPy's own
-# per-request power step evidently re-optimizes slightly per requested mode
-# (measured delta 0.0535 dB on this candidate), whereas an already-loaded
-# background path's OSNR is fixed independent of mode (confirmed live
-# against d0463: OSNR bit-identical, 16.102310869990298, before and after
-# set_modulation_format). This is inherent to any candidate this search
-# methodology can produce, not specific to kanchipuram<->trivandrum --
-# switching candidates would not fix it. test_heat_state_downshift_is_additive
-# below asserts the real, measured tolerance instead of forcing Task 1's.
-# Full derivation and the other nine candidates' own numbers:
+# restored -- bit-identical in shape to Task 1's own result).
+#
+# The downshift test initially appeared NOT to hold to Task 1's 1e-3
+# tolerance (measured delta 1.0535 dB vs. an expected exact 1.0 dB) -- this
+# was first (wrongly) attributed to an "ASE-only, zero-NLI" regime
+# supposedly inherent to any §8-valid candidate (every OMS on the path
+# required to carry no OTHER lightpath). A reviewer re-measured headroom
+# additivity across the full mode ladder and under ΔNF injection and found
+# it EXACT (every discrepancy 0.000000) -- the zero-NLI hypothesis was
+# wrong, and the real cause is a PRE-EXISTING BUILDER BUG, not a property of
+# this SUT or this search methodology:
+#
+# `_pin_and_dump` (this file) never calls `recompute_qot_under_loading`
+# after a pin's own solve -- unlike the default two-stage build's stage 1,
+# which does (right before stage 2's pin runs, so it never covers stage 2's
+# own pin). So EVERY stage-2 pin this script has ever produced (storm-svc-1,
+# the claimant pair, T1/T2/T3, and originally this heat SUT) stores the
+# pre-recompute QoT from the solve itself, not the live, loading-aware
+# value -- any later mutating call (set_modulation_format,
+# inject_degradation) forces the real recompute and the "true" margin
+# appears. Measured on this exact SUT: stored 0.448741 dB vs. live 0.502237
+# dB (a same-mode 600G->600G no-op `set_modulation_format` call was enough
+# to reveal the 0.0535 dB gap -- nothing mode- or NLI-related about it).
+#
+# Fixed HERE ONLY for the heat pin set: `_pin_and_dump` takes a
+# `recompute_after_pin` flag (default False, unchanged for every other pin
+# set), threaded through `build()`'s `recompute_pin_qot` and set True in
+# `main()` only when `--pin-set heat` (2026-10-10). `eval/states/
+# heat-s17.json` was rebuilt with the fix; its stored SUT margin now reads
+# 0.502237 directly (confirmed live via a FRESH `get_lightpaths()` call with
+# NO priming mutation first) -- matches the live/recomputed value exactly,
+# and the downshift additivity test now passes at Task 1's own 1e-3
+# tolerance (see test_heat_state_downshift_is_additive below).
+#
+# Deliberately NOT fixed globally: T1/T2/T3/D1/storm-svc-1's own stored pin
+# margins would shift by a similar small amount, and nobody has re-verified
+# those episodes' frozen gold/CLAUDE.md-recorded scalars against that shift
+# -- out of scope for the heat episode's own Task 5. Full derivation (both
+# the original wrong hypothesis and the corrected root cause):
 # docs/superpowers/plans/notes/2026-10-10-heat-sut-authoring.md (not
 # committed).
 HEAT_PINS: list[dict] = [
@@ -435,14 +455,42 @@ def _default_pin_inventory(pins: list[dict]) -> dict:
 
 def _pin_and_dump(model, store: QoTResultStore, pins: list[dict],
                    pin_inventory: dict, topology_path: str, out_path: str,
-                   meta: dict, err_context: str, log_note: str) -> dict:
+                   meta: dict, err_context: str, log_note: str,
+                   recompute_after_pin: bool = False) -> dict:
     """The one shared pin/solve/fatal-check/dump/write/print tail for BOTH
     the default two-stage build and --base-state mode -- kept as a single
     copy so a later change to solve_allocation_model's call shape or the
     fatal-check condition can't silently drift between the two call sites.
     `err_context` names what's being pinned onto, for the fatal message;
     `log_note` is appended verbatim to the "wrote <out>: N services" line.
-    Returns the written doc."""
+
+    `recompute_after_pin` (default False, UNCHANGED for every existing
+    caller/pin set): the solve above never calls `recompute_qot_under_
+    loading` on the pinned model, so the QoT this function dumps is
+    whatever `solve_allocation_model` computed inline during the pin solve
+    itself, not the post-recompute value a mutating call (set_modulation_
+    format, inject_degradation) later forces live. For the DEFAULT two-stage
+    build this discrepancy is masked because stage 1's own
+    `recompute_qot_under_loading` call runs BEFORE stage 2's pin -- but it
+    never re-runs AFTER the pin, so every stage-2 pin's own stored margin
+    (storm-svc-1, the claimant pair, T1/T2/T3, and the heat SUT below) is
+    the pre-recompute value, off by several hundredths of a dB from the
+    live figure (found live, heat Task 5: 0.448741 stored vs. 0.502237 live
+    for the heat SUT -- a same-mode no-op `set_modulation_format` call was
+    enough to force the recompute and reveal the gap). This is a real,
+    pre-existing builder bug affecting EVERY stage-2 pin on every state file
+    this script has ever produced, not something specific to any one pin's
+    OMS-sharing or NLI properties.
+
+    Deliberately fixed HERE ONLY for the heat pin set (passed explicitly by
+    the one call site that needs it), not globally: flipping this for T1/
+    T2/T3/D1/storm-svc-1 too would shift their own stored pin margins by a
+    similar small amount, and nobody has re-verified those episodes' frozen
+    gold/CLAUDE.md-recorded scalars against the shift -- out of scope for
+    the heat episode's own Task 5. See `tools/build_eval_state.py`'s
+    `HEAT_PINS` comment and
+    `docs/superpowers/plans/notes/2026-10-10-heat-sut-authoring.md` for the
+    live-measured before/after and the scope ruling."""
     pin_qot = make_adapter_evaluator(model, store, cache=QoTCache())
     pin_result, work = solve_allocation_model(model, pin_qot, pins, pin_inventory)
     if pin_result.status is not SolverStatus.SOLUTION or pin_result.unplaced:
@@ -450,6 +498,9 @@ def _pin_and_dump(model, store: QoTResultStore, pins: list[dict],
             f"build_eval_state: could not pin all of "
             f"{[p['id'] for p in pins]} onto {err_context} "
             f"(status={pin_result.status}, unplaced={pin_result.unplaced})")
+    if recompute_after_pin:
+        recompute_qot_under_loading(
+            model=work, store=store, loading=loading_from_model(work))
 
     raw = json.loads(Path(topology_path).read_text(encoding="utf-8-sig"))
     doc = dump_state(work, fingerprint=topology_fingerprint(raw), meta=meta)
@@ -467,7 +518,8 @@ def build(topology_path: str, out_path: str, *, seed: int,
           scale_gbps: float = DEMAND_SCALE_GBPS,
           pins: list[dict] | None = None,
           pin_inventory: dict | None = None,
-          base_state: str | None = None) -> None:
+          base_state: str | None = None,
+          recompute_pin_qot: bool = False) -> None:
     """`target_mean_util` no longer calibrates the offered scale (that's now
     the fixed, pre-calibrated `scale_gbps` -- see DEMAND_SCALE_GBPS's
     docstring for why); it only sets the +/-0.2 acceptance tolerance below.
@@ -540,7 +592,12 @@ def build(topology_path: str, out_path: str, *, seed: int,
     used alone it falls through to the default pin set
     (SERVICE_UNDER_TEST + CLAIMANT_SERVICES + T1_PINS), which would likely
     collide with services the base state already contains (storm-svc-1 and
-    the claimant pair are already pinned into loaded-s17.json)."""
+    the claimant pair are already pinned into loaded-s17.json).
+
+    `recompute_pin_qot` (default False): forwarded to `_pin_and_dump` as
+    `recompute_after_pin` -- see that parameter's own docstring for why
+    this exists and why it defaults to off. Callers should only set this
+    True for the heat pin set; `main()` does so based on `--pin-set heat`."""
     if pins is None:
         pins = [SERVICE_UNDER_TEST, *CLAIMANT_SERVICES, *T1_PINS]
     if pin_inventory is None:
@@ -557,7 +614,8 @@ def build(topology_path: str, out_path: str, *, seed: int,
             meta={**base_meta, "pins": [p["id"] for p in pins]},
             err_context=f"base_state={base_state}",
             log_note=(f" (base-state mode, base={base_state}, "
-                       f"pins={[p['id'] for p in pins]})"))
+                       f"pins={[p['id'] for p in pins]})"),
+            recompute_after_pin=recompute_pin_qot)
         return
 
     model = load_model_from_topology_file(topology_path, modes=modes)
@@ -613,7 +671,8 @@ def build(topology_path: str, out_path: str, *, seed: int,
             "service_under_test": SERVICE_UNDER_TEST["id"],
         },
         err_context="the loaded network",
-        log_note=f", mean_util={achieved_mean_util:.3f}")
+        log_note=f", mean_util={achieved_mean_util:.3f}",
+        recompute_after_pin=recompute_pin_qot)
 
 
 def main() -> None:
@@ -658,10 +717,14 @@ def main() -> None:
     pins = pins or None
     pin_inventory = (json.loads(args.pin_inventory)
                       if args.pin_inventory is not None else None)
+    # Heat-scoped fix only (2026-10-10): see _pin_and_dump's
+    # `recompute_after_pin` docstring. T2/T3/the storm default pin set are
+    # deliberately left at the old (stale-QoT) behavior.
     build(args.topology, args.out, seed=args.seed,
           target_mean_util=args.target_mean_util,
           max_util_cap=args.max_util_cap,
-          pins=pins, pin_inventory=pin_inventory, base_state=args.base_state)
+          pins=pins, pin_inventory=pin_inventory, base_state=args.base_state,
+          recompute_pin_qot=(args.pin_set == "heat"))
 
 
 if __name__ == "__main__":
