@@ -132,6 +132,7 @@ EVAL_STATE_PIN_SETS = {
     "eval/states/loaded-s17.json": None,
     "eval/states/t2-jalgaon-s17.json": "t2",
     "eval/states/t3-jalgaon-s17.json": "t3",
+    "eval/states/heat-s17.json": "heat",
 }
 
 
