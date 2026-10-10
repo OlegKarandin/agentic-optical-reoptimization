@@ -1007,6 +1007,11 @@ async def run_episode(
 ) -> EpisodeTrace:
     """One rollout of one episode by one decider. The server must already be
     connected against `scenario.state_file`."""
+    if scenario.event_type == "heat":
+        from .heat_runner import run_heat_episode   # lazy: heat_runner imports runner
+        return await run_heat_episode(client, scenario, decider,
+                                      topology_path=topology_path,
+                                      run_index=run_index, trace_path=trace_path)
     started = time.monotonic()
     counting = _CountingClient(client)
     edges = load_edges(topology_path)
