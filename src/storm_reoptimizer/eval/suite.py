@@ -106,7 +106,12 @@ async def run_suite(connect_for, *, topology_path, deciders,
 
     traces_by_decider: dict[str, dict[str, list]] = {}
     for scenario_id, scenario in sorted(episodes.items()):
-        results["episodes"][scenario_id] = {}
+        # "_event_type" (leading underscore so it can never collide with a
+        # decider.name, which is always "<prefix>:<variant>") is what
+        # render_results_table's regret split (Finding 2a, final review)
+        # reads to keep storm's non-negative regret_gbps_h and heat's
+        # possibly-negative one (plan deviation 12) out of the same mean.
+        results["episodes"][scenario_id] = {"_event_type": scenario.event_type}
         for decider in deciders:
             if not runs_on(decider, scenario):
                 continue
@@ -179,13 +184,26 @@ async def run_suite(connect_for, *, topology_path, deciders,
     return results
 
 
-def _decider_metrics(results: dict, name: str) -> list[dict]:
+def _decider_metrics(results: dict, name: str,
+                     event_type: str | None = None) -> list[dict]:
     """Every per-run `episode_metrics` dict recorded for `name`, across every
     episode -- what the table's regret/inert_commits columns aggregate over.
     Not every decider necessarily ran every episode (e.g. a scenarios= subset
     passed to run_suite), so this skips episodes `name` is absent from rather
-    than assuming a uniform roster."""
+    than assuming a uniform roster.
+
+    `event_type`, when given, restricts to episodes whose own `_event_type`
+    (set by `run_suite`, defaulting to "storm" for any hand-built `results`
+    dict from before that key existed -- every pre-heat test fixture) equals
+    it. `None` (the default) returns every episode regardless, which is what
+    `inert_commits` wants: it is a plain count, not a scale-sensitive
+    quantity, so summing it across event types is fine. `regret_gbps_h` is
+    NOT scale-safe across event types (storm's is never negative; heat's can
+    be, by design -- see `render_results_table`'s own docstring), so its
+    caller passes `event_type` explicitly."""
     return [m for ep in results["episodes"].values() if name in ep
+           and (event_type is None
+                or ep.get("_event_type", "storm") == event_type)
            for m in ep[name]["metrics"]]
 
 
@@ -200,17 +218,36 @@ def render_results_table(results: dict) -> str:
     free no-op commits -- T1's finding that a candidate changing no path and
     spending no spare is otherwise indistinguishable from a real action).
 
-    `regret_gbps_h` is `None` on any run whose episode is not graded on the
-    `spare_action_by_deadline` label rule (scoring.episode_metrics: today
-    that's every episode but T1a/T1b -- D1/T2/T3 have no `gold.
-    outcome_gbps_h` to regret against). The mean is over the runs that DO
-    carry a real value; a decider with none at all reports "n/a" rather than
-    crashing statistics.fmean on a generator of Nones (found live running
-    the full 7-episode suite -- --scenario-scoped tests only ever saw T1a/
-    T1b and never hit this)."""
-    lines = ["| decider | pair_solved | episodes correct | regret_gbps_h | "
+    `regret_gbps_h` is `None` on any run whose episode is not graded on a
+    label rule with a regret figure to report (scoring.episode_metrics /
+    heat_scoring.heat_episode_metrics: today that's every storm episode but
+    T1a/T1b -- D1/T2/T3 have no `gold.outcome_gbps_h` to regret against --
+    plus every graded hour of the heat episode H1). The mean is over the
+    runs that DO carry a real value; a decider with none at all reports
+    "n/a" rather than crashing statistics.fmean on a generator of Nones
+    (found live running the full 7-episode suite -- --scenario-scoped tests
+    only ever saw T1a/T1b and never hit this).
+
+    **Storm and heat regret are reported in SEPARATE columns, never
+    blended into one mean (final review, Finding 2a).** Storm's
+    `regret_gbps_h` is never negative; heat's can be (gold there minimizes
+    EXPECTED loss, so a decider that gambles and wins beats it ex post, by
+    design -- H1.yaml's own module comment). `ClaudeDecider` runs both
+    event types (`event_types = frozenset({"storm", "heat"})`), so a single
+    averaged column would silently mix two incomparable quantities for any
+    decider that runs both. Each column is "n/a" independently when the
+    decider has no regret-bearing run of that event type -- a storm-only
+    decider shows "n/a" in the heat column and vice versa. The table grows
+    one column for this (storm and heat are now always two columns, never
+    one); the STORM figure a storm-only run reports is computed the exact
+    same way as the single `regret_gbps_h` column this function rendered
+    before this split (the mean over every run's non-None `regret_gbps_h`),
+    so only the column layout changed for a storm-only run, not the
+    arithmetic."""
+    lines = ["| decider | pair_solved | episodes correct | "
+             "regret_gbps_h (storm) | regret_gbps_h (heat) | "
              "inert_commits | notes |",
-             "|---|---|---|---|---|---|"]
+             "|---|---|---|---|---|---|---|"]
     for name, summary in sorted(results["pairs"].items()):
         # Denominator: the number of episodes THIS decider ran, not the
         # whole roster -- a decider whose event_types excluded some episodes
@@ -221,12 +258,29 @@ def render_results_table(results: dict) -> str:
         correct = sum(
             1 for ep in results["episodes"].values()
             if name in ep and ep[name]["label_correct_mean"] >= 0.5)
+
+        def _regret_str(event_type: str) -> str:
+            values = [m["regret_gbps_h"]
+                     for m in _decider_metrics(results, name, event_type)
+                     if m["regret_gbps_h"] is not None]
+            return f"{statistics.fmean(values):.1f}" if values else "n/a"
+
+        storm_regret_str = _regret_str("storm")
+        heat_regret_str = _regret_str("heat")
+        # inert_commits is a plain count, scale-safe across event types
+        # (unlike regret_gbps_h above), so it stays one summed column over
+        # every episode this decider ran, regardless of event type.
         metrics = _decider_metrics(results, name)
-        regrets = [m["regret_gbps_h"] for m in metrics
-                  if m["regret_gbps_h"] is not None]
-        regret_str = (f"{statistics.fmean(regrets):.1f}" if regrets
-                     else "n/a")
         inert_total = sum(m["inert_commits"] for m in metrics)
+        # `summary["detail"]` is only ever populated for pairs this decider
+        # actually completed both halves of (run_suite's own loop skips a
+        # pair otherwise); a decider with none -- e.g. every `heat-
+        # baseline:*` variant, since heat episodes are never paired twins --
+        # never had a `pair_solved` figure to report, so render "n/a"
+        # rather than the misleading default 0.0 ("failed every pair";
+        # final review, Finding 2b).
+        pair_str = (f"{summary['pair_solved']:.2f}" if summary.get("detail")
+                   else "n/a")
         if name.startswith("baseline:"):
             note = ("fixed policy: same input in both halves, so exactly one "
                     "half per pair")
@@ -236,14 +290,18 @@ def render_results_table(results: dict) -> str:
             note = ("System-1 arm: Claude's payload"
                     + (" + horizon_totals" if name.endswith("+totals") else "")
                     + "; reasoning is a machine summary")
-        elif name.startswith("heat-baseline:"):
-            note = ("fixed heat policy: reads no event state beyond this "
-                    "hour's margin")
+        elif name in ("heat-baseline:never_downshift",
+                     "heat-baseline:always_one_step"):
+            note = "fixed heat policy: reads no event state at all"
+        elif name == "heat-baseline:cover_p95":
+            note = ("fixed heat policy: reads only this hour's forecast "
+                    "p95 margin")
         else:
             note = ""
-        lines.append(f"| {name} | {summary['pair_solved']:.2f} | "
+        lines.append(f"| {name} | {pair_str} | "
                      f"{correct}/{ran} | "
-                     f"{regret_str} | {inert_total} | {note} |")
+                     f"{storm_regret_str} | {heat_regret_str} | "
+                     f"{inert_total} | {note} |")
     budget = results["budget"]
     lines += [
         "",
@@ -665,9 +723,10 @@ def main(argv: list[str] | None = None) -> None:
     asyncio.run(_run_dimensional_coherence_invariants(
         _connect_for, all_episodes, topology_path=topology))
 
-    # Heat's own build-time gate -- Task 10 implements it for real; until
-    # then this is a no-op whenever there are no heat episodes to check
-    # (every run today, since none are authored on disk yet).
+    # Heat's own build-time gate (Task 10): mapping and oracle-vs-gold
+    # checks against every authored heat episode (H1, as of 2026-10-10).
+    # `_run_heat_gates` itself stays a no-op only if `heat_episodes` is
+    # ever empty (no heat scenario files on disk) -- not the case today.
     asyncio.run(_run_heat_gates(_connect_for, heat_episodes, topology_path=topology))
 
     results = asyncio.run(run_suite(

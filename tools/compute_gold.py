@@ -122,7 +122,8 @@ def main() -> None:
     parser.add_argument("--scenario", required=True,
                         help="path to the scenario YAML to enumerate "
                         "outcomes for (must use the spare_action_by_"
-                        "deadline label rule)")
+                        "deadline label rule for storm episodes, or the "
+                        "mode_by_hour label rule for heat episodes)")
     parser.add_argument("--write", action="store_true",
                         help="write the scenario with its gold: block "
                         "replaced by the freshly computed one. By DEFAULT "
