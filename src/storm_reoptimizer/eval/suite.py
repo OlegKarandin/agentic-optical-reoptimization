@@ -506,14 +506,25 @@ async def _run_dimensional_coherence_invariants(
 async def _run_heat_gates(
     connect_for, heat_episodes: dict[str, ScenarioFile], *, topology_path: Path,
 ) -> None:
-    """Heat's own build-time gate, over the full heat episode roster -- the
-    same build-time-gate contract as `_run_dimensional_coherence_invariants`
-    above it in `main()`. Task 10 implements the real checks; until then
-    this is a placeholder that returns immediately when there are no heat
-    episodes to check (`main()` always calls it, so a storm-only run's own
-    behaviour is unaffected either way)."""
+    """Heat counterpart of the storm build-time gates: mapping and a fresh
+    oracle rollout against the shipped gold, before any paid rollout. Same
+    build-time-gate contract as `_run_dimensional_coherence_invariants`
+    above it in `main()`; a no-op whenever there are no heat episodes to
+    check (`main()` always calls it, so a storm-only run's own behaviour is
+    unaffected either way)."""
     if not heat_episodes:
         return
+    from ..mcp_client import call_tool_json
+    from ..geo_mapper import load_edges
+    from .heat_assertions import assert_heat_gold_matches_oracle, assert_heat_mapping
+    from .heat_gold import oracle_trace
+    edges = load_edges(topology_path)
+    for scenario in heat_episodes.values():
+        async with connect_for(scenario.state_file)() as client:
+            optical = await call_tool_json(client, "get_topology", {"layer": "optical"})
+        assert_heat_mapping(scenario, optical, edges)
+        assert_heat_gold_matches_oracle(scenario, await oracle_trace(
+            connect_for(scenario.state_file), scenario, topology_path=topology_path))
 
 
 def preflight_jev(args) -> None:

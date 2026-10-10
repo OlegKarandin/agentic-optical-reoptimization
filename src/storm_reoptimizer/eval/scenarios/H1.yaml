@@ -1,0 +1,214 @@
+# H1 -- the heat suite's single authored episode (plan Task 10, heat spec
+# §8/§10/§12). 8 hours (t0..t7), two issuances (t0, t4), one SUT, designed
+# to walk the oracle's own argmin through FOUR distinct mode-ladder steps
+# (0, 3, 4, 5; >= 3 including 0 is the spec §12 floor) across five regimes:
+#
+#   t0, t1, t2 -- mild/scare: cooling HOLDS, forecast p_cooling_failure
+#                 stays below 0.18 (t2, the scare hour, sits in [0.05,0.18]
+#                 by design), gold holds the provisioned mode (k=0) at
+#                 every one of these hours, each individually graded
+#                 (decision gap >= the 25 Gbps*h floor).
+#   t3           -- the failure TRIGGER hour: forecast p_cooling_failure
+#                 clears 0.3 while cooling has not yet failed BEFORE this
+#                 hour (`cooling_failed_before` is strict-less-than), so
+#                 the decision itself is still probabilistic; gold moves to
+#                 k=3 (450G). `cooling_failed_at: t3` makes this hour's own
+#                 REALIZED delta (cooling_failed_by is <=) the first one
+#                 computed from the uncooled branch.
+#   t4, t5       -- post-failure: p_cooling_failure=1 (deterministic,
+#                 cooling has already failed), gold holds k=5 (350G) across
+#                 both hours -- the "holds the covering mode" regime.
+#   t6           -- still post-failure but a half-step cooler forecast than
+#                 t4/t5, so gold eases back to k=4 (400G) -- the ladder's
+#                 4th distinct step, still well short of full recovery.
+#   t7           -- cool-down: realized temperature (23.5C) sits below
+#                 setpoint (25C) and close to (setpoint - self_heating_c =
+#                 23C), so the uncooled branch's own ΔT falls to a small
+#                 residual (ΔNF ~0.4 dB, nowhere near any ladder
+#                 threshold) -- the realized NF increment this hour is
+#                 NEGATIVE relative to t6's applied delta (Review Focus 2 /
+#                 plan deviation 9). Gold upshifts all the way back to k=0.
+#                 (23.5C rather than a temperature that clamps the uncooled
+#                 branch to EXACTLY zero -- found live, this task: once the
+#                 margin curve's own measurement phase has injected and
+#                 restored many distinct NF values on these two amps, a
+#                 LATER inject_degradation call that nets to exactly the
+#                 amplifier's nominal NF collides with that nominal
+#                 equipment entry server-side ("Duplicate instance of
+#                 Edfa", type_variety re-registration, confirmed
+#                 reproducible in isolation against eval/states/
+#                 heat-s17.json). A server-side equipment-catalog bug, out
+#                 of this repo's scope to fix (CLAUDE.md's hard seam) --
+#                 worked around here by never asking the realized
+#                 trajectory to return to the EXACT nominal, which costs
+#                 nothing: a residual ΔNF of 0.4 dB against this SUT's
+#                 measured curve is physically indistinguishable from zero
+#                 (margin ~0.48 dB either way) and the upshift-to-k=0 story
+#                 is identical.)
+#
+# Every hour above is graded except t3 (t3's own decision gap sits under
+# the 25 Gbps*h floor -- it is still a real, distinct mode move, just not
+# a confidently-separated one): 7 of 8 hours graded, comfortably over the
+# >= ceil(8/2) = 4 floor (spec §12 / heat_assertions.assert_heat_episode_
+# discriminates).
+#
+# SUT: the dedicated heat state's own SUT (tools/build_eval_state.py's
+# HEAT_PINS[0] / HEAT_TARGET_EDGE, heat Task 5 live authoring). Provisioned
+# mode 600G@11.2dB, live margin 0.502237 dB (already correct in
+# eval/states/heat-s17.json -- no priming needed).
+#
+# thermal.amplifiers / heat_polygon: found live with Task 8's own
+# `_heat_yaml` method (tests/eval/test_heat_runner.py) -- amp_points =
+# geo_mapper.amplifier_points(optical["oms"], fiber_lengths,
+# load_edges(TOPOLOGY_PATH)) against eval/states/heat-s17.json; hut =
+# amp_points["amp_chidambaram_palladam_0"] = (78.9, 11.26111); square =
+# Polygon.from_bounds(hut.x-0.02, hut.y-0.02, hut.x+0.02, hut.y+0.02),
+# frozen to 5 decimals below. The square catches BOTH amp_chidambaram_
+# palladam_0 (1/3 along the chidambaram->palladam OMS, on the SUT's own
+# path) and its physically co-located opposite-direction neighbour
+# amp_palladam_chidambaram_1 (2/3 along the palladam->chidambaram OMS --
+# same splice point, reverse direction) -- confirmed live, matches
+# map_geo_event_to_amplifiers's own both-directions-independently
+# behaviour (geo_mapper.py's docstring). Zero bystanders: no OTHER
+# lightpath traverses either direction's OMS through this hut (confirmed
+# live against heat-s17.json's full lightpath set via heat_runner.
+# bystanders_of), so assert_bystanders_never_cross is vacuously satisfied.
+#
+# thermal.class constants: this SUT's own measured curve (live, this
+# episode's authoring run, ΔNF grid 0..40 dB against BOTH heated amps) is
+# WEAK and NONLINEAR -- margin falls only ~0.045-0.06 dB per dB of ΔNF
+# through ΔNF<=6, then steepens sharply (margin crosses zero between
+# ΔNF=6 and ΔNF=8, and keeps falling to roughly -26 dB by ΔNF=40). The
+# mode-ladder's own thresholds (headroom 0/1.0/2.0/3.0/4.1/5.2/6.4 dB over
+# the 7 modes at-or-below 600G) land, on THIS measured curve, at roughly
+# ΔNF 6.0/10.5/13.0/15.0/16.8/18.3/19.9 -- i.e. the whole usable ladder
+# sits inside ΔNF 6-20, a narrow band reachable only by pushing
+# coeff_db_per_c well past the smaller values the existing heat episodes
+# use. See each constant's own comment below for what is cited and what
+# is deliberately modelled past that citation (heat spec §1 honest scope).
+id: H1
+event_type: heat
+seed: 17
+state_file: eval/states/heat-s17.json
+service_under_test: heat-svc-kanchipuram-trivandrum
+lightpath_under_test: lp-cand-heat-svc-kanchipuram-trivandrum-0
+hours: [t0, t1, t2, t3, t4, t5, t6, t7]
+thermal:
+  amplifiers: [amp_chidambaram_palladam_0, amp_palladam_chidambaram_1]
+  class:
+    # Matches the existing heat episodes' own convention (HEAT_EXAMPLE_YAML,
+    # tests/eval/test_heat_runner.py's _heat_yaml): a typical outdoor-hut
+    # thermostat setpoint.
+    setpoint_c: 25.0
+    # HEAT_EXAMPLE_YAML cites 0.02 dB/°C; Task 8's _heat_yaml used 0.2
+    # dB/°C to demonstrate a real down/recovery cycle in a 3-hour synthetic
+    # test. This SUT's own measured sensitivity is weaker still (~-0.06 dB
+    # margin per dB of NF rise, up to ΔNF=4, measured directly in an
+    # earlier live-authoring task) than either prior episode's SUT, and its
+    # mode ladder needs ΔNF in the 6-20 dB range (measured live this task,
+    # see the module-level comment above) to move even one step. 0.85
+    # dB/°C is ~4x Task 8's own value and ~42x HEAT_EXAMPLE_YAML's --
+    # raised well past both so that plausible-but-elevated ambient
+    # temperatures (high-30s/low-40s C) and a modest self-heating offset
+    # (below) can still walk this particular weak-sensitivity SUT through
+    # multiple ladder steps within an 8-hour episode. Modelled, not
+    # field-calibrated (heat spec §1 honest scope).
+    coeff_db_per_c: 0.85
+    # Same as HEAT_EXAMPLE_YAML/_heat_yaml: active cooling heavily
+    # attenuates ambient-to-NF coupling relative to the uncooled case.
+    k_cooled: 0.15
+    # Same as HEAT_EXAMPLE_YAML/_heat_yaml: once cooling fails, ambient
+    # heat couples to NF roughly 1:1 per degree (the uncooled baseline).
+    k_uncooled: 1.0
+    # Task 8's _heat_yaml used 8.0 C. Kept far smaller here DELIBERATELY:
+    # paired with coeff_db_per_c=0.85 above, an 8 C self-heating offset
+    # would push the failed component's mean ΔNF (mu_failed = coeff *
+    # (t + self_heating - setpoint)) past EVERY ladder threshold at once
+    # for any plausible failure-hour temperature, collapsing the whole
+    # episode to a single all-or-nothing cliff and failing the >= 3
+    # distinct-step floor (spec §12). 2.0 C spreads mu_failed across the
+    # ladder's own 6-20 dB band as ambient temperature itself climbs hour
+    # over hour (27C -> 43C across this episode), which is what lets the
+    # gold sequence below actually walk through four separate steps
+    # instead of jumping straight to the bottom rung. Modelled, not
+    # field-calibrated (heat spec §1 honest scope).
+    self_heating_c: 2.0
+    p_cooling_failure:
+      # Same functional form and the same order of magnitude as
+      # HEAT_EXAMPLE_YAML/_heat_yaml (base=0.02, per_c=0.01, per_hour=0.03);
+      # per_c and per_hour nudged up (0.01->0.015, 0.03->0.04) only to land
+      # this episode's own temperature/hours-above trajectory inside the
+      # spec's targeted bands -- t2's forecast in [0.05, 0.18] (the scare
+      # hour) and t3's forecast >= 0.3 (the failure-trigger hour) -- not a
+      # new failure model.
+      base: 0.02
+      per_c_above_setpoint: 0.015
+      per_hour_above_setpoint: 0.04
+# Both issuances map to the SAME physical square (the amplifiers don't
+# move) -- frozen to 5 decimals, per Task 8's own method (module comment
+# above): Polygon.from_bounds(78.9-0.02, 11.26111-0.02, 78.9+0.02,
+# 11.26111+0.02).
+heat_polygon:
+  t0: {type: Polygon, coordinates: [[[78.88000, 11.24111], [78.88000, 11.28111], [78.92000, 11.28111], [78.92000, 11.24111], [78.88000, 11.24111]]]}
+  t4: {type: Polygon, coordinates: [[[78.88000, 11.24111], [78.88000, 11.28111], [78.92000, 11.28111], [78.92000, 11.24111], [78.88000, 11.24111]]]}
+temperature_forecast:
+  t0:
+    t0: {t_mean_c: 27.0, t_sigma_c: 1.0}
+    t1: {t_mean_c: 29.0, t_sigma_c: 1.0}
+    t2: {t_mean_c: 29.0, t_sigma_c: 1.5}
+    t3: {t_mean_c: 38.0, t_sigma_c: 2.0}
+    t4: {t_mean_c: 43.0, t_sigma_c: 2.0}
+    t5: {t_mean_c: 43.0, t_sigma_c: 2.0}
+    t6: {t_mean_c: 41.0, t_sigma_c: 2.0}
+    t7: {t_mean_c: 23.5, t_sigma_c: 2.0}
+  # The revision at t4 (cooling has by now actually failed): tighter sigma
+  # on the same means, since the forecaster now has the realized failure
+  # in hand rather than forecasting it.
+  t4:
+    t4: {t_mean_c: 43.0, t_sigma_c: 1.0}
+    t5: {t_mean_c: 43.0, t_sigma_c: 1.0}
+    t6: {t_mean_c: 41.0, t_sigma_c: 1.0}
+    t7: {t_mean_c: 23.5, t_sigma_c: 1.0}
+temperature_realized:
+  t0: 27.0
+  t1: 29.0
+  t2: 29.0
+  t3: 38.0
+  t4: 43.0
+  t5: 43.0
+  t6: 41.0
+  t7: 23.5
+cooling_failed_at: t3
+# Gold = the oracle's own rollout (tools/compute_gold.py --write, copied
+# by hand into this comment-bearing file; heat_gold.heat_gold_from_trace,
+# never hand-edited). Confirms the module-level comment's own claim: four
+# distinct steps (600G=k0, 450G=k3, 350G=k5, 400G=k4), t3 is the one
+# ungraded hour (decision gap 171.489-163.886=7.6 Gbps*h, under the 25
+# floor), 7/8 hours graded, realized loss of the gold sequence itself is
+# 850.0 Gbps*h.
+gold:
+  mode_by_hour:
+    t0: 600G@11.2dB
+    t1: 600G@11.2dB
+    t2: 600G@11.2dB
+    t3: 450G@8.2dB
+    t4: 350G@6.0dB
+    t5: 350G@6.0dB
+    t6: 400G@7.1dB
+    t7: 600G@11.2dB
+  graded_hours: [t0, t1, t2, t4, t5, t6, t7]
+  outcome_gbps_h: 850.0
+  rationale: |
+    hour            gold   E[best]    E[2nd] graded
+    t0       600G@11.2dB     0.034    50.000 yes
+    t1       600G@11.2dB    10.526    50.000 yes
+    t2       600G@11.2dB    23.170    50.001 yes
+    t3        450G@8.2dB   163.886   171.489 no
+    t4        350G@6.0dB   270.430   300.107 yes
+    t5        350G@6.0dB   270.430   300.107 yes
+    t6        400G@7.1dB   216.235   250.063 yes
+    t7       600G@11.2dB     0.000    50.000 yes
+    realized loss of the gold sequence: 850.000 Gbps·h
+flip_variable: [cooling, margin, temperature]
+metadata:
+  label_rule: mode_by_hour
