@@ -19,9 +19,12 @@ are costs. Asking for raw multipliers across those is asking for numerology.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Iterable, Protocol
 
 from .observation import Observation
+
+if TYPE_CHECKING:
+    from .heat_observation import HeatObservation
 
 # In the order evaluate_objective reports them.
 COST_TERMS = ("spectrum_used", "transponders", "max_util", "dropped_traffic",
@@ -284,3 +287,52 @@ class Decider(Protocol):
                           ) -> ConstraintDecision: ...
 
     async def objective(self, obs: Observation, menu: dict) -> ObjectiveDecision: ...
+
+
+MODE_JSON_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "required": ["reasoning", "mode"],
+    "properties": {
+        "reasoning": {"type": "string", "minLength": 1},
+        "mode": {"type": "string", "minLength": 1},
+    },
+}
+
+
+@dataclass(frozen=True)
+class ModeDecision:
+    """Heat spec §6: a mode_id from the shown ladder (at or below the
+    PROVISIONED mode -- plan deviation 1) or `hold`. Whether the id is on the
+    ladder is a property of the observation, checked by check_mode_on_ladder
+    (agent retry loop and runner), never by from_dict."""
+    mode: str
+    reasoning: str
+
+    @classmethod
+    def from_dict(cls, payload: dict) -> "ModeDecision":
+        reasoning = _reasoning(payload, "mode")
+        mode = payload.get("mode")
+        if not isinstance(mode, str) or not mode.strip():
+            raise DecisionError("mode: `mode` must be a mode_id from `mode_ladder` or `hold`")
+        return cls(mode=mode, reasoning=reasoning)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"mode": self.mode, "reasoning": self.reasoning}
+
+
+def check_mode_on_ladder(decision: ModeDecision, ladder_ids: Iterable[str]) -> None:
+    ids = list(ladder_ids)
+    if decision.mode != HOLD_CHOICE and decision.mode not in ids:
+        raise DecisionError(
+            f"mode: {decision.mode!r} is not on this observation's `mode_ladder` "
+            f"{ids} and is not `{HOLD_CHOICE}`. Name only modes you were shown.")
+
+
+class HeatDecider(Protocol):
+    """A heat episode asks for ONE decision per hour (heat spec §4.2).
+    run_episode routes a heat scenario to heat_runner, which refuses any
+    decider without `decide_mode`; suite.run_suite pairs deciders with
+    scenarios by `event_types`."""
+    name: str
+
+    async def decide_mode(self, obs: "HeatObservation") -> ModeDecision: ...
