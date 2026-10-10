@@ -1090,15 +1090,24 @@ def _names(argv):
             for d in build_deciders(build_arg_parser().parse_args(argv))]
 
 
+# Task 9: build_deciders() always appends HEAT_BASELINE_VARIANTS, right
+# after the two storm baselines and before --include-agent/--include-jev's
+# own arms -- so every exact-name-list assertion below gains these three.
+_HEAT_BASELINE_NAMES = ["heat-baseline:never_downshift",
+                       "heat-baseline:always_one_step", "heat-baseline:cover_p95"]
+
+
 def test_a_plain_suite_run_stays_free_and_keyless():
     # `python -m storm_reoptimizer.eval.suite` must not spend API credits or
     # need credentials unless it was asked to.
-    assert _names([]) == ["baseline:immediate", "baseline:at_deadline"]
+    assert _names([]) == (
+        ["baseline:immediate", "baseline:at_deadline"] + _HEAT_BASELINE_NAMES)
 
 
 def test_include_agent_appends_exactly_one_claude_decider():
-    assert _names(["--include-agent"]) == [
-        "baseline:immediate", "baseline:at_deadline", "agent:claude-sonnet-5"]
+    assert _names(["--include-agent"]) == (
+        ["baseline:immediate", "baseline:at_deadline"] + _HEAT_BASELINE_NAMES
+        + ["agent:claude-sonnet-5"])
 
 
 def test_the_agent_model_is_overridable_from_the_command_line():
@@ -1107,8 +1116,8 @@ def test_the_agent_model_is_overridable_from_the_command_line():
 
 
 def test_naming_a_model_without_the_flag_still_runs_baselines_only():
-    assert _names(["--agent-model", "claude-opus-5"]) == [
-        "baseline:immediate", "baseline:at_deadline"]
+    assert _names(["--agent-model", "claude-opus-5"]) == (
+        ["baseline:immediate", "baseline:at_deadline"] + _HEAT_BASELINE_NAMES)
 
 
 def test_only_and_runs_default_to_unset_and_the_module_constant():
@@ -1149,8 +1158,9 @@ def test_the_agent_arm_writes_its_audit_under_eval_traces():
 
 
 def test_the_agent_arm_has_one_name_and_one_sidecar():
-    assert _names(["--include-agent"]) == [
-        "baseline:immediate", "baseline:at_deadline", "agent:claude-sonnet-5"]
+    assert _names(["--include-agent"]) == (
+        ["baseline:immediate", "baseline:at_deadline"] + _HEAT_BASELINE_NAMES
+        + ["agent:claude-sonnet-5"])
     built = build_deciders(build_arg_parser().parse_args(["--include-agent"]))
     assert built[-1]._audit_path.name == "agent-calls.jsonl"
 

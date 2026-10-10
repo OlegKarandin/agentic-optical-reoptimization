@@ -475,3 +475,28 @@ def test_the_decision_hour_is_labelled_deadline_not_alarm_red(folded):
     # border moved off it.
     assert ".hcell.decision { border-color: #444;" in html
     assert ".hcell.decision { border-color: #cc6633" not in html
+
+
+def test_a_heat_episode_is_skipped_rather_than_crashing_the_fold(
+    tmp_path, heat_example_yaml,
+):
+    # Task 9: load_episode reads storm-only keys (decision_hour,
+    # damage_radius_km, ...) directly off the raw YAML, which a heat
+    # episode's file never carries -- fold() must skip it rather than
+    # KeyError, until the heat viewer (heat spec §14) exists.
+    scenarios = tmp_path / "scenarios"
+    scenarios.mkdir()
+    d1_src = (Path(__file__).parent.parent.parent / "src"
+             / "storm_reoptimizer" / "eval" / "scenarios" / "D1.yaml")
+    (scenarios / "D1.yaml").write_text(
+        d1_src.read_text(encoding="utf-8"), encoding="utf-8")
+    (scenarios / "HEAT_EXAMPLE.yaml").write_text(
+        heat_example_yaml, encoding="utf-8")
+    traces = tmp_path / "traces"
+    traces.mkdir()
+    topology = (Path(__file__).parent.parent.parent / "src"
+               / "storm_reoptimizer" / "data" / "toy_india_topology.json")
+
+    payload = bvd.fold(traces, scenarios, topology)
+
+    assert set(payload["episodes"]) == {"D1"}

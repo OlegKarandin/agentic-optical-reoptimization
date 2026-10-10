@@ -302,7 +302,9 @@ def test_build_deciders_tolerates_a_namespace_without_jev_fields():
     # agent_effort) with no jev fields; that must keep working.
     built = build_deciders(SimpleNamespace(
         include_agent=False, agent_model="x", agent_effort=None))
-    assert len(built) == 2
+    # 2 storm baselines + 3 heat baselines (Task 9: build_deciders always
+    # appends HEAT_BASELINE_VARIANTS, unconditionally).
+    assert len(built) == 5
     assert not any(isinstance(d, JevDecider) for d in built)
 
 
@@ -339,6 +341,24 @@ def test_main_runs_the_jev_preflight_before_any_work(monkeypatch):
     monkeypatch.setattr(suite_module, "preflight_jev", refuse)
     with pytest.raises(SystemExit, match="preflight ran"):
         suite_module.main(["--include-jev"])
+
+
+from storm_reoptimizer.eval.heat_baseline import HeatBaseline
+
+
+def test_build_deciders_adds_the_heat_baselines_and_storm_only_runs_skip_them():
+    args = build_arg_parser().parse_args([])
+    names = [d.name for d in build_deciders(args)]
+    assert names[-3:] == ["heat-baseline:never_downshift",
+                          "heat-baseline:always_one_step", "heat-baseline:cover_p95"]
+
+
+def test_decider_runs_only_its_event_types():
+    from storm_reoptimizer.eval.suite import runs_on
+    from storm_reoptimizer.eval.baseline import ForecastBlindBaseline
+    d1 = load_all_scenarios()["D1"]
+    assert runs_on(ForecastBlindBaseline("immediate"), d1)
+    assert not runs_on(HeatBaseline("cover_p95"), d1)
 
 
 def test_results_table_notes_jev_rows_and_the_citation_footnote():

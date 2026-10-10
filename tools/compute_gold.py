@@ -85,13 +85,17 @@ async def run(args: argparse.Namespace) -> None:
         ) as client:
             yield client
 
-    outcomes = await enumerate_outcomes(
-        _connect, scenario, topology_path=args.topology)
-    gold = gold_from_outcomes(
-        scenario, outcomes, min_margin_fraction=args.min_margin_fraction)
-
-    print(f"{scenario.id}: outcomes for spend vs hold\n")
-    print(gold.rationale)
+    if scenario.event_type == "heat":
+        from storm_reoptimizer.eval.heat_gold import heat_gold_from_trace, oracle_trace
+        gold = heat_gold_from_trace(scenario, await oracle_trace(
+            _connect, scenario, topology_path=args.topology))
+        print(f"{scenario.id}: per-hour oracle\n")
+        print(gold.rationale)
+    else:
+        outcomes = await enumerate_outcomes(_connect, scenario, topology_path=args.topology)
+        gold = gold_from_outcomes(scenario, outcomes, min_margin_fraction=args.min_margin_fraction)
+        print(f"{scenario.id}: outcomes for spend vs hold\n")
+        print(gold.rationale)
 
     if args.write:
         updated = dataclasses.replace(scenario, gold=gold)

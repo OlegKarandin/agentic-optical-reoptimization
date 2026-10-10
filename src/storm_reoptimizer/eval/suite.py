@@ -38,6 +38,7 @@ from .assertions import (assert_claim_is_one_lightpath,
                          assert_risk_group_covers_measurable_exposure,
                          assert_sampling_error_within_margin)
 from .baseline import ForecastBlindBaseline
+from .heat_baseline import HEAT_BASELINE_VARIANTS, HeatBaseline
 from .jev import DEFAULT_JEV_MODEL, JevDecider
 from .runner import run_episode, service_geometry
 from .scenario_file import ScenarioFile, load_all_scenarios
@@ -73,6 +74,15 @@ def _redact_volatile_ids(trace_dict: dict) -> dict:
     return redacted
 
 
+def runs_on(decider, scenario: ScenarioFile) -> bool:
+    """Whether `decider` is even eligible to run `scenario`'s episode, by its
+    own declared `event_types` -- a storm-only decider (no `event_types`
+    attribute at all, e.g. `ForecastBlindBaseline`) defaults to
+    `frozenset({"storm"})`, so every existing caller's behaviour is
+    unchanged until a decider opts into more than that."""
+    return scenario.event_type in getattr(decider, "event_types", frozenset({"storm"}))
+
+
 async def run_suite(connect_for, *, topology_path, deciders,
                     runs_per_episode: int = RUNS_PER_EPISODE,
                     scenarios: dict[str, ScenarioFile] | None = None,
@@ -91,17 +101,21 @@ async def run_suite(connect_for, *, topology_path, deciders,
     results: dict = {"episodes": {}, "pairs": {}, "budget": {
         "seeds": sorted({e.seed for e in episodes.values()}),
         "episodes": len(episodes), "runs_per_episode": runs_per_episode,
-        "rollouts": len(episodes) * runs_per_episode * len(deciders)}}
+        "rollouts": sum(runs_per_episode for e in episodes.values()
+                       for d in deciders if runs_on(d, e))}}
 
     traces_by_decider: dict[str, dict[str, list]] = {}
     for scenario_id, scenario in sorted(episodes.items()):
         results["episodes"][scenario_id] = {}
         for decider in deciders:
+            if not runs_on(decider, scenario):
+                continue
             runs, metrics = [], []
             # A deterministic decider needs only one rollout; running three
             # identical ones buys nothing and costs three server launches.
             n = (1 if collapse_deterministic
-                 and isinstance(decider, ForecastBlindBaseline)
+                 and (isinstance(decider, ForecastBlindBaseline)
+                      or getattr(decider, "deterministic", False))
                  else runs_per_episode)
             for run_index in range(n):
                 safe = decider.name.replace(":", "_")
@@ -139,10 +153,21 @@ async def run_suite(connect_for, *, topology_path, deciders,
 
     pairs = sorted({e.pair for e in episodes.values() if e.pair})
     for decider in deciders:
+        # Only a decider that ran at least one episode has an entry in
+        # traces_by_decider at all -- a decider whose event_types excluded
+        # every episode in this run (e.g. a HeatBaseline against a
+        # storm-only `episodes`) never appears in results["pairs"].
+        if decider.name not in traces_by_decider:
+            continue
         solved, details = [], {}
         for pair in pairs:
             a = episodes[f"{pair}a"]
             b = episodes[f"{pair}b"]
+            # A decider that ran some episodes but neither half of THIS
+            # pair (e.g. a heat-only decider, when pairs are always storm
+            # twins) skips it rather than KeyError-ing on traces_by_decider.
+            if a.id not in traces_by_decider.get(decider.name, {}):
+                continue
             cross = cross_twin_metrics(
                 a, traces_by_decider[decider.name][a.id][0],
                 b, traces_by_decider[decider.name][b.id][0])
@@ -187,6 +212,12 @@ def render_results_table(results: dict) -> str:
              "inert_commits | notes |",
              "|---|---|---|---|---|---|"]
     for name, summary in sorted(results["pairs"].items()):
+        # Denominator: the number of episodes THIS decider ran, not the
+        # whole roster -- a decider whose event_types excluded some episodes
+        # (e.g. a heat-only baseline against a mixed storm+heat suite) never
+        # had a chance at those, and counting them against it would read as
+        # a failure rather than an ineligibility.
+        ran = sum(1 for ep in results["episodes"].values() if name in ep)
         correct = sum(
             1 for ep in results["episodes"].values()
             if name in ep and ep[name]["label_correct_mean"] >= 0.5)
@@ -205,10 +236,13 @@ def render_results_table(results: dict) -> str:
             note = ("System-1 arm: Claude's payload"
                     + (" + horizon_totals" if name.endswith("+totals") else "")
                     + "; reasoning is a machine summary")
+        elif name.startswith("heat-baseline:"):
+            note = ("fixed heat policy: reads no event state beyond this "
+                    "hour's margin")
         else:
             note = ""
         lines.append(f"| {name} | {summary['pair_solved']:.2f} | "
-                     f"{correct}/{len(results['episodes'])} | "
+                     f"{correct}/{ran} | "
                      f"{regret_str} | {inert_total} | {note} |")
     budget = results["budget"]
     lines += [
@@ -286,6 +320,7 @@ def build_deciders(args: argparse.Namespace) -> list:
     launches the real MCP subprocess."""
     deciders = [ForecastBlindBaseline("immediate"),
                 ForecastBlindBaseline("at_deadline")]
+    deciders += [HeatBaseline(v) for v in HEAT_BASELINE_VARIANTS]
     if args.include_agent:
         deciders.append(ClaudeDecider(
             model=args.agent_model, audit_path=AGENT_AUDIT_PATH,
@@ -468,6 +503,19 @@ async def _run_dimensional_coherence_invariants(
                 client, scenario, topology_path=topology_path)
 
 
+async def _run_heat_gates(
+    connect_for, heat_episodes: dict[str, ScenarioFile], *, topology_path: Path,
+) -> None:
+    """Heat's own build-time gate, over the full heat episode roster -- the
+    same build-time-gate contract as `_run_dimensional_coherence_invariants`
+    above it in `main()`. Task 10 implements the real checks; until then
+    this is a placeholder that returns immediately when there are no heat
+    episodes to check (`main()` always calls it, so a storm-only run's own
+    behaviour is unaffected either way)."""
+    if not heat_episodes:
+        return
+
+
 def preflight_jev(args) -> None:
     """Fail fast, before any work starts, when `--include-jev` is asked for
     but the optional SDK or its key is missing. Not in `build_deciders`,
@@ -520,7 +568,15 @@ def main(argv: list[str] | None = None) -> None:
     # narrows exactly one thing: the actual rollout (`episodes`, below) --
     # never any of these three validation gates.
     all_episodes = load_all_scenarios()
-    episodes = select_episodes(all_episodes, args.only)
+    # Heat episodes are a separate roster: every build-time gate above this
+    # comment's own `all_episodes` stays storm-only (unchanged by this
+    # addition), since the two whole-suite "no rule solves it" checks and
+    # the dimensional-coherence invariants are all storm-specific
+    # machinery. `episodes` -- the actual rollout `--only` narrows -- gains
+    # heat episodes so a plain run (and `--only` naming a heat id) can
+    # reach them.
+    heat_episodes = load_all_scenarios(event_type="heat")
+    episodes = select_episodes({**all_episodes, **heat_episodes}, args.only)
 
     # A real install puts `multilayer-optical-mcp` on PATH and
     # connect_server()'s own default handles it. This workspace's sibling
@@ -597,6 +653,11 @@ def main(argv: list[str] | None = None) -> None:
     # above, leaving this third one still narrowed).
     asyncio.run(_run_dimensional_coherence_invariants(
         _connect_for, all_episodes, topology_path=topology))
+
+    # Heat's own build-time gate -- Task 10 implements it for real; until
+    # then this is a no-op whenever there are no heat episodes to check
+    # (every run today, since none are authored on disk yet).
+    asyncio.run(_run_heat_gates(_connect_for, heat_episodes, topology_path=topology))
 
     results = asyncio.run(run_suite(
         _connect_for, topology_path=topology, deciders=build_deciders(args),
