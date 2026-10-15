@@ -382,7 +382,7 @@ DEFAULT_MODEL = "claude-sonnet-5"
 # wrong tool called (both existing branches, exercised for Sonnet 5 by
 # other model quirks), and every per-step instruction already tells the
 # model explicitly which tool to call.
-_NO_FORCED_TOOL_CHOICE_MODELS = frozenset({"claude-opus-5-5"})
+_NO_FORCED_TOOL_CHOICE_MODELS = frozenset({"claude-opus-5-5", "claude-sonnet-5-5"})
 # Thinking tokens count against max_tokens. A generous cap costs nothing
 # (billing is on tokens actually produced) and avoids a truncated tool call.
 MAX_TOKENS = 16000
