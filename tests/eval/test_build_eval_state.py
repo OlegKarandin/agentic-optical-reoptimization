@@ -10,7 +10,7 @@ from pathlib import Path
 
 from storm_reoptimizer.geo_mapper import load_edges
 from storm_reoptimizer.eval.runner import service_geometry
-from storm_reoptimizer.mcp_client import connect_server
+from storm_reoptimizer.mcp_client import call_tool_json, connect_server
 
 TOPOLOGY_PATH = (
     Path(__file__).parent.parent.parent
@@ -202,6 +202,7 @@ def test_the_rebuild_preserves_every_background_service_geometry(
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "tools"))
 import build_eval_state  # noqa: E402
+import find_heat_sut  # noqa: E402
 
 
 def test_the_t2_and_t3_pin_sets_are_the_specs():
@@ -240,7 +241,8 @@ def test_the_t2_and_t3_pin_sets_are_the_specs():
         "t3-svc-jalgaon-nagpur", "t3-claimant-jalgaon-khandwa",
         "t3-claimant-jalgaon-buldhana"}
     assert build_eval_state.PIN_SETS == {
-        "t2": build_eval_state.T2_PINS, "t3": build_eval_state.T3_PINS}
+        "t2": build_eval_state.T2_PINS, "t3": build_eval_state.T3_PINS,
+        "heat": build_eval_state.HEAT_PINS}
     # Pins solve in order: SUT, then claimants.
     ids = [p["id"] for p in build_eval_state.T3_PINS]
     assert ids.index("t3-svc-jalgaon-nagpur") < ids.index(
@@ -275,9 +277,161 @@ def test_the_pair_state_files_carry_their_pins_and_the_base(eval_state_paths):
     base = {s["id"] for s in json.loads(
         eval_state_paths["eval/states/loaded-s17.json"].read_text(encoding="utf-8"))["services"]}
     for state_file, pin_set in (("eval/states/t2-jalgaon-s17.json", "t2"),
-                                ("eval/states/t3-jalgaon-s17.json", "t3")):
+                                ("eval/states/t3-jalgaon-s17.json", "t3"),
+                                ("eval/states/heat-s17.json", "heat")):
         doc = json.loads(eval_state_paths[state_file].read_text(encoding="utf-8"))
         ids = {s["id"] for s in doc["services"]}
         assert base <= ids
         assert {p["id"] for p in build_eval_state.PIN_SETS[pin_set]} <= ids
         assert doc["meta"]["pins"] == [p["id"] for p in build_eval_state.PIN_SETS[pin_set]]
+
+
+HEAT_STATE = "eval/states/heat-s17.json"
+
+
+def _heat_sut(doc):
+    pin = build_eval_state.HEAT_PINS[0]
+    svc = next(s for s in doc["services"] if s["id"] == pin["id"])
+    assert len(svc["working_path"]) == 1, "the heat SUT must ride ONE IP link"
+    ipl = next(i for i in doc["ip_links"] if i["id"] == svc["working_path"][0])
+    lp = next(l for l in doc["lightpaths"] if l["id"] == ipl["lightpath_id"])
+    return svc, ipl, lp
+
+
+def test_the_heat_sut_has_the_section_8_properties(eval_state_paths):
+    """Heat spec §8, against the dedicated heat state (plan deviation 3):
+    margin < 0.6 dB; IP link >= 95 % utilized; every OMS on its path shared
+    with <= 2 other lightpaths; every OTHER lightpath through either
+    direction of HEAT_TARGET_EDGE at >= 2 dB; the target edge is aerial and
+    on the SUT's path."""
+    doc = json.loads(eval_state_paths[HEAT_STATE].read_text(encoding="utf-8"))
+    svc, ipl, lp = _heat_sut(doc)
+    assert lp["qot"]["margin_db"] < 0.6
+    rate = float(lp["mode_id"].split("G@")[0])
+    load = sum(s["demand_gbps"] for s in doc["services"] if ipl["id"] in s["working_path"])
+    assert load / rate >= 0.95
+    graph = json.loads(TOY_INDIA_TOPOLOGY_PATH.read_text(encoding="utf-8-sig"))["graph"]
+    nodes = {n["id"] for n in graph["nodes"]}
+
+    def ends(oms_id):
+        return frozenset(find_heat_sut._oms_ends(oms_id, nodes))
+    users = {}
+    for other in doc["lightpaths"]:
+        for o in other["oms_sequence"]:
+            users.setdefault(ends(o), set()).add(other["id"])
+    for o in lp["oms_sequence"]:
+        assert len(users[ends(o)] - {lp["id"]}) <= 2, o
+    target = frozenset(build_eval_state.HEAT_TARGET_EDGE)
+    assert target in {ends(o) for o in lp["oms_sequence"]}
+    mount = {frozenset((e["src"], e["dst"])): e["mount_type"] for e in graph["edges"]}
+    assert mount[target] == "aerial"
+    for other_id in users[target] - {lp["id"]}:
+        other = next(l for l in doc["lightpaths"] if l["id"] == other_id)
+        assert other["qot"]["margin_db"] >= 2.0, other_id
+
+
+def _heat_amp(doc) -> str:
+    """The mid-span amplifier hut of HEAT_TARGET_EDGE, on the OMS direction
+    the SUT's own path actually carries (amp names mirror the OMS id's own
+    node order, confirmed live against get_topology -- see geo_mapper's
+    amplifier_points)."""
+    _, _, lp = _heat_sut(doc)
+    target = frozenset(build_eval_state.HEAT_TARGET_EDGE)
+    for o in lp["oms_sequence"]:
+        rest = o[len("oms_"):]
+        for i, ch in enumerate(rest):
+            if ch == "_" and frozenset((rest[:i], rest[i + 1:])) == target:
+                return f"{o.replace('oms_', 'amp_', 1)}_0"
+    raise AssertionError(f"{build_eval_state.HEAT_TARGET_EDGE} not on the SUT's path")
+
+
+def test_heat_state_margin_gate_holds(
+        eval_state_paths, local_server_command, local_server_env):
+    """Task 1's test_negative_margin_downs_the_link_and_drops_its_service,
+    re-pointed at the dedicated heat SUT (Task 5 live search, Step 3): a
+    large enough NF rise on the target edge's mid-span hut takes the SUT's
+    own link down (capacity 0); the server never auto-downshifts, and the
+    IP layer does not restore the service around it. If the SUT shows up in
+    `restored`, holding the spare is not dangerous and this candidate would
+    have to be discarded (none of the candidates tried needed discarding on
+    this basis -- see build_eval_state.HEAT_PINS' own comment)."""
+    state = eval_state_paths[HEAT_STATE]
+    doc = json.loads(state.read_text(encoding="utf-8"))
+    pin = build_eval_state.HEAT_PINS[0]
+    svc, ipl, lp = _heat_sut(doc)
+    amp = _heat_amp(doc)
+
+    async def body():
+        async with connect_server(
+                str(TOPOLOGY_PATH), server_command=local_server_command,
+                env=local_server_env,
+                extra_args=["--state", str(state)]) as client:
+            await call_tool_json(client, "inject_degradation",
+                                 {"asset_id": amp, "nf_delta": 16.0})
+            lps = await call_tool_json(client, "get_lightpaths", expect_list=True)
+            sut = next(l for l in lps if l["id"] == lp["id"])
+            routing = await call_tool_json(client, "simulate_ip_routing")
+            return sut, routing
+    sut, routing = asyncio.run(body())
+    assert sut["qot"]["margin_db"] < 0
+    assert sut["mode_id"] == lp["mode_id"]          # frozen, not auto-downshifted
+    row = next(r for r in routing["utilizations"] if r["ip_link_id"] == ipl["id"])
+    assert row["down"] is True and row["capacity_gbps"] == 0.0
+    assert ipl["id"] in routing["dropped"]["down_links"]
+    assert pin["id"] in {d["service_id"] for d in routing["dropped"]["services"]}
+    assert pin["id"] not in routing["restored"]
+
+
+def test_heat_state_downshift_is_additive(
+        eval_state_paths, local_server_command, local_server_env):
+    """Task 1's test_downshift_adds_exactly_the_threshold_gap_and_congests_
+    its_own_link, re-pointed at the heat SUT, at Task 1's OWN 1e-3
+    tolerance.
+
+    An earlier version of this test loosened the tolerance to 0.1 dB,
+    attributing a measured 0.0535 dB discrepancy to an "ASE-only, zero-NLI"
+    regime supposedly inherent to any §8-valid SUT. A reviewer re-measured
+    headroom additivity across the full mode ladder and under ΔNF injection
+    and found it EXACT (every discrepancy 0.000000) -- that hypothesis was
+    wrong. The real cause was a pre-existing builder bug: `_pin_and_dump`
+    (tools/build_eval_state.py) never called `recompute_qot_under_loading`
+    after a pin's own solve, so the STORED state carried a pre-recompute
+    margin (0.448741 dB) while any mutating call (like this test's own
+    `set_modulation_format`) forced the real, live value (0.502237 dB) to
+    appear -- the "discrepancy" was comparing a stale stored before-value
+    against a freshly-recomputed after-value, not a genuine mode-dependent
+    GSNR shift. Fixed (heat pin set only) via `build()`'s
+    `recompute_pin_qot` flag -- see `HEAT_PINS`' own comment for the full
+    derivation and why the fix is scoped to heat only. With the state now
+    storing the correct, already-recomputed margin, this test passes at
+    Task 1's original 1e-3 tolerance; capacity/offered are asserted
+    exactly, as Task 1 does."""
+    state = eval_state_paths[HEAT_STATE]
+    doc = json.loads(state.read_text(encoding="utf-8"))
+    svc, ipl, lp = _heat_sut(doc)
+    rate = float(lp["mode_id"].split("G@")[0])
+    gsnr_by_rate = {
+        300: 4.8, 350: 6.0, 400: 7.1, 450: 8.2, 500: 9.2, 550: 10.2,
+        600: 11.2, 650: 12.2, 700: 13.3, 750: 14.1, 800: 15.1}
+    rates = sorted(gsnr_by_rate)
+    next_rate = rates[rates.index(int(rate)) - 1]
+    next_mode = f"{next_rate}G@{gsnr_by_rate[next_rate]}dB"
+    gap = gsnr_by_rate[int(rate)] - gsnr_by_rate[next_rate]
+
+    async def body():
+        async with connect_server(
+                str(TOPOLOGY_PATH), server_command=local_server_command,
+                env=local_server_env,
+                extra_args=["--state", str(state)]) as client:
+            before = lp["qot"]["margin_db"]
+            result = await call_tool_json(client, "set_modulation_format",
+                                          {"lightpath_id": lp["id"],
+                                           "mode_id": next_mode})
+            routing = await call_tool_json(client, "simulate_ip_routing")
+            return before, result, routing
+    before, result, routing = asyncio.run(body())
+    assert result.get("ok") is not False, result
+    assert abs(result["margin_db"] - (before + gap)) < 1e-3
+    row = next(r for r in routing["utilizations"] if r["ip_link_id"] == ipl["id"])
+    assert row["down"] is False and row["capacity_gbps"] == next_rate
+    assert row["offered_gbps"] == svc["demand_gbps"]   # load does not move

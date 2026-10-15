@@ -13,7 +13,8 @@ import pytest
 
 from storm_reoptimizer.eval import agent as agent_module
 from storm_reoptimizer.eval.agent import (
-    CONSTRAINT_TOOL, DEFAULT_MODEL, MAX_ATTEMPTS, OBJECTIVE_INSTRUCTION,
+    CONSTRAINT_TOOL, DEFAULT_MODEL, HEAT_SYSTEM_PROMPT, HEAT_TOOLS,
+    MAX_ATTEMPTS, MODE_INSTRUCTION, MODE_TOOL, OBJECTIVE_INSTRUCTION,
     OBJECTIVE_TOOL, P_CUT_ENUMERATION_THRESHOLD, SYSTEM_PROMPT, TIMING_TOOL,
     ClaudeDecider, _depot_eligible, _project_exposure_entry, project_observation,
     strict_tool_schema,
@@ -1090,15 +1091,24 @@ def _names(argv):
             for d in build_deciders(build_arg_parser().parse_args(argv))]
 
 
+# Task 9: build_deciders() always appends HEAT_BASELINE_VARIANTS, right
+# after the two storm baselines and before --include-agent/--include-jev's
+# own arms -- so every exact-name-list assertion below gains these three.
+_HEAT_BASELINE_NAMES = ["heat-baseline:never_downshift",
+                       "heat-baseline:always_one_step", "heat-baseline:cover_p95"]
+
+
 def test_a_plain_suite_run_stays_free_and_keyless():
     # `python -m storm_reoptimizer.eval.suite` must not spend API credits or
     # need credentials unless it was asked to.
-    assert _names([]) == ["baseline:immediate", "baseline:at_deadline"]
+    assert _names([]) == (
+        ["baseline:immediate", "baseline:at_deadline"] + _HEAT_BASELINE_NAMES)
 
 
 def test_include_agent_appends_exactly_one_claude_decider():
-    assert _names(["--include-agent"]) == [
-        "baseline:immediate", "baseline:at_deadline", "agent:claude-sonnet-5"]
+    assert _names(["--include-agent"]) == (
+        ["baseline:immediate", "baseline:at_deadline"] + _HEAT_BASELINE_NAMES
+        + ["agent:claude-sonnet-5"])
 
 
 def test_the_agent_model_is_overridable_from_the_command_line():
@@ -1107,8 +1117,8 @@ def test_the_agent_model_is_overridable_from_the_command_line():
 
 
 def test_naming_a_model_without_the_flag_still_runs_baselines_only():
-    assert _names(["--agent-model", "claude-opus-5"]) == [
-        "baseline:immediate", "baseline:at_deadline"]
+    assert _names(["--agent-model", "claude-opus-5"]) == (
+        ["baseline:immediate", "baseline:at_deadline"] + _HEAT_BASELINE_NAMES)
 
 
 def test_only_and_runs_default_to_unset_and_the_module_constant():
@@ -1149,8 +1159,9 @@ def test_the_agent_arm_writes_its_audit_under_eval_traces():
 
 
 def test_the_agent_arm_has_one_name_and_one_sidecar():
-    assert _names(["--include-agent"]) == [
-        "baseline:immediate", "baseline:at_deadline", "agent:claude-sonnet-5"]
+    assert _names(["--include-agent"]) == (
+        ["baseline:immediate", "baseline:at_deadline"] + _HEAT_BASELINE_NAMES
+        + ["agent:claude-sonnet-5"])
     built = build_deciders(build_arg_parser().parse_args(["--include-agent"]))
     assert built[-1]._audit_path.name == "agent-calls.jsonl"
 
@@ -1792,3 +1803,52 @@ def test_the_system_prompt_never_leaks_scoring_internals_still_passes():
         assert leak not in lowered, leak
     for leak in ("T1", "T2", "T3"):
         assert leak not in SYSTEM_PROMPT, leak
+
+
+# --- Task 11: ClaudeDecider.decide_mode -------------------------------------
+
+def _heat_obs(write_scenario, heat_example_yaml):
+    from storm_reoptimizer.eval.heat_margin import MarginCurve
+    from storm_reoptimizer.eval.heat_observation import (
+        build_heat_observation, mode_ladder,
+    )
+    from storm_reoptimizer.eval.scenario_file import load_scenario
+    s = load_scenario(write_scenario(heat_example_yaml, name="HEAT_EXAMPLE.yaml"))
+    modes = [{"id": "800G@15.1dB", "bitrate_gbps": 800.0, "required_gsnr_db": 15.1},
+             {"id": "750G@14.1dB", "bitrate_gbps": 750.0, "required_gsnr_db": 14.1}]
+    return build_heat_observation(
+        s, "t0", current_mode_id="800G@15.1dB", current_margin_db=0.4,
+        ladder=mode_ladder(modes, "800G@15.1dB"),
+        link={"ip_link_id": "i", "offered_gbps": 800.0, "capacity_gbps": 800.0},
+        bystanders=(), curve=MarginCurve((0.0, 1.0, 2.0), (0.4, -0.6, -1.6)))
+
+
+def test_heat_prompt_never_leaks_the_decision_rule():
+    text = (HEAT_SYSTEM_PROMPT + MODE_INSTRUCTION + str(HEAT_TOOLS)).lower()
+    for banned in ("newsvendor", "cover_p95", "expected loss", "gold", "oracle",
+                   "critical ratio", "quantile to cover"):
+        assert banned not in text
+
+
+def test_decide_mode_uses_the_heat_prompt_and_only_the_mode_tool(
+        write_scenario, heat_example_yaml):
+    fake = FakeAnthropic(FakeResponse(FakeToolUse(MODE_TOOL, {
+        "reasoning": "margin p95 is negative", "mode": "750G@14.1dB"})))
+    decider = ClaudeDecider(client=fake)
+    decision = _run(decider.decide_mode(_heat_obs(write_scenario, heat_example_yaml)))
+    assert decision.mode == "750G@14.1dB"
+    kwargs = fake.messages.calls[0]
+    assert kwargs["system"][0]["text"] == HEAT_SYSTEM_PROMPT
+    assert [t["name"] for t in kwargs["tools"]] == [MODE_TOOL]
+    assert "internal" not in kwargs["messages"][0]["content"]
+    assert decider.last_projection["current_mode"] == "800G@15.1dB"
+
+
+def test_decide_mode_retries_an_unshown_mode(write_scenario, heat_example_yaml):
+    fake = FakeAnthropic(
+        FakeResponse(FakeToolUse(MODE_TOOL, {"reasoning": "x", "mode": "850G@16dB"})),
+        FakeResponse(FakeToolUse(MODE_TOOL, {"reasoning": "y", "mode": "hold"})))
+    decision = _run(ClaudeDecider(client=fake).decide_mode(
+        _heat_obs(write_scenario, heat_example_yaml)))
+    assert decision.mode == "hold"
+    assert "mode_ladder" in str(fake.messages.calls[1]["messages"][-1]["content"])

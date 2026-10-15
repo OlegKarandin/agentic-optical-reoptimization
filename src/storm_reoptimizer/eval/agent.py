@@ -34,9 +34,10 @@ from typing import Iterable
 from .cone import expected_capacity_at_risk_gbps
 from .decisions import (
     CONSTRAINT_JSON_SCHEMA, ConstraintDecision, DecisionError,
-    OBJECTIVE_JSON_SCHEMA, ObjectiveDecision, TIMING_JSON_SCHEMA,
-    TimingDecision,
+    MODE_JSON_SCHEMA, ModeDecision, OBJECTIVE_JSON_SCHEMA, ObjectiveDecision,
+    TIMING_JSON_SCHEMA, TimingDecision, check_mode_on_ladder,
 )
+from .heat_observation import project_heat_observation
 from .observation import (
     Observation, P_CUT_ENUMERATION_THRESHOLD, cut_outcome_rows,
 )
@@ -381,7 +382,7 @@ DEFAULT_MODEL = "claude-sonnet-5"
 # wrong tool called (both existing branches, exercised for Sonnet 5 by
 # other model quirks), and every per-step instruction already tells the
 # model explicitly which tool to call.
-_NO_FORCED_TOOL_CHOICE_MODELS = frozenset({"claude-opus-5-5"})
+_NO_FORCED_TOOL_CHOICE_MODELS = frozenset({"claude-opus-5-5", "claude-sonnet-5-5"})
 # Thinking tokens count against max_tokens. A generous cap costs nothing
 # (billing is on tokens actually produced) and avoids a truncated tool call.
 MAX_TOKENS = 16000
@@ -739,6 +740,58 @@ OBJECTIVE_INSTRUCTION = (
     f"`infeasible` if none is acceptable under these constraints, or "
     f"`hold` to commit nothing this hour, then call `{OBJECTIVE_TOOL}`.")
 
+MODE_TOOL = "submit_mode_decision"
+
+HEAT_SYSTEM_PROMPT = """\
+You operate one optical lightpath during a regional heat event. Its IP link \
+carries `link.offered_gbps` of traffic. One amplifier hut on its route is \
+inside the heat area: as the hut warms, the amplifier's noise figure rises \
+and the lightpath's margin falls.
+
+Each hour you choose the modulation mode the lightpath runs at for that \
+hour, from `mode_ladder` (highest line rate first), or `hold` to keep the \
+current mode. Changes take effect immediately and can be reversed at any \
+later hour, including back up to the top of the ladder.
+
+What a mode does:
+- A lower mode carries less: traffic above its `line_rate_gbps` is not \
+carried for any hour that mode is in force.
+- A lower mode tolerates a lower signal quality: the margin at a mode is \
+the margin at the current mode plus (current threshold_db - that mode's \
+threshold_db).
+- If the margin at the mode in force is below zero during an hour, the \
+link is DOWN for that hour and none of its traffic is carried. The \
+network never changes the mode for you.
+
+What you are shown:
+- `current_mode`, `current_margin_db`: now, before this hour's heat.
+- `forecast[hour]`: the temperature forecast (`t_mean_c`, `t_sigma_c`), \
+the probability the hut's cooling fails by then (`p_cooling_failure`), and \
+`margin_at_current_mode_db`: the margin at the CURRENT mode if the noise-figure \
+rise lands at its pNN percentile (p05 = mild, p95 = severe).
+- `cooling_state`: "failed" once the hut's cooling has failed; it stays failed.
+- `thermal_class`: the constants that turn temperature into noise-figure rise.
+- `bystanders`: other lightpaths through the same hut, for information; \
+you do not control them.
+- `actions_taken`, `last_rejection`: your earlier choices this episode, \
+and the network's refusal of the last one if it refused.
+
+Reason in prose in `reasoning`, then name exactly one mode_id from \
+`mode_ladder`, or `hold`.
+"""
+
+HEAT_TOOLS = [
+    _tool(MODE_TOOL,
+          "Submit the modulation mode for this hour: a `mode_id` from "
+          "`mode_ladder`, or `hold` to keep the current mode. Call this "
+          "exactly once.",
+          MODE_JSON_SCHEMA),
+]
+
+MODE_INSTRUCTION = (
+    f"Choose the modulation mode for this hour from `mode_ladder` by its "
+    f"`mode_id`, or `hold` to keep the current mode, then call `{MODE_TOOL}`.")
+
 
 class ClaudeDecider:
     """A `Decider` (decisions.py) backed by the Claude API.
@@ -761,6 +814,8 @@ class ClaudeDecider:
     lazily on first use, not in __init__, so constructing a decider -- which
     suite.py does before any rollout, and every unit test does -- never
     requires the optional `anthropic` extra."""
+
+    event_types = frozenset({"storm", "heat"})
 
     def __init__(self, model: str = DEFAULT_MODEL, *, client=None,
                  p_cut_threshold: float = P_CUT_ENUMERATION_THRESHOLD,
@@ -830,7 +885,8 @@ class ClaudeDecider:
         rendered = json.dumps(body, indent=2, sort_keys=True, default=str)
         return f"{rendered}\n\n{instruction}"
 
-    def _create(self, messages: list[dict]):
+    def _create(self, messages: list[dict], *, system: str | None = None,
+                tools: list[dict] | None = None):
         tool_choice = ({"type": "auto", "disable_parallel_tool_use": True}
                       if self.model in _NO_FORCED_TOOL_CHOICE_MODELS else
                       {"type": "any", "disable_parallel_tool_use": True})
@@ -840,12 +896,12 @@ class ClaudeDecider:
         return self._api.messages.create(
             model=self.model,
             max_tokens=MAX_TOKENS,
-            system=[{"type": "text", "text": self._system_prompt,
+            system=[{"type": "text", "text": system or self._system_prompt,
                      "cache_control": {"type": "ephemeral"}}],
             # Sonnet 5 accepts no budget_tokens and no temperature/top_p/
             # top_k -- any of them is a 400.
             thinking={"type": "adaptive"},
-            tools=TOOLS,
+            tools=tools or TOOLS,
             tool_choice=tool_choice,
             messages=messages,
             **kwargs,
@@ -889,6 +945,9 @@ class ClaudeDecider:
         rollouts lost), but this is a known, recorded limitation, not a
         silently-accepted bug: a future run with more such collisions could
         exhaust MAX_ATTEMPTS and kill a rollout."""
+        if tool_name == MODE_TOOL:
+            check_mode_on_ladder(decision, [m["mode_id"] for m in payload["mode_ladder"]])
+            return
         for svc in getattr(decision, "claim_priority", ()):
             if svc not in payload["exposure"]:
                 raise DecisionError(
@@ -955,7 +1014,8 @@ class ClaudeDecider:
                     f"making, answer `hold` at the objective step, where that "
                     f"is recorded as a decision.")
 
-    async def _decide(self, tool_name, decision_cls, obs, payload, user_content):
+    async def _decide(self, tool_name, decision_cls, obs, payload, user_content,
+                      *, system: str | None = None, tools: list[dict] | None = None):
         """One decision, with up to MAX_ATTEMPTS self-correction rounds and
         any number of ACCEPTED probe rounds in between.
 
@@ -979,7 +1039,7 @@ class ClaudeDecider:
         probes: list[dict] = []
         attempt = 0
         while attempt < MAX_ATTEMPTS:
-            response = self._create(messages)
+            response = self._create(messages, system=system, tools=tools)
             block = next((b for b in response.content
                           if getattr(b, "type", None) == "tool_use"), None)
             if block is None:
@@ -1067,6 +1127,23 @@ class ClaudeDecider:
         shown, and that omitted_services never hid something material."""
         if self._audit_path is None:
             return
+        if tool_name == MODE_TOOL:
+            # The storm branch below reads `payload["exposure"]`, which a
+            # heat payload (project_heat_observation) does not have.
+            record = {
+                "decider": self.name,
+                "scenario_id": obs.scenario_id,
+                "hour": obs.hour,
+                "decision": tool_name,
+                "attempts": attempts,
+                "current_mode": payload["current_mode"],
+                "ladder": [m["mode_id"] for m in payload["mode_ladder"]],
+                "result": decision.to_dict(),
+            }
+            self._audit_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._audit_path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, default=str) + "\n")
+            return
         record = {
             "decider": self.name,
             "scenario_id": obs.scenario_id,
@@ -1121,3 +1198,11 @@ class ClaudeDecider:
         return await self._decide(
             OBJECTIVE_TOOL, ObjectiveDecision, obs, payload,
             self._user_content(payload, OBJECTIVE_INSTRUCTION, menu=menu))
+
+    async def decide_mode(self, obs) -> ModeDecision:
+        payload = project_heat_observation(obs)
+        self.last_projection = payload
+        return await self._decide(
+            MODE_TOOL, ModeDecision, obs, payload,
+            self._user_content(payload, MODE_INSTRUCTION),
+            system=HEAT_SYSTEM_PROMPT, tools=HEAT_TOOLS)

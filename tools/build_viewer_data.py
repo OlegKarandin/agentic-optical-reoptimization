@@ -308,6 +308,10 @@ def fold(traces_dir: Path, scenarios_dir: Path, topology_path: Path,
          land_path: Path = LAND_PATH) -> dict:
     episodes = {}
     for path in sorted(scenarios_dir.glob("*.yaml")):
+        # heat episodes have no depot/cone view yet (heat spec §14); the
+        # per-hour mode/gold/margin view is follow-up work.
+        if (yaml.safe_load(path.read_text(encoding="utf-8")) or {}).get("event_type") == "heat":
+            continue
         episode = load_episode(path)
         episodes[episode["id"]] = episode
     for path, trace in _dedup_traces(traces_dir, episodes):

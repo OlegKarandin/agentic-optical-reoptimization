@@ -85,13 +85,17 @@ async def run(args: argparse.Namespace) -> None:
         ) as client:
             yield client
 
-    outcomes = await enumerate_outcomes(
-        _connect, scenario, topology_path=args.topology)
-    gold = gold_from_outcomes(
-        scenario, outcomes, min_margin_fraction=args.min_margin_fraction)
-
-    print(f"{scenario.id}: outcomes for spend vs hold\n")
-    print(gold.rationale)
+    if scenario.event_type == "heat":
+        from storm_reoptimizer.eval.heat_gold import heat_gold_from_trace, oracle_trace
+        gold = heat_gold_from_trace(scenario, await oracle_trace(
+            _connect, scenario, topology_path=args.topology))
+        print(f"{scenario.id}: per-hour oracle\n")
+        print(gold.rationale)
+    else:
+        outcomes = await enumerate_outcomes(_connect, scenario, topology_path=args.topology)
+        gold = gold_from_outcomes(scenario, outcomes, min_margin_fraction=args.min_margin_fraction)
+        print(f"{scenario.id}: outcomes for spend vs hold\n")
+        print(gold.rationale)
 
     if args.write:
         updated = dataclasses.replace(scenario, gold=gold)
@@ -118,7 +122,8 @@ def main() -> None:
     parser.add_argument("--scenario", required=True,
                         help="path to the scenario YAML to enumerate "
                         "outcomes for (must use the spare_action_by_"
-                        "deadline label rule)")
+                        "deadline label rule for storm episodes, or the "
+                        "mode_by_hour label rule for heat episodes)")
     parser.add_argument("--write", action="store_true",
                         help="write the scenario with its gold: block "
                         "replaced by the freshly computed one. By DEFAULT "

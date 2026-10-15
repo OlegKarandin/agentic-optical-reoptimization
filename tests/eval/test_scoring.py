@@ -350,9 +350,11 @@ def test_sut_acted_too_late_against_a_realized_cut_counts_as_cut_at_c_realized(
     assert gbps_hours_lost(s, t) == {"storm-svc-1": 300.0}
 
 
-def test_only_the_two_live_label_rules_remain():
+def test_the_live_label_rules():
     # Spec 7 (T2/T3 probe redesign): avoid_horizon_at_decision_hour and
     # chosen_lever_at_decision_hour were retired with the pairs that used
-    # them; timing_at_decision_hour stays for D1.
+    # them; timing_at_decision_hour stays for D1. mode_by_hour (Task 9) is
+    # the heat episodes' own rule.
     from storm_reoptimizer.eval.scoring import LABEL_RULES
-    assert LABEL_RULES == ("timing_at_decision_hour", "spare_action_by_deadline")
+    assert LABEL_RULES == ("timing_at_decision_hour", "spare_action_by_deadline",
+                           "mode_by_hour")

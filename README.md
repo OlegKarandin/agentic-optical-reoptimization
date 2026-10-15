@@ -230,6 +230,101 @@ raw exposure:
 > groups (the 0.117 row). That means holding the spare never leaves it
 > unused.
 
+## The heatwave episode (H1)
+
+The storm tests are about **cuts**. The heatwave is about **degradation**.
+Nothing breaks. Instead, a hot amplifier hut slowly eats a lightpath's
+signal margin, and the agent has to decide each hour how far to step the
+modulation down to stay up, without giving away more capacity than the heat
+actually takes.
+
+### The scenario
+
+One 600 Gbps lightpath (`heat-svc-kanchipuram-trivandrum`) passes through one
+amplifier hut inside a heat area. The chain is:
+
+> hotter air → hotter amplifier → higher noise figure (ΔNF) → lower margin →
+> margin below 0 = link down
+
+What makes it a gamble is the hut's **cooling**:
+
+- **While cooling works**, only 15% of the outside temperature rise reaches
+  the amplifier. At 38°C, ΔNF ≈ 1.7 dB.
+- **If cooling fails**, all of it does, plus 2°C of self-heating. At 38°C,
+  ΔNF ≈ 12.8 dB.
+
+The chance of failure grows with how hot it is and how many hours it has
+been hot. Once cooling fails, it stays failed.
+
+The agent's only control is the **modulation mode**. Each step down carries
+50 Gbps less but tolerates about 1 dB more noise:
+
+| mode | 600G | 550G | 500G | 450G | 400G | 350G | 300G |
+|---|---|---|---|---|---|---|---|
+| threshold (dB) | 11.2 | 10.2 | 9.2 | 8.2 | 7.1 | 6.0 | 4.8 |
+
+- **Run too high:** if the margin goes negative, the link is down and the
+  whole 600 Gbps is lost for that hour.
+- **Run too low:** the gap to 600 Gbps is lost for sure.
+
+The score is Gbps·h lost over eight hours. What actually happens, which the
+agent is not told in advance:
+
+| hour | t0 | t1 | t2 | t3 | t4 | t5 | t6 | t7 |
+|---|---|---|---|---|---|---|---|---|
+| temperature (°C) | 27 | 29 | 29 | **38** | **43** | **43** | 41 | 23.5 |
+| cooling | ok | ok | ok | **fails** | failed | failed | failed | failed |
+
+### What the agent sees
+
+Each hour, a forecast for every remaining hour. Each hour's forecast has:
+
+- the temperature (mean and spread);
+- the probability the cooling has failed by then;
+- the margin at the current mode, as five percentiles: p05, p25, p50, p75
+  and p95.
+
+The percentiles are taken over the noise rise, so **p95 is the severe
+end**: only 5% of outcomes are noisier. At `t3`, the 33.5% chance of a
+cooling failure shows up as a jump in those numbers. p50 is +0.41 dB, but
+p75 is −1.41 dB, because everything past the 66.5th percentile is the
+cooling-failed case.
+
+The margins come from the real simulator. Before the episode, the harness
+injects a range of noise rises into the amplifier on server branches and
+measures the margin each time.
+
+The prompt explains what modes do and when the link goes down. It does
+**not** state the objective. The model has to work out for itself how to
+trade a certain loss against a risk of losing everything.
+
+### What it decided (Claude Sonnet 5.5, one rollout)
+
+| hour | situation | agent | gold | agent's stated reason |
+|---|---|---|---|---|
+| t0–t2 | cooling ok, even p95 margin positive | 600G | 600G ✔ | stepping down loses traffic for certain to guard a tail that doesn't reach zero; modes are reversible |
+| t3 | 33.5% chance cooling fails this hour | 450G | 450G ✔ (ungraded) | expected share carried: ≈0.71 at 450G vs ≈0.69 at 500G vs ≈0.67 at 600G |
+| **t4** | cooling **has failed**, 43°C | **300G** | **350G ✘** | 350G is −0.05 dB at p95, so it takes the "safe" 300G |
+| t5 | still failed, 43°C | 350G | 350G ✔ | same −0.05 dB tail, but now: 0.95 × 350 ≈ 332 > 300, so 350G |
+| t6 | 41°C | 400G | 400G ✔ | p95 margin still +0.06 dB at 400G |
+| t7 | weather breaks, 23.5°C | 600G | 600G ✔ | p95 margin +0.41 dB at 600G |
+
+The link never went down. 6 of 7 graded hours matched gold. The one miss
+cost 50 Gbps·h, and it is a consistency failure rather than an arithmetic
+one: at `t4` and `t5` the trade-off was identical, and the model used a
+tail-covering rule at `t4` and an expected-value rule at `t5`.
+
+| decider | Gbps·h lost | regret vs gold |
+|---|---|---|
+| gold (oracle) | 850 | 0 |
+| **agent: claude-sonnet-5-5** | **900** | **50** |
+| baseline: cover_p95 (highest mode whose p95 margin is ≥ 0) | 950 | 100 |
+| baseline: never_downshift | 2400 | 1550 |
+| baseline: always_one_step | 2600 | 1750 |
+
+This is a single rollout, and the gap to `cover_p95` is one hour's choice.
+That is not yet evidence of a reliable edge.
+
 ---
 
 ## Running it
@@ -247,6 +342,7 @@ python -m storm_reoptimizer.eval.suite
 # Include the LLM decider (paid; needs ANTHROPIC_API_KEY)
 python -m storm_reoptimizer.eval.suite --include-agent --agent-model claude-opus-5-5
 python -m storm_reoptimizer.eval.suite --include-agent --only T2a,T2b
+python -m storm_reoptimizer.eval.suite --include-agent --agent-model claude-sonnet-5-5 --only H1 --runs 1
 
 # Fold the traces in eval/traces/ into the single-file HTML viewer
 python tools/build_viewer_data.py --out eval/viewer/index.html
@@ -273,7 +369,7 @@ src/storm_reoptimizer/
   scenario_storm.py  deterministic end-to-end storm pipeline (no LLM)
   mcp_client.py      stdio MCP client for the server
   eval/
-    scenarios/       the episode YAMLs (T1a/b, T2a/b, T3a/b, D1)
+    scenarios/       the episode YAMLs (T1a/b, T2a/b, T3a/b, D1, H1)
     runner.py        hour-by-hour episode rollout
     observation.py   what the decider sees (and must not see)
     agent.py         the Claude decider: prompt, tools, retry loop
@@ -284,6 +380,9 @@ src/storm_reoptimizer/
     assertions.py    pre-flight twin-pair and no-single-rule checks
     scoring.py       per-episode and cross-twin metrics
     suite.py         the runnable suite and results table
+    thermal.py       heat model: temperature + cooling failure → noise-figure rise
+    heat_margin.py   measured noise-rise → margin curve, P(link down)
+    heat_*.py        heat observation, baselines, oracle, gold, scoring
 tools/               offline builders: states, golds, viewer
 eval/states/         seeded operating states the episodes load
 tests/               pytest suite

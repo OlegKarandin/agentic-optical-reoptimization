@@ -14,6 +14,10 @@ if TYPE_CHECKING:
 
 FILTERS: dict[str, Callable[[Edge], bool]] = {
     "storm": lambda edge: edge.mount_type == "aerial",
+    # CLAUDE.md scenario 3: heat degrades "thermally-exposed equipment (aerial
+    # spans, above-ground huts)". The heat mapper applies this to the EDGE an
+    # amplifier's OMS runs on (geo_mapper.amplifier_points).
+    "heat": lambda edge: edge.mount_type == "aerial",
 }
 
 

@@ -206,3 +206,26 @@ def test_the_baseline_still_states_a_priority_positionally():
     the WIRE schema drops the field."""
     d = ObjectiveDecision("candidate_0", COST_TERMS[:2], "fixed ordering")
     assert d.priority == COST_TERMS[:2]
+
+
+from storm_reoptimizer.eval.decisions import (
+    HOLD_CHOICE, MODE_JSON_SCHEMA, DecisionError, ModeDecision, check_mode_on_ladder,
+)
+
+
+def test_mode_decision_round_trip_and_markup_guard():
+    d = ModeDecision.from_dict({"reasoning": "why", "mode": "750G@14.1dB"})
+    assert d.to_dict() == {"mode": "750G@14.1dB", "reasoning": "why"}
+    with pytest.raises(DecisionError, match="markup"):
+        ModeDecision.from_dict({"reasoning": "a</reasoning>", "mode": "hold"})
+    with pytest.raises(DecisionError):
+        ModeDecision.from_dict({"reasoning": "x", "mode": ""})
+    assert MODE_JSON_SCHEMA["required"] == ["reasoning", "mode"]
+
+
+def test_mode_must_be_on_the_shown_ladder_or_hold():
+    ladder = ["800G@15.1dB", "750G@14.1dB"]
+    check_mode_on_ladder(ModeDecision(HOLD_CHOICE, "x"), ladder)
+    check_mode_on_ladder(ModeDecision("800G@15.1dB", "x"), ladder)   # upshift allowed
+    with pytest.raises(DecisionError, match="mode_ladder"):
+        check_mode_on_ladder(ModeDecision("850G@16.0dB", "x"), ladder)

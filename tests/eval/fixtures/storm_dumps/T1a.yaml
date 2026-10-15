@@ -1,0 +1,187 @@
+id: T1a
+pair: T1
+seed: 17
+state_file: eval/states/loaded-s17.json
+service_under_test: t1-svc-jalgaon-indore
+track: hudhud
+hours:
+- t0
+- t1
+- t2
+- t3
+- t4
+- t5
+- t6
+- t7
+decision_hour: t1
+lead_time_hours: 2
+spares_on_hand: 1
+depot_site: jalgaon
+spare_inventory:
+  jalgaon: 1
+damage_radius_km: 74.0
+track_revision_km_per_hour_ahead: 30.0
+reference_avoid: {}
+forecast:
+  t0:
+    t3:
+      cone:
+        type: Polygon
+        coordinates:
+        - - - 75.5088
+            - 21.24983
+          - - 75.62087
+            - 21.23604
+          - - 75.72532
+            - 21.19561
+          - - 75.815
+            - 21.13129
+          - - 75.88382
+            - 21.04748
+          - - 75.92708
+            - 20.94987
+          - - 75.94183
+            - 20.84513
+          - - 75.92708
+            - 20.74039
+          - - 75.88382
+            - 20.64278
+          - - 75.815
+            - 20.55897
+          - - 75.72532
+            - 20.49465
+          - - 75.62087
+            - 20.45423
+          - - 75.5088
+            - 20.44044
+          - - 75.39672
+            - 20.45423
+          - - 75.29228
+            - 20.49465
+          - - 75.20259
+            - 20.55897
+          - - 75.13377
+            - 20.64278
+          - - 75.09051
+            - 20.74039
+          - - 75.07576
+            - 20.84513
+          - - 75.09051
+            - 20.94987
+          - - 75.13377
+            - 21.04748
+          - - 75.20259
+            - 21.13129
+          - - 75.29228
+            - 21.19561
+          - - 75.39672
+            - 21.23604
+          - - 75.5088
+            - 21.24983
+      width_km: 90.0
+      center:
+        lat: 20.84513034805224
+        lon: 75.50879562770838
+  t1:
+    t3:
+      cone:
+        type: Polygon
+        coordinates:
+        - - - 74.74099
+            - 20.87974
+          - - 74.8528
+            - 20.86595
+          - - 74.95699
+            - 20.82552
+          - - 75.04645
+            - 20.76121
+          - - 75.1151
+            - 20.6774
+          - - 75.15826
+            - 20.57979
+          - - 75.17298
+            - 20.47505
+          - - 75.15826
+            - 20.37031
+          - - 75.1151
+            - 20.2727
+          - - 75.04645
+            - 20.18889
+          - - 74.95699
+            - 20.12457
+          - - 74.8528
+            - 20.08414
+          - - 74.74099
+            - 20.07035
+          - - 74.62919
+            - 20.08414
+          - - 74.525
+            - 20.12457
+          - - 74.43553
+            - 20.18889
+          - - 74.36688
+            - 20.2727
+          - - 74.32373
+            - 20.37031
+          - - 74.30901
+            - 20.47505
+          - - 74.32373
+            - 20.57979
+          - - 74.36688
+            - 20.6774
+          - - 74.43553
+            - 20.76121
+          - - 74.525
+            - 20.82552
+          - - 74.62919
+            - 20.86595
+          - - 74.74099
+            - 20.87974
+      width_km: 90.0
+      center:
+        lat: 20.475048834050817
+        lon: 74.74099229966424
+realized:
+  t3:
+  - fiber_dhulia_jalgaon_0
+  - fiber_jalgaon_dhulia_0
+gold:
+  survived:
+  - t1-svc-jalgaon-indore
+  max_spares_wasted: 0
+  decision_at_t0: wait
+  label: hold
+  rationale: |
+    service                               spend         hold
+    t1-svc-jalgaon-indore                 0.000        0.000
+    t1-claimant-jalgaon-dhulia-fwd      500.000      500.000
+    t1-claimant-jalgaon-dhulia-rev      500.000      500.000
+    d0346                               500.000      200.000
+    d0422                               500.000      200.000
+    TOTAL                             13000.000    12400.000
+    gold: hold (argmin total Gbps-hours lost, margin 600.000 over 'spend')
+    hold ranking: t1-svc-jalgaon-indore > d0346 > d0422 > t1-claimant-jalgaon-dhulia-fwd > t1-claimant-jalgaon-dhulia-rev
+  outcome_gbps_h:
+    spend: 13000.0
+    hold: 12400.0
+  min_margin_gbps_h: 250.0
+flip_variable:
+- spend
+- hold
+- claimant
+metadata:
+  label_rule: spare_action_by_deadline
+  exposure_legs: both
+  escape_route_node: surat
+  claimant_services:
+  - t1-claimant-jalgaon-dhulia-fwd
+  - t1-claimant-jalgaon-dhulia-rev
+  cone_width_km: 90.0
+  cone_motion_kmh: 89.774629
+  n_future_claimants: 2
+  exposure_horizon_hours: 2
+  spares_on_hand: 1
+  gold_spare_action: conserve
+  widest_avoid_feasible: true
+  claimed_competing_ecar_gbps: 148.94
+  claimed_competing_ecar_at: t3

@@ -138,11 +138,15 @@ def test_the_results_table_reports_regret_and_inert_commits():
     table = render_results_table(results)
     assert "regret_gbps_h" in table
     assert "inert_commits" in table
-    # mean([10.0, 20.0, 30.0]) == 20.0; sum([1, 3, 0]) == 4
+    # mean([10.0, 20.0, 30.0]) == 20.0; sum([1, 3, 0]) == 4. Both episodes
+    # here default to "storm" (no "_event_type" key -- a pre-heat fixture),
+    # so the heat column is "n/a" and inert_commits moves to cells[5] (the
+    # table grew one column for the storm/heat regret split, Finding 2a).
     header, _, row = table.splitlines()[:3]
     cells = [c.strip() for c in row.strip("|").split("|")]
     assert cells[3] == "20.0"
-    assert cells[4] == "4"
+    assert cells[4] == "n/a"
+    assert cells[5] == "4"
 
 
 def test_the_results_table_tolerates_episodes_with_no_regret_figure():
@@ -171,9 +175,12 @@ def test_the_results_table_tolerates_episodes_with_no_regret_figure():
     row = render_results_table(results).splitlines()[2]
     cells = [c.strip() for c in row.strip("|").split("|")]
     # mean over the ONE real value (10.0), the None is skipped, not averaged
-    # in; inert_commits is a plain sum across both episodes (1 + 0).
+    # in; both episodes default to "storm" (no heat episode here), so the
+    # heat column is "n/a"; inert_commits (now cells[5]) is a plain sum
+    # across both episodes (1 + 0).
     assert cells[3] == "10.0"
-    assert cells[4] == "1"
+    assert cells[4] == "n/a"
+    assert cells[5] == "1"
 
 
 def test_the_results_table_reports_n_a_when_no_run_has_a_regret_figure():
@@ -191,6 +198,60 @@ def test_the_results_table_reports_n_a_when_no_run_has_a_regret_figure():
     row = render_results_table(results).splitlines()[2]
     cells = [c.strip() for c in row.strip("|").split("|")]
     assert cells[3] == "n/a"
+
+
+def test_the_results_table_never_blends_storm_and_heat_regret():
+    # Final review, Finding 2a: ClaudeDecider runs both event types, and
+    # heat's regret_gbps_h can be negative (gold minimises EXPECTED loss,
+    # so a decider that gambles and wins beats it ex post -- H1.yaml's own
+    # module comment) while storm's never is. A fabricated results dict
+    # with one storm and one heat episode for the same decider: the mean
+    # must land in TWO separate columns, never averaged into one that
+    # would otherwise mask the heat loss with the larger storm number.
+    results = {
+        "episodes": {
+            "T1a": {"_event_type": "storm", "agent:claude": {
+                "runs": [], "label_correct_mean": 1.0,
+                "label_correct_spread": 0.0,
+                "metrics": [{"regret_gbps_h": 100.0, "inert_commits": 0}]}},
+            "H1": {"_event_type": "heat", "agent:claude": {
+                "runs": [], "label_correct_mean": 1.0,
+                "label_correct_spread": 0.0,
+                "metrics": [{"regret_gbps_h": -40.0, "inert_commits": 0}]}},
+        },
+        "pairs": {"agent:claude": {"pair_solved": 1.0, "detail": {"T1": {}}}},
+        "budget": {"seeds": [17], "episodes": 2, "runs_per_episode": 1,
+                  "rollouts": 2},
+    }
+    row = render_results_table(results).splitlines()[2]
+    cells = [c.strip() for c in row.strip("|").split("|")]
+    # storm column: only the storm episode's 100.0; heat column: only the
+    # heat episode's -40.0. A blended mean ((100 - 40) / 2 == 30.0) must
+    # never appear in either column.
+    assert cells[3] == "100.0"
+    assert cells[4] == "-40.0"
+
+
+def test_the_results_table_reports_n_a_pair_solved_for_a_decider_with_no_pairs():
+    # Final review, Finding 2b: a heat-only decider never enters the pairs
+    # machinery (heat episodes carry no `pair`), so `results["pairs"]`
+    # defaults `pair_solved` to 0.0 with an empty `detail`. Rendering that
+    # as "0.00" reads as "failed every pair" rather than "not applicable".
+    results = {
+        "episodes": {
+            "H1": {"_event_type": "heat", "heat-baseline:never_downshift": {
+                "runs": [], "label_correct_mean": 1.0,
+                "label_correct_spread": 0.0,
+                "metrics": [{"regret_gbps_h": 5.0, "inert_commits": 0}]}},
+        },
+        "pairs": {"heat-baseline:never_downshift":
+                  {"pair_solved": 0.0, "detail": {}}},
+        "budget": {"seeds": [17], "episodes": 1, "runs_per_episode": 1,
+                  "rollouts": 1},
+    }
+    row = render_results_table(results).splitlines()[2]
+    cells = [c.strip() for c in row.strip("|").split("|")]
+    assert cells[1] == "n/a"
 
 
 def test_only_narrowed_main_does_not_crash_the_whole_suite_gates(
@@ -302,7 +363,9 @@ def test_build_deciders_tolerates_a_namespace_without_jev_fields():
     # agent_effort) with no jev fields; that must keep working.
     built = build_deciders(SimpleNamespace(
         include_agent=False, agent_model="x", agent_effort=None))
-    assert len(built) == 2
+    # 2 storm baselines + 3 heat baselines (Task 9: build_deciders always
+    # appends HEAT_BASELINE_VARIANTS, unconditionally).
+    assert len(built) == 5
     assert not any(isinstance(d, JevDecider) for d in built)
 
 
@@ -339,6 +402,24 @@ def test_main_runs_the_jev_preflight_before_any_work(monkeypatch):
     monkeypatch.setattr(suite_module, "preflight_jev", refuse)
     with pytest.raises(SystemExit, match="preflight ran"):
         suite_module.main(["--include-jev"])
+
+
+from storm_reoptimizer.eval.heat_baseline import HeatBaseline
+
+
+def test_build_deciders_adds_the_heat_baselines_and_storm_only_runs_skip_them():
+    args = build_arg_parser().parse_args([])
+    names = [d.name for d in build_deciders(args)]
+    assert names[-3:] == ["heat-baseline:never_downshift",
+                          "heat-baseline:always_one_step", "heat-baseline:cover_p95"]
+
+
+def test_decider_runs_only_its_event_types():
+    from storm_reoptimizer.eval.suite import runs_on
+    from storm_reoptimizer.eval.baseline import ForecastBlindBaseline
+    d1 = load_all_scenarios()["D1"]
+    assert runs_on(ForecastBlindBaseline("immediate"), d1)
+    assert not runs_on(HeatBaseline("cover_p95"), d1)
 
 
 def test_results_table_notes_jev_rows_and_the_citation_footnote():

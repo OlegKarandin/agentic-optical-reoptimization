@@ -37,7 +37,7 @@ from collections import Counter
 from .runner import EpisodeTrace
 from .scenario_file import ScenarioFile
 
-LABEL_RULES = ("timing_at_decision_hour", "spare_action_by_deadline")
+LABEL_RULES = ("timing_at_decision_hour", "spare_action_by_deadline", "mode_by_hour")
 
 
 def _hour_record(trace: EpisodeTrace, hour: str) -> dict | None:
@@ -162,6 +162,13 @@ def decision_label(scenario: ScenarioFile, trace: EpisodeTrace) -> str | None:
     if rule == "spare_action_by_deadline":
         return _spare_action_by_deadline_label(scenario, trace)
 
+    # mode_by_hour (heat episodes) has no scenario.decision_hour at all (it
+    # is None for a heat ScenarioFile -- every heat hour is a decision hour),
+    # so this must be handled before the storm-only _hour_record lookup
+    # below, which would otherwise find no hour named None and return None.
+    if rule == "mode_by_hour":
+        return ",".join(h["mode_in_force"] for h in trace.hours)
+
     record = _hour_record(trace, scenario.decision_hour)
     if record is None:
         return None
@@ -217,6 +224,9 @@ def reexposed(scenario: ScenarioFile, trace: EpisodeTrace) -> bool:
 
 def episode_metrics(scenario: ScenarioFile, trace: EpisodeTrace) -> dict:
     """Everything the spec's per-episode table names."""
+    if scenario.event_type == "heat":
+        from .heat_scoring import heat_episode_metrics
+        return heat_episode_metrics(scenario, trace)
     hours = scenario.hours
     sut = scenario.service_under_test
 
